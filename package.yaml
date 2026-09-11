@@ -1,0 +1,51 @@
+---
+name: hq
+synopsis: haskell query - a JSON processor inspired by jq
+version: 0.0.0.1
+
+license: MIT
+
+library:
+  source-dirs: ./src/
+  dependencies:
+    - base
+    - megaparsec
+    - relude
+    - scientific
+    - text
+    - vector
+
+ghc-options:
+  - -fwrite-ide-info
+  - -Wall
+  - -Wincomplete-uni-patterns
+  - -Wincomplete-record-updates
+  - -Wpartial-fields
+  - -Widentities
+  - -Wredundant-constraints
+  - -Wcpp-undef
+  - -Wunused-packages
+
+executables:
+  hq:
+    main: Main.hs
+    source-dirs: ./src/
+    ghc-options:
+      - -rtsopts
+      - -threaded
+      - -with-rtsopts=-N
+
+tests:
+  hq-test:
+    main: Spec.hs
+    source-dirs: test
+    ghc-options:
+      - -rtsopts
+      - -threaded
+      - -with-rtsopts=-N
+    dependencies:
+      - base
+      - relude
+      - sydtest
+      - sydtest-discover
+      - hq
