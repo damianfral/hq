@@ -14,6 +14,7 @@ library:
     - free
     - json-stream
     - megaparsec
+    - optparse-applicative
     - relude
     - scientific
     - text
@@ -33,11 +34,16 @@ ghc-options:
 executables:
   hq:
     main: Main.hs
-    source-dirs: ./src/
+    source-dirs: ./app/
     ghc-options:
       - -rtsopts
       - -threaded
       - -with-rtsopts=-N
+    dependencies:
+      - base
+      - hq
+      - optparse-applicative
+      - relude
 
 tests:
   hq-test:

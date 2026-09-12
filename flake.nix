@@ -27,6 +27,7 @@
     filteredSrc = nix-filter.lib {
       root = ./.;
       include = [
+        "app/"
         "src/"
         "test/"
         "package.yaml"

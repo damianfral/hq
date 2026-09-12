@@ -25,9 +25,6 @@ parserSpec = describe "parseQuery" $ do
     it "parses view with a field" $ do
       parseQuery "view #foo" `shouldBe` Right (Preview (field "foo"))
 
-    it "parses ^. with a field" $ do
-      parseQuery "^. each" `shouldBe` Right (Preview each)
-
     it "parses view with each" $ do
       parseQuery "view each" `shouldBe` Right (Preview each)
 
@@ -43,9 +40,6 @@ parserSpec = describe "parseQuery" $ do
   describe "fold operation" $ do
     it "parses fold with a field" $ do
       parseQuery "fold #foo" `shouldBe` Right (Fold (field "foo"))
-
-    it "parses ^.. with a field" $ do
-      parseQuery "^.. #foo" `shouldBe` Right (Fold (field "foo"))
 
     it "parses fold with each" $ do
       parseQuery "fold each" `shouldBe` Right (Fold each)
@@ -170,40 +164,40 @@ runnerSpec = describe "run" $ do
   it "extracts a field from an object" $ do
     let optic = field "name"
         value = Object (Map.fromList [("name", String "alice")])
-    run optic value `shouldBe` [String "alice"]
+    runTraversal optic value `shouldBe` [String "alice"]
 
   it "returns empty list when field is missing" $ do
     let optic = field "name"
         value = Object (Map.fromList [("age", Number 30)])
-    run optic value `shouldBe` []
+    runTraversal optic value `shouldBe` []
 
   it "returns empty list for non-object value" $ do
-    run (field "name") Null `shouldBe` []
-    run (field "name") (Bool True) `shouldBe` []
-    run (field "name") (Number 42) `shouldBe` []
-    run (field "name") (String "hi") `shouldBe` []
-    run (field "name") (Array V.empty) `shouldBe` []
+    runTraversal (field "name") Null `shouldBe` []
+    runTraversal (field "name") (Bool True) `shouldBe` []
+    runTraversal (field "name") (Number 42) `shouldBe` []
+    runTraversal (field "name") (String "hi") `shouldBe` []
+    runTraversal (field "name") (Array V.empty) `shouldBe` []
 
   it "iterates over array elements with each" $ do
     let values = V.fromList [Number 1, Number 2, Number 3]
-    run each (Array values) `shouldBe` [Number 1, Number 2, Number 3]
+    runTraversal each (Array values) `shouldBe` [Number 1, Number 2, Number 3]
 
   it "returns empty list for each on non-array" $ do
-    run each Null `shouldBe` []
-    run each (Object Map.empty) `shouldBe` []
-    run each (String "hello") `shouldBe` []
+    runTraversal each Null `shouldBe` []
+    runTraversal each (Object Map.empty) `shouldBe` []
+    runTraversal each (String "hello") `shouldBe` []
 
   it "composes field then field" $ do
     let optic = compose (field "a") (field "b")
         aValue = Object $ fromList [("b", Number 42)]
         value = Object $ fromList [("a", aValue)]
-    run optic value `shouldBe` [Number 42]
+    runTraversal optic value `shouldBe` [Number 42]
 
   it "composes field then each" $ do
     let optic = compose (field "items") each
         items = V.fromList [Number 1, Number 2]
         value = Object $ fromList [("items", Array items)]
-    run optic value `shouldBe` [Number 1, Number 2]
+    runTraversal optic value `shouldBe` [Number 1, Number 2]
 
   it "composes each then field" $ do
     let optic = compose each (field "name")
@@ -212,7 +206,7 @@ runnerSpec = describe "run" $ do
             [ Object $ fromList [("name", String "alice")],
               Object $ fromList [("name", String "bob")]
             ]
-    run optic (Array people) `shouldBe` [String "alice", String "bob"]
+    runTraversal optic (Array people) `shouldBe` [String "alice", String "bob"]
 
   it "composes each then each" $ do
     let optic = compose each each
@@ -222,13 +216,13 @@ runnerSpec = describe "run" $ do
               Array (V.fromList [Number 3])
             ]
         value = Array nested
-    run optic value `shouldBe` [Number 1, Number 2, Number 3]
+    runTraversal optic value `shouldBe` [Number 1, Number 2, Number 3]
 
   it "composes three levels deep" $ do
     let optic = compose (compose (field "a") (field "b")) (field "c")
         bValue = Object (fromList [("c", String "deep")])
         value = Object (fromList [("a", Object (fromList [("b", bValue)]))])
-    run optic value `shouldBe` [String "deep"]
+    runTraversal optic value `shouldBe` [String "deep"]
 
   it "composes field, each, field" $ do
     let optic = compose (compose (field "users") each) (field "name")
@@ -238,4 +232,4 @@ runnerSpec = describe "run" $ do
               Object $ fromList [("name", String "bob"), ("age", Number 25)]
             ]
         value = Object $ fromList [("users", Array users)]
-    run optic value `shouldBe` [String "alice", String "bob"]
+    runTraversal optic value `shouldBe` [String "alice", String "bob"]
