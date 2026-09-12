@@ -5,7 +5,14 @@
 module HQ where
 
 import Control.Comonad.Cofree
+import Data.Aeson (FromJSON (parseJSON))
+import qualified Data.Aeson as JS
+import qualified Data.Aeson.Key as Key
+import qualified Data.Aeson.KeyMap as KM
+import qualified Data.ByteString.Lazy as BL
 import Data.Fix
+import Data.JsonStream.Parser (arrayOf, (.:))
+import qualified Data.JsonStream.Parser as JS
 import qualified Data.Map.Lazy as Map
 import Data.Scientific (Scientific)
 import qualified Data.Text as Text
@@ -26,14 +33,15 @@ data Value
   | Object (Map Text Value)
   deriving (Eq, Ord, Show)
 
-data Literal
-  = LNull
-  | LBool Bool
-  | LNumber Scientific
-  | LString Text
-  | LList [Literal]
-  | LObject (Map Text Literal)
-  deriving (Eq, Ord, Show)
+instance FromJSON Value where
+  parseJSON JS.Null = pure Null
+  parseJSON (JS.Bool b) = pure $ Bool b
+  parseJSON (JS.Number n) = pure $ Number n
+  parseJSON (JS.String s) = pure $ String s
+  parseJSON (JS.Array xs) = Array <$> traverse parseJSON xs
+  parseJSON (JS.Object obj) = Object <$> traverse parseJSON obj'
+    where
+      obj' = Map.fromList [(Key.toText k, v) | (k, v) <- KM.toList obj]
 
 data OpticF a = Field Text | Each | Compose a a
   deriving (Eq, Ord, Show, Functor)
@@ -100,7 +108,7 @@ fieldParser :: Parser Optic
 fieldParser = char '#' >> field <$> identifier
 
 identifier :: Parser Text
-identifier = lexeme $ Text.pack <$> some (alphaNumChar <|> char '_')
+identifier = lexeme $ Text.pack <$> some (alphaNumChar <|> char '_' <|> char '-')
 
 eachParser :: Parser Optic
 eachParser = symbol "each" $> each
@@ -140,17 +148,49 @@ typecheck (AST ast) = go ast
         then pure $ compose l r
         else Left $ InvalidCardinality expected result
 
-    composeCardinality :: Cardinality -> Cardinality -> Cardinality
-    composeCardinality One One = One
-    composeCardinality One Many = Many
-    composeCardinality Many One = Many
-    composeCardinality Many Many = Many
+composeCardinality :: Cardinality -> Cardinality -> Cardinality
+composeCardinality One One = One
+composeCardinality One Many = Many
+composeCardinality Many One = Many
+composeCardinality Many Many = Many
 
 run :: Optic -> Value -> [Value]
 run (Optic optic) = foldFix algebra optic
   where
     algebra :: OpticF (Value -> [Value]) -> Value -> [Value]
-    algebra (Field name) (Object obj) = maybe [] pure (Map.lookup name obj)
+    algebra (Field name) (Object obj) = maybe [] pure $ Map.lookup name obj
     algebra Each (Array values) = toList values
-    algebra (Compose left right) value = concatMap right (left value)
+    algebra (Compose left right) value = concatMap right $ left value
     algebra _ _ = []
+
+--------------------------------------------------------------------------------
+
+data JSONStep = FieldStep Text | EachStep deriving (Eq, Show)
+
+data JSONPlan = Root | FieldPlan Text JSONPlan | EachPlan JSONPlan
+  deriving (Eq, Show)
+
+instance Semigroup JSONPlan where
+  Root <> b = b
+  FieldPlan name rest <> b = FieldPlan name (rest <> b)
+  EachPlan rest <> b = EachPlan (rest <> b)
+
+instance Monoid JSONPlan where mempty = Root
+
+type JSONStreamParser = JS.Parser JS.Value
+
+compile :: Optic -> JSONStreamParser
+compile (Optic optic) = jsonParser $ foldFix algebra optic
+  where
+    algebra :: OpticF JSONPlan -> JSONPlan
+    algebra (Field name) = FieldPlan name Root
+    algebra Each = EachPlan Root
+    algebra (Compose a b) = a <> b
+
+    jsonParser :: JSONPlan -> JS.Parser JS.Value
+    jsonParser Root = JS.value
+    jsonParser (FieldPlan name rest) = name .: jsonParser rest
+    jsonParser (EachPlan rest) = arrayOf $ jsonParser rest
+
+runJSON :: Optic -> BL.ByteString -> [JS.Value]
+runJSON optic = JS.parseLazyByteString $ compile optic
