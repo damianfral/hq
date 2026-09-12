@@ -9,6 +9,8 @@ library:
   source-dirs: ./src/
   dependencies:
     - base
+    - data-fix
+    - free
     - megaparsec
     - relude
     - scientific

@@ -3,12 +3,16 @@
 
 module HQ where
 
+import Control.Comonad.Cofree
+import Data.Fix
 import Data.Scientific (Scientific)
 import qualified Data.Text as Text
 import Data.Vector (Vector)
+import GHC.Show (appPrec)
 import Relude hiding (Compose, many, some)
 import Text.Megaparsec
 import Text.Megaparsec.Char (alphaNumChar, char, spaceChar, string)
+import Prelude (Show (showsPrec), showParen, showString)
 
 data Value
   = Null
@@ -28,51 +32,75 @@ data Literal
   | LObject (Map Text Literal)
   deriving (Eq, Ord, Show)
 
-data Optic
-  = Field Text
-  | Each
-  | Compose Optic Optic
+data OpticF a = Field Text | Each | Compose a a
   deriving (Eq, Ord, Show)
 
-data Query
-  = Preview Optic
-  | Fold Optic
-  deriving (Eq, Ord, Show)
+newtype Optic = Optic (Fix OpticF)
+
+instance Eq Optic where
+  Optic (Fix (Field a)) == Optic (Fix (Field b)) = a == b
+  Optic (Fix Each) == Optic (Fix Each) = True
+  Optic (Fix (Compose a b)) == Optic (Fix (Compose c d)) =
+    Optic a == Optic c && Optic b == Optic d
+  _ == _ = False
+
+instance Show Optic where
+  showsPrec d (Optic (Fix (Field name))) =
+    showParen (d > appPrec) $ showString "#" . showsPrec (appPrec + 1) name
+  showsPrec _ (Optic (Fix Each)) = showString "each"
+  showsPrec d (Optic (Fix (Compose a b))) =
+    showParen (d > composePrec)
+      $ showsPrec (composePrec + 1) (Optic a)
+      . showString " . "
+      . showsPrec (composePrec + 1) (Optic b)
+    where
+      composePrec = 5
+
+field :: Text -> Optic
+field = Optic . Fix . Field
+
+each :: Optic
+each = Optic (Fix Each)
+
+compose :: Optic -> Optic -> Optic
+compose (Optic a) (Optic b) = Optic (Fix (Compose a b))
+
+data Query = Preview Optic | Fold Optic deriving (Eq, Show)
 
 --------------------------------------------------------------------------------
 
 type Parser = Parsec Void Text
 
 parseQuery :: Text -> Either (ParseErrorBundle Text Void) Query
-parseQuery = parse (spaceConsumer *> query <* eof) "query"
+parseQuery = parse (spaceConsumer *> queryParser <* eof) "query"
 
-query :: Parser Query
-query = operation <*> optic
+queryParser :: Parser Query
+queryParser = operationParser <*> opticParser
 
-operation :: Parser (Optic -> Query)
-operation =
+operationParser :: Parser (Optic -> Query)
+operationParser =
   (symbol "^.." $> Fold)
     <|> (symbol "^." $> Preview)
     <|> (symbol "fold" $> Fold)
     <|> (symbol "view" $> Preview)
 
-optic :: Parser Optic
-optic = do
-  opt <- opticAtom
-  opts <- many (symbol "." *> opticAtom)
-  pure $ foldl' Compose opt opts
+opticParser :: Parser Optic
+opticParser = do
+  opt <- opticAtomParser
+  opts <- many (symbol "." *> opticAtomParser)
+  pure $ foldl' compose opt opts
 
-opticAtom :: Parser Optic
-opticAtom = field <|> each
+opticAtomParser :: Parser Optic
+opticAtomParser = fieldParser <|> eachParser
 
-field :: Parser Optic
-field = char '#' >> Field <$> identifier
+fieldParser :: Parser Optic
+fieldParser = char '#' >> field <$> identifier
 
 identifier :: Parser Text
 identifier = lexeme $ Text.pack <$> some (alphaNumChar <|> char '_')
 
-each :: Parser Optic
-each = symbol "each" $> Each
+eachParser :: Parser Optic
+eachParser = symbol "each" $> each
 
 spaceConsumer :: Parser ()
 spaceConsumer = skipMany spaceChar
@@ -82,3 +110,11 @@ symbol = lexeme . string
 
 lexeme :: Parser a -> Parser a
 lexeme p = p <* spaceConsumer
+
+--------------------------------------------------------------------------------
+
+data Cardinality = One | Many
+
+newtype OpticAnn = OpticAnn Cardinality
+
+newtype AST = AST {unAST :: Cofree OpticF OpticAnn}
