@@ -1,3 +1,4 @@
+{-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 
@@ -5,11 +6,13 @@ module HQ where
 
 import Control.Comonad.Cofree
 import Data.Fix
+import qualified Data.Map.Lazy as Map
 import Data.Scientific (Scientific)
 import qualified Data.Text as Text
 import Data.Vector (Vector)
 import GHC.Show (appPrec)
 import Relude hiding (Compose, many, some)
+import Relude.Extra (view)
 import Text.Megaparsec
 import Text.Megaparsec.Char (alphaNumChar, char, spaceChar, string)
 import Prelude (Show (showsPrec), showParen, showString)
@@ -33,7 +36,7 @@ data Literal
   deriving (Eq, Ord, Show)
 
 data OpticF a = Field Text | Each | Compose a a
-  deriving (Eq, Ord, Show)
+  deriving (Eq, Ord, Show, Functor)
 
 newtype Optic = Optic (Fix OpticF)
 
@@ -113,8 +116,41 @@ lexeme p = p <* spaceConsumer
 
 --------------------------------------------------------------------------------
 
-data Cardinality = One | Many
+data Cardinality = One | Many deriving (Eq, Ord, Show)
 
-newtype OpticAnn = OpticAnn Cardinality
+newtype AST = AST {unAST :: Cofree OpticF Cardinality}
 
-newtype AST = AST {unAST :: Cofree OpticF OpticAnn}
+data TypeError = InvalidCardinality Cardinality Cardinality deriving (Eq, Show)
+
+typecheck :: AST -> Either TypeError Optic
+typecheck (AST ast) = go ast
+  where
+    go :: Cofree OpticF Cardinality -> Either TypeError Optic
+    go (One :< Field name) = pure $ field name
+    go (Many :< Each) = pure each
+    go (_ :< Field _) = Left $ InvalidCardinality One Many
+    go (_ :< Each) = Left $ InvalidCardinality Many One
+    go (result :< Compose left right) = do
+      l <- go left
+      r <- go right
+      let lc = view _extract left
+          rc = view _extract right
+          expected = composeCardinality lc rc
+      if result == expected
+        then pure $ compose l r
+        else Left $ InvalidCardinality expected result
+
+    composeCardinality :: Cardinality -> Cardinality -> Cardinality
+    composeCardinality One One = One
+    composeCardinality One Many = Many
+    composeCardinality Many One = Many
+    composeCardinality Many Many = Many
+
+run :: Optic -> Value -> [Value]
+run (Optic optic) = foldFix algebra optic
+  where
+    algebra :: OpticF (Value -> [Value]) -> Value -> [Value]
+    algebra (Field name) (Object obj) = maybe [] pure (Map.lookup name obj)
+    algebra Each (Array values) = toList values
+    algebra (Compose left right) value = concatMap right (left value)
+    algebra _ _ = []
