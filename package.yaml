@@ -55,9 +55,10 @@ tests:
       - -with-rtsopts=-N
     dependencies:
       - base
+      - data-fix
       - free
+      - hq
       - relude
       - sydtest
       - sydtest-discover
       - vector
-      - hq

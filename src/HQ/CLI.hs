@@ -9,6 +9,9 @@ import qualified Data.ByteString.Lazy as BL
 import qualified Data.Text as Text
 import Data.Version (showVersion)
 import HQ
+import HQ.Optic
+import HQ.Parser hiding (Parser, queryParser)
+import HQ.Query
 import Options.Applicative
 import Paths_hq (version)
 import Relude
@@ -33,7 +36,7 @@ data CLIOptions = CLIOptions
   deriving (Show, Eq)
 
 opticReader :: ReadM Optic
-opticReader = eitherReader $ first errorBundlePretty . HQ.parseOptic . toText
+opticReader = eitherReader $ first errorBundlePretty . parseOptic . toText
 
 valueReader :: ReadM Value
 valueReader = eitherReader $ first errorBundlePretty . parseValue . toText
@@ -80,17 +83,16 @@ readInput Nothing = BL.getContents
 readInput (Just "-") = BL.getContents
 readInput (Just path) = BL.readFile path
 
-formatResult :: Raw -> Value -> Text
-formatResult Raw val | String s <- val = s
-formatResult _ val = decodeUtf8 $ BL.toStrict $ Aeson.encode $ Aeson.toJSON val
+formatResult :: Value -> Text
+formatResult val = decodeUtf8 $ BL.toStrict $ Aeson.encode $ Aeson.toJSON val
 
 outputResults :: Raw -> Join -> [Value] -> IO ()
-outputResults raw joinResults results
+outputResults _ joinResults results
   | null results = pass
   | joinResults == Join = putText $ Text.intercalate "" parts
   | otherwise = mapM_ putTextLn parts
   where
-    parts = formatResult raw <$> results
+    parts = formatResult <$> results
 
 --------------------------------------------------------------------------------
 
@@ -103,5 +105,7 @@ runCLI = do
   case Aeson.decode input of
     Nothing -> putTextLn "Failed to parse JSON input" >> exitFailure
     Just val -> do
-      let results = executeQuery (optQuery opts) [val]
-      outputResults (optRaw opts) (optJoin opts) results
+      let result = executeQuery (optQuery opts) val
+      outputResults (optRaw opts) (optJoin opts) $ case result of
+        Single m -> maybeToList m
+        Multi vs -> vs
