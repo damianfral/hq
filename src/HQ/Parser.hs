@@ -120,7 +120,7 @@ opticParser = do
   pure $ foldl' compose initial opts
 
 opticAtomParser :: Parser Optic
-opticAtomParser = fieldParser <|> eachParser <|> idParser
+opticAtomParser = fieldParser <|> eachParser <|> idParser <|> prismParser
 
 fieldParser :: Parser Optic
 fieldParser = char '#' >> field <$> identifier
@@ -133,6 +133,30 @@ eachParser = symbol "each" $> each
 
 idParser :: Parser Optic
 idParser = symbol "id" $> id
+
+prismParser :: Parser Optic
+prismParser = char '_' *> prismNameParser
+
+prismNameParser :: Parser Optic
+prismNameParser =
+  symbol "String"
+    $> _String
+    <|> symbol "Number"
+    $> _Number
+    <|> symbol "Bool"
+    $> _Bool
+    <|> symbol "Null"
+    $> _Null
+    <|> symbol "Array"
+    $> _Array
+    <|> symbol "Object"
+    $> _Object
+    <|> symbol "Just"
+    $> _Just
+    <|> symbol "1"
+    $> _1
+    <|> symbol "2"
+    $> _2
 
 spaceConsumer :: Parser ()
 spaceConsumer = skipMany spaceChar

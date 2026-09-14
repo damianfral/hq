@@ -60,6 +60,33 @@ typecheck = go . unOpticAST
       Id
         | ann == OpticLens -> pure id
         | otherwise -> Left $ InvalidOpticType OpticLens ann
+      PrismString
+        | ann == OpticPrism -> pure _String
+        | otherwise -> Left $ InvalidOpticType OpticPrism ann
+      PrismNumber
+        | ann == OpticPrism -> pure _Number
+        | otherwise -> Left $ InvalidOpticType OpticPrism ann
+      PrismBool
+        | ann == OpticPrism -> pure _Bool
+        | otherwise -> Left $ InvalidOpticType OpticPrism ann
+      PrismNull
+        | ann == OpticPrism -> pure _Null
+        | otherwise -> Left $ InvalidOpticType OpticPrism ann
+      PrismArray
+        | ann == OpticPrism -> pure _Array
+        | otherwise -> Left $ InvalidOpticType OpticPrism ann
+      PrismObject
+        | ann == OpticPrism -> pure _Object
+        | otherwise -> Left $ InvalidOpticType OpticPrism ann
+      PrismJust
+        | ann == OpticPrism -> pure _Just
+        | otherwise -> Left $ InvalidOpticType OpticPrism ann
+      Prism1
+        | ann == OpticPrism -> pure _1
+        | otherwise -> Left $ InvalidOpticType OpticPrism ann
+      Prism2
+        | ann == OpticPrism -> pure _2
+        | otherwise -> Left $ InvalidOpticType OpticPrism ann
       Compose left right -> do
         l <- go left
         r <- go right

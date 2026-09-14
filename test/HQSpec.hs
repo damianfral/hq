@@ -23,6 +23,7 @@ spec = describe "HQ" $ do
   parserSpec
   typecheckerSpec
   runnerSpec
+  specPrism
 
 parserSpec :: Spec
 parserSpec = describe "parseQuery" $ do
@@ -183,30 +184,22 @@ typecheckerSpec = describe "typecheck" $ do
           Compose (OpticTraversal :< Each) (OpticAffineTraversal :< Field "b")
     let ast = mkAST OpticTraversal composed
     typecheck ast `shouldBe` Right (compose each (field "b"))
-  --
-  -- it "accepts composed AffineTraversal-Prism" $ do
-  --   typecheck
-  --     (mkAST OpticAffineTraversal
-  --       (Compose
-  --         (OpticAffineTraversal :< Field "a")
-  --         (OpticPrism :< String)))
-  --     `shouldBe` Right (compose (field "a") string)
 
-  -- it "accepts composed Prism-Prism" $ do
-  --   typecheck
-  --     (mkAST OpticPrism
-  --       (Compose
-  --         (OpticPrism :< String)
-  --         (OpticPrism :< String)))
-  --     `shouldBe` Right (compose string string)
+  it "accepts composed AffineTraversal-Prism" $ do
+    let composed =
+          Compose (OpticAffineTraversal :< Field "a") (OpticPrism :< PrismString)
+    let ast = mkAST OpticAffineTraversal composed
+    typecheck ast `shouldBe` Right (compose (field "a") _String)
 
-  -- it "accepts composed Traversal-Prism" $ do
-  --   typecheck
-  --     (mkAST OpticTraversal
-  --       (Compose
-  --         (OpticTraversal :< Each)
-  --         (OpticPrism :< String)))
-  --     `shouldBe` Right (compose each string)
+  it "accepts composed Prism-Prism" $ do
+    let composed = Compose (OpticPrism :< PrismString) (OpticPrism :< PrismString)
+    let ast = mkAST OpticPrism composed
+    typecheck ast `shouldBe` Right (compose _String _String)
+
+  it "accepts composed Traversal-Prism" $ do
+    let composed = Compose (OpticTraversal :< Each) (OpticPrism :< PrismString)
+    let ast = mkAST OpticTraversal composed
+    typecheck ast `shouldBe` Right (compose each _String)
 
   it "accepts composed Traversal-Traversal" $ do
     let composed = Compose (OpticTraversal :< Each) (OpticTraversal :< Each)
@@ -437,3 +430,287 @@ runnerSpec = describe "run" $ do
       let v = Object $ fromList [("name", String "alice"), ("age", Number 30)]
       let expected = Single (Just (Object $ fromList [("age", Number 30)]))
       executeQuery (Delete (field "name")) v `shouldBe` expected
+
+--------------------------------------------------------------------------------
+-- Prism tests
+--------------------------------------------------------------------------------
+
+specPrism :: Spec
+specPrism = describe "Prisms" $ do
+  prismParserSpec
+  prismTypecheckerSpec
+  prismFoldSpec
+  prismOverSpec
+  prismDeleteSpec
+  prismCompositionSpec
+
+prismParserSpec :: Spec
+prismParserSpec = describe "parseQuery (prisms)" $ do
+  it "parses _String" $ do
+    parseQuery "view _String" `shouldBe` Right (Preview _String)
+
+  it "parses _Number" $ do
+    parseQuery "view _Number" `shouldBe` Right (Preview _Number)
+
+  it "parses _Bool" $ do
+    parseQuery "view _Bool" `shouldBe` Right (Preview _Bool)
+
+  it "parses _Null" $ do
+    parseQuery "view _Null" `shouldBe` Right (Preview _Null)
+
+  it "parses _Array" $ do
+    parseQuery "view _Array" `shouldBe` Right (Preview _Array)
+
+  it "parses _Object" $ do
+    parseQuery "view _Object" `shouldBe` Right (Preview _Object)
+
+  it "parses _Just" $ do
+    parseQuery "view _Just" `shouldBe` Right (Preview _Just)
+
+  it "parses _1" $ do
+    parseQuery "view _1" `shouldBe` Right (Preview _1)
+
+  it "parses _2" $ do
+    parseQuery "view _2" `shouldBe` Right (Preview _2)
+
+  it "parses prism in composition with each" $ do
+    parseQuery "fold each._String" `shouldBe` Right (Fold (compose each _String))
+
+  it "parses prism in composition with field" $ do
+    parseQuery "view #data._Number"
+      `shouldBe` Right (Preview (compose (field "data") _Number))
+
+  it "parses prism composed with prism" $ do
+    parseQuery "fold _Array._1" `shouldBe` Right (Fold (compose _Array _1))
+
+prismTypecheckerSpec :: Spec
+prismTypecheckerSpec = describe "typecheck (prisms)" $ do
+  it "accepts _String with Prism type" $ do
+    typecheck (mkAST OpticPrism PrismString) `shouldBe` Right _String
+
+  it "accepts _Number with Prism type" $ do
+    typecheck (mkAST OpticPrism PrismNumber) `shouldBe` Right _Number
+
+  it "accepts _Bool with Prism type" $ do
+    typecheck (mkAST OpticPrism PrismBool) `shouldBe` Right _Bool
+
+  it "accepts _Null with Prism type" $ do
+    typecheck (mkAST OpticPrism PrismNull) `shouldBe` Right _Null
+
+  it "accepts _Array with Prism type" $ do
+    typecheck (mkAST OpticPrism PrismArray) `shouldBe` Right _Array
+
+  it "accepts _Object with Prism type" $ do
+    typecheck (mkAST OpticPrism PrismObject) `shouldBe` Right _Object
+
+  it "accepts _Just with Prism type" $ do
+    typecheck (mkAST OpticPrism PrismJust) `shouldBe` Right _Just
+
+  it "accepts _1 with Prism type" $ do
+    typecheck (mkAST OpticPrism Prism1) `shouldBe` Right _1
+
+  it "accepts _2 with Prism type" $ do
+    typecheck (mkAST OpticPrism Prism2) `shouldBe` Right _2
+
+  it "rejects _String with Lens type" $ do
+    typecheck (mkAST OpticLens PrismString)
+      `shouldBe` Left (InvalidOpticType OpticPrism OpticLens)
+
+  it "rejects _String with Traversal type" $ do
+    typecheck (mkAST OpticTraversal PrismString)
+      `shouldBe` Left (InvalidOpticType OpticPrism OpticTraversal)
+
+prismFoldSpec :: Spec
+prismFoldSpec = describe "runFold (prisms)" $ do
+  describe "_String" $ do
+    it "matches a String value" $ do
+      runFold _String (String "hello") `shouldBe` [String "hello"]
+
+    it "rejects a Number value" $ do
+      runFold _String (Number 42) `shouldBe` []
+
+    it "rejects null" $ do
+      runFold _String Null `shouldBe` []
+
+  describe "_Number" $ do
+    it "matches a Number value" $ do
+      runFold _Number (Number 42) `shouldBe` [Number 42]
+
+    it "rejects a String value" $ do
+      runFold _Number (String "hello") `shouldBe` []
+
+  describe "_Bool" $ do
+    it "matches a Bool value" $ do
+      runFold _Bool (Bool True) `shouldBe` [Bool True]
+
+    it "rejects a Number value" $ do
+      runFold _Bool (Number 1) `shouldBe` []
+
+  describe "_Null" $ do
+    it "matches Null" $ do
+      runFold _Null Null `shouldBe` [Null]
+
+    it "rejects non-null" $ do
+      runFold _Null (Number 1) `shouldBe` []
+
+  describe "_Array" $ do
+    it "matches an Array" $ do
+      runFold _Array (Array (V.fromList [Number 1]))
+        `shouldBe` [Array (V.fromList [Number 1])]
+
+    it "rejects a non-array" $ do
+      runFold _Array (Number 1)
+        `shouldBe` []
+
+  describe "_Object" $ do
+    it "matches an Object" $ do
+      runFold _Object (Object (fromList [("a", Number 1)]))
+        `shouldBe` [Object (fromList [("a", Number 1)])]
+
+    it "rejects a non-object" $ do
+      runFold _Object (Number 1) `shouldBe` []
+
+  describe "_Just" $ do
+    it "matches a non-null value" $ do
+      runFold _Just (Number 42) `shouldBe` [Number 42]
+
+    it "rejects Null" $ do
+      runFold _Just Null `shouldBe` []
+
+  describe "_1" $ do
+    it "gets the first element of an array" $ do
+      runFold _1 (Array (V.fromList [Number 1, Number 2, Number 3]))
+        `shouldBe` [Number 1]
+
+    it "returns empty for single-element array" $ do
+      runFold _1 (Array (V.fromList [Number 1])) `shouldBe` [Number 1]
+
+    it "returns empty for empty array" $ do
+      runFold _1 (Array V.empty) `shouldBe` []
+
+    it "returns empty for non-array" $ do
+      runFold _1 (Number 42) `shouldBe` []
+
+  describe "_2" $ do
+    it "gets the second element of an array" $ do
+      runFold _2 (Array (V.fromList [Number 1, Number 2, Number 3]))
+        `shouldBe` [Number 2]
+
+    it "returns empty for single-element array" $ do
+      runFold _2 (Array (V.fromList [Number 1])) `shouldBe` []
+
+    it "returns empty for empty array" $ do
+      runFold _2 (Array V.empty) `shouldBe` []
+
+    it "returns empty for non-array" $ do
+      runFold _2 (Number 42) `shouldBe` []
+
+prismOverSpec :: Spec
+prismOverSpec = describe "runOver (prisms)" $ do
+  it "modifies a String via _String" $ do
+    runOver (Fix PrismString) (const (String "changed")) (String "hello")
+      `shouldBe` String "changed"
+
+  it "does not modify non-matching value via _String" $ do
+    runOver (Fix PrismString) (const (String "changed")) (Number 42)
+      `shouldBe` Number 42
+
+  it "modifies a Number via _Number" $ do
+    runOver (Fix PrismNumber) (const (Number 99)) (Number 42)
+      `shouldBe` Number 99
+
+  it "modifies Null via _Null" $ do
+    runOver (Fix PrismNull) (const (String "gone")) Null
+      `shouldBe` String "gone"
+
+  it "modifies a non-null value via _Just" $ do
+    runOver (Fix PrismJust) (const (Number 99)) (String "hello")
+      `shouldBe` Number 99
+
+  it "does not modify Null via _Just" $ do
+    runOver (Fix PrismJust) (const (Number 99)) Null `shouldBe` Null
+
+  it "modifies first element via _1" $ do
+    let v = Array (V.fromList [Number 1, Number 2])
+    runOver (Fix Prism1) (const (Number 99)) v
+      `shouldBe` Array (V.fromList [Number 99, Number 2])
+
+  it "modifies second element via _2" $ do
+    let v = Array (V.fromList [Number 1, Number 2, Number 3])
+    runOver (Fix Prism2) (const (Number 99)) v
+      `shouldBe` Array (V.fromList [Number 1, Number 99, Number 3])
+
+  it "_1 does nothing on non-array"
+    $ runOver (Fix Prism1) (const (Number 99)) (Number 42)
+    `shouldBe` Number 42
+
+  it "_2 does nothing on short array" $ do
+    let v = Array (V.fromList [Number 1])
+    runOver (Fix Prism2) (const (Number 99)) v
+      `shouldBe` Array (V.fromList [Number 1])
+
+prismDeleteSpec :: Spec
+prismDeleteSpec = describe "runDelete (prisms)" $ do
+  it "deletes a String via _String" $ do
+    runDelete _String (String "hello") `shouldBe` Null
+
+  it "does not delete non-matching via _String" $ do
+    runDelete _String (Number 42) `shouldBe` Number 42
+
+  it "deletes a Number via _Number" $ do
+    runDelete _Number (Number 42) `shouldBe` Null
+
+  it "deletes Null via _Null" $ do
+    runDelete _Null Null `shouldBe` Null
+
+  it "deletes a non-null via _Just" $ do
+    runDelete _Just (Number 42) `shouldBe` Null
+
+  it "does not delete Null via _Just" $ do
+    runDelete _Just Null `shouldBe` Null
+
+  it "replaces first element with Null via _1" $ do
+    runDelete _1 (Array (V.fromList [Number 1, Number 2]))
+      `shouldBe` Array (V.fromList [Null, Number 2])
+
+  it "replaces second element with Null via _2" $ do
+    runDelete _2 (Array (V.fromList [Number 1, Number 2, Number 3]))
+      `shouldBe` Array (V.fromList [Number 1, Null, Number 3])
+
+  it "_1 does nothing on non-array" $ do
+    runDelete _1 (Number 42) `shouldBe` Number 42
+
+  it "_2 does nothing on short array" $ do
+    let v = Array (V.fromList [Number 1])
+    runDelete _2 v `shouldBe` Array (V.fromList [Number 1])
+
+prismCompositionSpec :: Spec
+prismCompositionSpec = describe "prism composition" $ do
+  it "each._String filters strings from array" $ do
+    let v = Array (V.fromList [Number 1, String "a", Number 2, String "b"])
+    runFold (compose each _String) v `shouldBe` [String "a", String "b"]
+
+  it "each._Number filters numbers from array" $ do
+    let v = Array (V.fromList [Number 1, String "a", Number 2])
+    runFold (compose each _Number) v `shouldBe` [Number 1, Number 2]
+
+  it "field._Just filters null fields" $ do
+    let v = Object (fromList [("x", Number 1)])
+    runFold (compose (field "x") _Just) v `shouldBe` [Number 1]
+
+  it "field._Just skips null fields" $ do
+    let v = Object (fromList [("x", Null)])
+    runFold (compose (field "x") _Just) v `shouldBe` []
+
+  it "_Array._1 gets first element after confirming array type" $ do
+    let v = Array (V.fromList [Number 42, Number 43])
+    runFold (compose _Array _1) v `shouldBe` [Number 42]
+
+  it "each._1 gets first element of each sub-array" $ do
+    let v =
+          Array
+            $ V.fromList
+              [ Array (V.fromList [Number 1, Number 2]),
+                Array (V.fromList [Number 3, Number 4])
+              ]
+    runFold (compose each _1) v `shouldBe` [Number 1, Number 3]

@@ -25,6 +25,24 @@ runFold (Optic optic) = foldFix algebra optic
     algebra Each _ = []
     algebra Id val = [val]
     algebra (Compose left right) value = concatMap right $ left value
+    algebra PrismString val@(String _) = [val]
+    algebra PrismString _ = []
+    algebra PrismNumber val@(Number _) = [val]
+    algebra PrismNumber _ = []
+    algebra PrismBool val@(Bool _) = [val]
+    algebra PrismBool _ = []
+    algebra PrismNull val@Null = [val]
+    algebra PrismNull _ = []
+    algebra PrismArray val@(Array _) = [val]
+    algebra PrismArray _ = []
+    algebra PrismObject val@(Object _) = [val]
+    algebra PrismObject _ = []
+    algebra PrismJust Null = []
+    algebra PrismJust val = [val]
+    algebra Prism1 (Array v) | not (null v) = [V.head v]
+    algebra Prism1 _ = []
+    algebra Prism2 (Array v) | V.length v >= 2 = [v V.! 1]
+    algebra Prism2 _ = []
 
 -- | Modify all values focused by an optic path with the given function.
 --
@@ -41,6 +59,26 @@ runOver (Fix Each) f (Object obj) = Object $ f <$> obj
 runOver (Fix Each) _ val = val
 runOver (Fix Id) f val = f val
 runOver (Fix (Compose l r)) f val = runOver l (runOver r f) val
+runOver (Fix PrismString) f (String s) = f (String s)
+runOver (Fix PrismString) _ val = val
+runOver (Fix PrismNumber) f (Number n) = f (Number n)
+runOver (Fix PrismNumber) _ val = val
+runOver (Fix PrismBool) f (Bool b) = f (Bool b)
+runOver (Fix PrismBool) _ val = val
+runOver (Fix PrismNull) f Null = f Null
+runOver (Fix PrismNull) _ val = val
+runOver (Fix PrismArray) f (Array xs) = f (Array xs)
+runOver (Fix PrismArray) _ val = val
+runOver (Fix PrismObject) f (Object m) = f (Object m)
+runOver (Fix PrismObject) _ val = val
+runOver (Fix PrismJust) _ Null = Null
+runOver (Fix PrismJust) f val = f val
+runOver (Fix Prism1) f (Array xs)
+  | not (null xs) = Array $ V.cons (f (V.head xs)) (V.tail xs)
+runOver (Fix Prism1) _ val = val
+runOver (Fix Prism2) f (Array xs)
+  | V.length xs >= 2 = Array $ V.cons (V.head xs) (V.cons (f (xs V.! 1)) (V.drop 2 xs))
+runOver (Fix Prism2) _ val = val
 
 -- | Replace all values focused by an optic with the given replacement value.
 runSet :: Optic -> Value -> Value -> Value
@@ -62,6 +100,18 @@ runDelete (Optic (Fix Each)) (Array _) = Array V.empty
 runDelete (Optic (Fix Each)) (Object _) = Object Map.empty
 runDelete (Optic (Fix Id)) _ = Null
 runDelete (Optic (Fix (Compose l r))) val = runOver l (runDelete (Optic r)) val
+runDelete (Optic (Fix PrismString)) (String _) = Null
+runDelete (Optic (Fix PrismNumber)) (Number _) = Null
+runDelete (Optic (Fix PrismBool)) (Bool _) = Null
+runDelete (Optic (Fix PrismNull)) Null = Null
+runDelete (Optic (Fix PrismArray)) (Array _) = Null
+runDelete (Optic (Fix PrismObject)) (Object _) = Null
+runDelete (Optic (Fix PrismJust)) Null = Null
+runDelete (Optic (Fix PrismJust)) val = val
+runDelete (Optic (Fix Prism1)) (Array xs)
+  | not (null xs) = Array $ V.cons Null (V.tail xs)
+runDelete (Optic (Fix Prism2)) (Array xs)
+  | V.length xs >= 2 = Array $ V.cons (V.head xs) (V.cons Null (V.drop 2 xs))
 runDelete _ val = val
 
 --------------------------------------------------------------------------------
