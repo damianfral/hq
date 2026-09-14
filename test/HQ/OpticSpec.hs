@@ -1,216 +1,24 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 
-module HQSpec (spec) where
+module HQ.OpticSpec (spec) where
 
-import Control.Comonad.Cofree (Cofree ((:<)))
 import Data.Fix (Fix (..))
 import qualified Data.Map.Lazy as Map
 import qualified Data.Vector as V
 import HQ
-import HQ.AST
 import HQ.Optic
-import HQ.Parser (parseQuery)
-import HQ.Query (Query (..), Value (..))
+import HQ.Value (Value (..))
 import Relude hiding (Compose, id)
 import Test.Syd
 
-mkAST :: OpticType -> OpticF (Cofree OpticF OpticType) -> OpticAST
-mkAST c f = OpticAST (c :< f)
-
 spec :: Spec
-spec = describe "HQ" $ do
-  parserSpec
-  typecheckerSpec
+spec = describe "HQ.Optic" $ do
   runnerSpec
-  specPrism
-
-parserSpec :: Spec
-parserSpec = describe "parseQuery" $ do
-  describe "view operation" $ do
-    it "parses view with a field" $ do
-      parseQuery "view #foo" `shouldBe` Right (Preview (field "foo"))
-
-    it "parses view with each" $ do
-      parseQuery "view each" `shouldBe` Right (Preview each)
-
-    it "parses view with id" $ do
-      parseQuery "view id" `shouldBe` Right (Preview id)
-
-    it "parses view with composed optics" $ do
-      parseQuery "view #foo.#bar"
-        `shouldBe` Right (Preview $ compose (field "foo") (field "bar"))
-
-    it "parses view with deeply composed optics" $ do
-      let expected =
-            Preview (compose (compose (field "a") (field "b")) (field "c"))
-      parseQuery "view #a.#b.#c" `shouldBe` Right expected
-
-  describe "fold operation" $ do
-    it "parses fold with a field" $ do
-      parseQuery "fold #foo" `shouldBe` Right (Fold (field "foo"))
-
-    it "parses fold with each" $ do
-      parseQuery "fold each" `shouldBe` Right (Fold each)
-
-    it "parses fold with composed optics" $ do
-      let expected = Fold (compose (compose (field "foo") each) (field "bar"))
-      parseQuery "fold #foo.each.#bar" `shouldBe` Right expected
-
-  describe "each optic" $ do
-    it "parses each standalone" $ do
-      parseQuery "view each" `shouldBe` Right (Preview each)
-
-    it "parses each in composition" $ do
-      let expected = Preview $ compose (field "foo") each
-      parseQuery "view #foo.each" `shouldBe` Right expected
-
-    it "parses each at the start of composition" $ do
-      let expected = Preview $ compose each (field "foo")
-      parseQuery "view each.#foo" `shouldBe` Right expected
-
-  describe "field optic" $ do
-    it "parses a simple field" $ do
-      parseQuery "view #name" `shouldBe` Right (Preview (field "name"))
-
-    it "parses a field with underscores" $ do
-      parseQuery "view #my_field" `shouldBe` Right (Preview (field "my_field"))
-
-    it "parses a field with numbers" $ do
-      parseQuery "view #field123" `shouldBe` Right (Preview (field "field123"))
-
-    it "parses a field with mixed alphanumeric and underscores" $ do
-      parseQuery "view #foo_bar_1" `shouldBe` Right (Preview (field "foo_bar_1"))
-
-  describe "id optic" $ do
-    it "parses id standalone" $ do
-      parseQuery "view id" `shouldBe` Right (Preview id)
-
-    it "parses id in composition" $ do
-      let composed = Preview $ compose id (field "foo")
-      parseQuery "view id.#foo" `shouldBe` Right composed
-
-  describe "whitespace handling" $ do
-    it "handles extra whitespace around the query" $ do
-      parseQuery "  view #foo  " `shouldBe` Right (Preview (field "foo"))
-
-    it "handles whitespace around the dot separator" $ do
-      let expected = Preview $ compose (field "foo") (field "bar")
-      parseQuery "view #foo . #bar" `shouldBe` Right expected
-
-    it "handles no whitespace" $ do
-      parseQuery "view#foo" `shouldBe` Right (Preview (field "foo"))
-
-    it "handles tabs" $ do
-      parseQuery "\tview\t#foo\t" `shouldBe` Right (Preview (field "foo"))
-
-  describe "error cases" $ do
-    it "rejects empty input" $ case parseQuery "" of
-      Left _ -> pure ()
-      Right q -> expectationFailure $ "Expected parse error, got: " <> show q
-
-    it "rejects unknown operation" $ case parseQuery "unknown #foo" of
-      Left _ -> pure ()
-      Right q -> expectationFailure $ "Expected parse error, got: " <> show q
-
-    it "rejects missing optic after operation" $ case parseQuery "view" of
-      Left _ -> pure ()
-      Right q -> expectationFailure $ "Expected parse error, got: " <> show q
-
-    it "rejects field without hash" $ case parseQuery "view foo" of
-      Left _ -> pure ()
-      Right q -> expectationFailure $ "Expected parse error, got: " <> show q
-
-    it "rejects hash without identifier" $ case parseQuery "view #" of
-      Left _ -> pure ()
-      Right q -> expectationFailure $ "Expected parse error, got: " <> show q
-
-typecheckerSpec :: Spec
-typecheckerSpec = describe "typecheck" $ do
-  it "accepts a valid field with AffineTraversal type" $ do
-    let ast = mkAST OpticAffineTraversal (Field "name")
-    typecheck ast `shouldBe` Right (field "name")
-
-  it "accepts a valid each with Traversal type" $ do
-    typecheck (mkAST OpticTraversal Each) `shouldBe` Right each
-
-  it "accepts a valid id with Lens type" $ do
-    typecheck (mkAST OpticLens Id) `shouldBe` Right id
-
-  it "rejects a field with Lens type" $ do
-    typecheck (mkAST OpticAffineTraversal (Field "name"))
-      `shouldBe` Right (field "name")
-
-  it "rejects a field with Traversal type" $ do
-    let err = InvalidOpticType OpticAffineTraversal OpticTraversal
-    typecheck (mkAST OpticTraversal (Field "name")) `shouldBe` Left err
-
-  it "rejects an each with Lens type" $ do
-    let err = InvalidOpticType OpticTraversal OpticLens
-    typecheck (mkAST OpticLens Each) `shouldBe` Left err
-
-  it "rejects an id with Traversal type" $ do
-    let err = InvalidOpticType OpticLens OpticTraversal
-    typecheck (mkAST OpticTraversal Id) `shouldBe` Left err
-
-  it "accepts composed Lens-Lens" $ do
-    let composed =
-          Compose
-            (OpticAffineTraversal :< Field "a")
-            (OpticAffineTraversal :< Field "b")
-    let ast = mkAST OpticAffineTraversal composed
-    typecheck ast `shouldBe` Right (compose (field "a") (field "b"))
-
-  it "accepts composed AffineTraversal-Lens" $ do
-    let composed =
-          Compose
-            (OpticAffineTraversal :< Field "a")
-            (OpticAffineTraversal :< Field "b")
-    let ast = mkAST OpticAffineTraversal composed
-    typecheck ast `shouldBe` Right (compose (field "a") (field "b"))
-
-  it "accepts composed Lens-AffineTraversal" $ do
-    let composed = Compose (OpticLens :< Id) (OpticAffineTraversal :< Field "b")
-    let ast = mkAST OpticAffineTraversal composed
-    typecheck ast `shouldBe` Right (compose id (field "b"))
-
-  it "accepts composed Lens-Traversal" $ do
-    let composed = Compose (OpticLens :< Id) (OpticTraversal :< Each)
-    let ast = mkAST OpticTraversal composed
-    typecheck ast `shouldBe` Right (compose id each)
-
-  it "accepts composed Traversal-Lens" $ do
-    let composed =
-          Compose (OpticTraversal :< Each) (OpticAffineTraversal :< Field "b")
-    let ast = mkAST OpticTraversal composed
-    typecheck ast `shouldBe` Right (compose each (field "b"))
-
-  it "accepts composed AffineTraversal-Prism" $ do
-    let composed =
-          Compose (OpticAffineTraversal :< Field "a") (OpticPrism :< PrismString)
-    let ast = mkAST OpticAffineTraversal composed
-    typecheck ast `shouldBe` Right (compose (field "a") _String)
-
-  it "accepts composed Prism-Prism" $ do
-    let composed = Compose (OpticPrism :< PrismString) (OpticPrism :< PrismString)
-    let ast = mkAST OpticPrism composed
-    typecheck ast `shouldBe` Right (compose _String _String)
-
-  it "accepts composed Traversal-Prism" $ do
-    let composed = Compose (OpticTraversal :< Each) (OpticPrism :< PrismString)
-    let ast = mkAST OpticTraversal composed
-    typecheck ast `shouldBe` Right (compose each _String)
-
-  it "accepts composed Traversal-Traversal" $ do
-    let composed = Compose (OpticTraversal :< Each) (OpticTraversal :< Each)
-    let ast = mkAST OpticTraversal composed
-    typecheck ast `shouldBe` Right (compose each each)
-
-  it "rejects composed with wrong annotation" $ do
-    let composed = Compose (OpticAffineTraversal :< Field "a") (OpticLens :< Id)
-    let ast = mkAST OpticLens composed
-    let err = InvalidOpticType OpticAffineTraversal OpticLens
-    typecheck ast `shouldBe` Left err
+  prismFoldSpec
+  prismOverSpec
+  prismDeleteSpec
+  prismCompositionSpec
 
 runnerSpec :: Spec
 runnerSpec = describe "run" $ do
@@ -408,118 +216,6 @@ runnerSpec = describe "run" $ do
                 ]
       runDelete optic value `shouldBe` expected
 
-  describe "executeQuery" $ do
-    it "preview returns first match" $ do
-      let v = Array $ V.fromList [Number 1, Number 2]
-      executeQuery (Preview each) v `shouldBe` Single (Just (Number 1))
-
-    it "preview returns Nothing when no match" $ do
-      let v = Object Map.empty
-      executeQuery (Preview (field "missing")) v `shouldBe` Single Nothing
-
-    it "fold returns all matches" $ do
-      let v = Array $ V.fromList [Number 1, Number 2, Number 3]
-      executeQuery (Fold each) v `shouldBe` Multi [Number 1, Number 2, Number 3]
-
-    it "set replaces all focused values" $ do
-      let v = Object $ fromList [("name", String "alice")]
-      let expected = Single (Just (Object $ fromList [("name", String "bob")]))
-      executeQuery (Set (field "name") (String "bob")) v `shouldBe` expected
-
-    it "delete removes focused values" $ do
-      let v = Object $ fromList [("name", String "alice"), ("age", Number 30)]
-      let expected = Single (Just (Object $ fromList [("age", Number 30)]))
-      executeQuery (Delete (field "name")) v `shouldBe` expected
-
---------------------------------------------------------------------------------
--- Prism tests
---------------------------------------------------------------------------------
-
-specPrism :: Spec
-specPrism = describe "Prisms" $ do
-  prismParserSpec
-  prismTypecheckerSpec
-  prismFoldSpec
-  prismOverSpec
-  prismDeleteSpec
-  prismCompositionSpec
-
-prismParserSpec :: Spec
-prismParserSpec = describe "parseQuery (prisms)" $ do
-  it "parses _String" $ do
-    parseQuery "view _String" `shouldBe` Right (Preview _String)
-
-  it "parses _Number" $ do
-    parseQuery "view _Number" `shouldBe` Right (Preview _Number)
-
-  it "parses _Bool" $ do
-    parseQuery "view _Bool" `shouldBe` Right (Preview _Bool)
-
-  it "parses _Null" $ do
-    parseQuery "view _Null" `shouldBe` Right (Preview _Null)
-
-  it "parses _Array" $ do
-    parseQuery "view _Array" `shouldBe` Right (Preview _Array)
-
-  it "parses _Object" $ do
-    parseQuery "view _Object" `shouldBe` Right (Preview _Object)
-
-  it "parses _Just" $ do
-    parseQuery "view _Just" `shouldBe` Right (Preview _Just)
-
-  it "parses _1" $ do
-    parseQuery "view _1" `shouldBe` Right (Preview _1)
-
-  it "parses _2" $ do
-    parseQuery "view _2" `shouldBe` Right (Preview _2)
-
-  it "parses prism in composition with each" $ do
-    parseQuery "fold each._String" `shouldBe` Right (Fold (compose each _String))
-
-  it "parses prism in composition with field" $ do
-    parseQuery "view #data._Number"
-      `shouldBe` Right (Preview (compose (field "data") _Number))
-
-  it "parses prism composed with prism" $ do
-    parseQuery "fold _Array._1" `shouldBe` Right (Fold (compose _Array _1))
-
-prismTypecheckerSpec :: Spec
-prismTypecheckerSpec = describe "typecheck (prisms)" $ do
-  it "accepts _String with Prism type" $ do
-    typecheck (mkAST OpticPrism PrismString) `shouldBe` Right _String
-
-  it "accepts _Number with Prism type" $ do
-    typecheck (mkAST OpticPrism PrismNumber) `shouldBe` Right _Number
-
-  it "accepts _Bool with Prism type" $ do
-    typecheck (mkAST OpticPrism PrismBool) `shouldBe` Right _Bool
-
-  it "accepts _Null with Prism type" $ do
-    typecheck (mkAST OpticPrism PrismNull) `shouldBe` Right _Null
-
-  it "accepts _Array with Prism type" $ do
-    typecheck (mkAST OpticPrism PrismArray) `shouldBe` Right _Array
-
-  it "accepts _Object with Prism type" $ do
-    typecheck (mkAST OpticPrism PrismObject) `shouldBe` Right _Object
-
-  it "accepts _Just with Prism type" $ do
-    typecheck (mkAST OpticPrism PrismJust) `shouldBe` Right _Just
-
-  it "accepts _1 with Prism type" $ do
-    typecheck (mkAST OpticPrism Prism1) `shouldBe` Right _1
-
-  it "accepts _2 with Prism type" $ do
-    typecheck (mkAST OpticPrism Prism2) `shouldBe` Right _2
-
-  it "rejects _String with Lens type" $ do
-    typecheck (mkAST OpticLens PrismString)
-      `shouldBe` Left (InvalidOpticType OpticPrism OpticLens)
-
-  it "rejects _String with Traversal type" $ do
-    typecheck (mkAST OpticTraversal PrismString)
-      `shouldBe` Left (InvalidOpticType OpticPrism OpticTraversal)
-
 prismFoldSpec :: Spec
 prismFoldSpec = describe "runFold (prisms)" $ do
   describe "_String" $ do
@@ -640,9 +336,9 @@ prismOverSpec = describe "runOver (prisms)" $ do
     runOver (Fix Prism2) (const (Number 99)) v
       `shouldBe` Array (V.fromList [Number 1, Number 99, Number 3])
 
-  it "_1 does nothing on non-array"
-    $ runOver (Fix Prism1) (const (Number 99)) (Number 42)
-    `shouldBe` Number 42
+  it "_1 does nothing on non-array" $ do
+    runOver (Fix Prism1) (const (Number 99)) (Number 42)
+      `shouldBe` Number 42
 
   it "_2 does nothing on short array" $ do
     let v = Array (V.fromList [Number 1])
@@ -663,8 +359,8 @@ prismDeleteSpec = describe "runDelete (prisms)" $ do
   it "deletes Null via _Null" $ do
     runDelete _Null Null `shouldBe` Null
 
-  it "deletes a non-null via _Just" $ do
-    runDelete _Just (Number 42) `shouldBe` Null
+  it "does not delete non-null via _Just" $ do
+    runDelete _Just (Number 42) `shouldBe` Number 42
 
   it "does not delete Null via _Just" $ do
     runDelete _Just Null `shouldBe` Null

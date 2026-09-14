@@ -5,6 +5,7 @@ module HQ.Parser where
 
 import HQ.Optic
 import HQ.Query
+import HQ.Value
 import Relude hiding (Compose, id, many, some)
 import Text.Megaparsec
 import Text.Megaparsec.Char (alphaNumChar, char, digitChar, spaceChar, string)

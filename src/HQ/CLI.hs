@@ -12,6 +12,7 @@ import HQ
 import HQ.Optic
 import HQ.Parser hiding (Parser, queryParser)
 import HQ.Query
+import HQ.Value (Value)
 import Options.Applicative
 import Paths_hq (version)
 import Relude

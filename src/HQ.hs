@@ -7,6 +7,7 @@ import qualified Data.Map.Lazy as Map
 import qualified Data.Vector as V
 import HQ.Optic
 import HQ.Query
+import HQ.Value (Value (..))
 import Relude hiding (Compose, id, many, some)
 
 -- | Fold an optic path over a JSON value, collecting all focused targets.
