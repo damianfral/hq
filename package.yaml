@@ -12,24 +12,33 @@ library:
     - base
     - data-fix
     - free
-    - json-stream
     - megaparsec
+    - incremental-parser
+    - mtl
     - optparse-applicative
     - relude
     - scientific
+    - streaming
     - text
+    - transformers
     - vector
 
 ghc-options:
-  - -fwrite-ide-info
+  - -O2
+  - -fshow-warning-groups
+  - -Werror
   - -Wall
-  - -Wincomplete-uni-patterns
-  - -Wincomplete-record-updates
-  - -Wpartial-fields
-  - -Widentities
-  - -Wredundant-constraints
+  - -Wcompat
   - -Wcpp-undef
-  - -Wunused-packages
+  - -Widentities
+  - -Wincomplete-record-updates
+  - -Wincomplete-uni-patterns
+  - -Wpartial-fields
+  - -Wredundant-constraints
+  - -fwrite-ide-info
+  - -funbox-strict-fields
+  - -flate-dmd-anal
+  - -fno-omit-interface-pragmas
 
 executables:
   hq:
@@ -39,6 +48,7 @@ executables:
       - -rtsopts
       - -threaded
       - -with-rtsopts=-N
+      - -O2
     dependencies:
       - base
       - hq
@@ -53,12 +63,19 @@ tests:
       - -rtsopts
       - -threaded
       - -with-rtsopts=-N
+      - -O2
     dependencies:
+      - aeson
       - base
+      - bytestring
       - data-fix
       - free
+      - mtl
       - hq
       - relude
+      - megaparsec
+      - scientific
+      - streaming
       - sydtest
       - sydtest-discover
       - vector

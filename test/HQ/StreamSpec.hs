@@ -1,12 +1,12 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 
-module HQ.QuerySpec (spec) where
+module HQ.StreamSpec (spec) where
 
 import Relude hiding (Compose, id)
 import Test.Syd
 
 spec :: Spec
 spec =
-  xdescribe "HQ.Query"
-    $ pending "Tests need to be rewritten to match current Runner API"
+  xdescribe "HQ.Stream"
+    $ pending "Tests need to be rewritten to match current Stream API"

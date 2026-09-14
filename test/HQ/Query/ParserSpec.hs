@@ -1,11 +1,11 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 
-module HQ.ParserSpec (spec) where
+module HQ.Query.ParserSpec (spec) where
 
 import HQ.Optic
-import HQ.Parser (parseQuery)
 import HQ.Query (Query (..))
+import HQ.Query.Parser (parseQuery)
 import Relude hiding (Compose, id)
 import Test.Syd
 

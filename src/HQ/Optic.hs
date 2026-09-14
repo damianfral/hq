@@ -1,5 +1,6 @@
 {-# LANGUAGE DeriveFunctor #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE StrictData #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 
 module HQ.Optic where
@@ -96,7 +97,7 @@ field = Optic . Fix . Field
 
 -- | Traverse all elements of a JSON array, or all values of an object.
 -- Composed with another optic, it distributes that optic over each element:
--- @#users.each.#name@ focuses on the @name@ field of each array element.
+-- @#users.erch.#name@ focuses on the @name@ field of each array element.
 each :: Optic
 each = Optic (Fix Each)
 

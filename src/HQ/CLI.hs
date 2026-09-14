@@ -1,21 +1,21 @@
 {-# LANGUAGE ApplicativeDo #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE StrictData #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 
 module HQ.CLI (runCLI) where
 
-import qualified Data.Aeson as Aeson
-import qualified Data.ByteString.Lazy as BL
-import qualified Data.Text as Text
+import Data.Aeson (Value)
 import Data.Version (showVersion)
-import HQ
-import HQ.Optic
-import HQ.Parser hiding (Parser, queryParser)
+import HQ.JSON.Parser (parseValue)
+import HQ.Optic (Optic)
+import HQ.Optic.Parser (parseOptic)
 import HQ.Query
-import HQ.Value (Value)
+import HQ.Runner (jsonRunner, runRunnerIO)
 import Options.Applicative
 import Paths_hq (version)
 import Relude
+import System.IO
 import Text.Megaparsec (errorBundlePretty)
 
 data Raw = NoRaw | Raw deriving (Show, Eq)
@@ -79,34 +79,17 @@ optParserInfo = info (optParser <**> helper) infoMod
 
 --------------------------------------------------------------------------------
 
-readInput :: Maybe FilePath -> IO BL.ByteString
-readInput Nothing = BL.getContents
-readInput (Just "-") = BL.getContents
-readInput (Just path) = BL.readFile path
-
-formatResult :: Value -> Text
-formatResult val = decodeUtf8 $ BL.toStrict $ Aeson.encode $ Aeson.toJSON val
-
-outputResults :: Raw -> Join -> [Value] -> IO ()
-outputResults _ joinResults results
-  | null results = pass
-  | joinResults == Join = putText $ Text.intercalate "" parts
-  | otherwise = mapM_ putTextLn parts
-  where
-    parts = formatResult <$> results
+readInput :: Maybe FilePath -> IO Handle
+readInput Nothing = pure stdin
+readInput (Just "-") = pure stdin
+readInput (Just path) = openFile path ReadMode
 
 --------------------------------------------------------------------------------
 
 runCLI :: IO ()
 runCLI = do
   opts <- execParser optParserInfo
-  input <- case optNullInput opts of
-    NullInput -> pure "null"
+  handle <- case optNullInput opts of
+    NullInput -> pure stdin
     NoNullInput -> readInput $ optFile opts
-  case Aeson.decode input of
-    Nothing -> putTextLn "Failed to parse JSON input" >> exitFailure
-    Just val -> do
-      let result = executeQuery (optQuery opts) val
-      outputResults (optRaw opts) (optJoin opts) $ case result of
-        Single m -> maybeToList m
-        Multi vs -> vs
+  runRunnerIO jsonRunner (optQuery opts) handle

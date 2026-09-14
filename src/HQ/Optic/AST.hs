@@ -1,6 +1,7 @@
+{-# LANGUAGE StrictData #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 
-module HQ.AST where
+module HQ.Optic.AST where
 
 import Control.Comonad.Cofree (Cofree ((:<)), _extract)
 import Data.Fix (foldFix)

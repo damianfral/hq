@@ -1,12 +1,13 @@
+{-# LANGUAGE StrictData #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 
 module HQ.Query where
 
 import Control.Comonad.Cofree (Cofree ((:<)))
-import HQ.AST
+import Data.Aeson (Value)
 import HQ.Optic
+import HQ.Optic.AST
 import HQ.Optic.OpticType (OpticType (..))
-import HQ.Value (Value)
 import Relude hiding (Compose, many, some)
 
 --------------------------------------------------------------------------------
