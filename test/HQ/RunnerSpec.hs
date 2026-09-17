@@ -8,7 +8,7 @@ import HQ.JSON.Decoder (decodeIO)
 import HQ.JSON.Event (JSONEvent (..))
 import HQ.Optic (Optic)
 import HQ.Optic.Parser (parseOptic)
-import HQ.Runner (runFold)
+import HQ.Runner (runFold, runPreview)
 import Relude hiding (Compose, id)
 import Streaming (Of (..), Stream)
 import qualified Streaming.Prelude as S
@@ -35,6 +35,91 @@ runQueryTest opticStr jsonInput =
     Left err -> pure (Left (show err))
     Right optic -> runFoldTest optic jsonInput
 
+-- | Run a preview optic against a JSON text input and collect the
+-- (at most one) output value's events.
+runPreviewTest :: Optic -> Text -> IO (Either Text [JSONEvent])
+runPreviewTest optic input = runExceptT $ do
+  let textStream :: Stream (Of Text) (ExceptT Text IO) ()
+      textStream = S.yield input
+  let eventStream = decodeIO textStream
+  let cursor = fromStream eventStream
+  resultStream <- runPreview optic cursor
+  S.toList_ resultStream
+
+-- | Parse an optic string and preview it against JSON input.
+runQueryPreviewTest :: Text -> Text -> IO (Either Text [JSONEvent])
+runQueryPreviewTest opticStr jsonInput =
+  case parseOptic opticStr of
+    Left err -> pure (Left (show err))
+    Right optic -> runPreviewTest optic jsonInput
+
+--------------------------------------------------------------------------------
+-- preview
+--------------------------------------------------------------------------------
+
+previewSpec :: Spec
+previewSpec = describe "preview" $ do
+  it "returns a field value"
+    $ runQueryPreviewTest "#name" "{\"name\":\"alice\",\"age\":30}"
+    `shouldReturn` Right [JSONString "alice"]
+
+  it "returns nothing when the field is missing"
+    $ runQueryPreviewTest "#name" "{\"age\":30}"
+    `shouldReturn` Right []
+
+  it "returns nothing for non-object input"
+    $ runQueryPreviewTest "#name" "42"
+    `shouldReturn` Right []
+
+  it "returns the first element of an array"
+    $ runQueryPreviewTest "each" "[1,2,3]"
+    `shouldReturn` Right [JSONNumber 1]
+
+  it "returns the first object value"
+    $ runQueryPreviewTest "each" "{\"a\":1,\"b\":2}"
+    `shouldReturn` Right [JSONNumber 1]
+
+  it "returns nothing for an empty array"
+    $ runQueryPreviewTest "each" "[]"
+    `shouldReturn` Right []
+
+  it "returns the first composed match"
+    $ runQueryPreviewTest "each . #name" "[{\"name\":\"alice\"},{\"name\":\"bob\"}]"
+    `shouldReturn` Right [JSONString "alice"]
+
+  it "returns the first array element with _1"
+    $ runQueryPreviewTest "_1" "[10,20]"
+    `shouldReturn` Right [JSONNumber 10]
+
+  it "returns nothing when _1 finds no element"
+    $ runQueryPreviewTest "_1" "[]"
+    `shouldReturn` Right []
+
+  it "matches a string prism"
+    $ runQueryPreviewTest "_String" "\"hello\""
+    `shouldReturn` Right [JSONString "hello"]
+
+  it "returns nothing when a prism does not match"
+    $ runQueryPreviewTest "_String" "42"
+    `shouldReturn` Right []
+
+  it "returns a whole container value"
+    $ runQueryPreviewTest "#obj" "{\"obj\":{\"a\":1},\"next\":2}"
+    `shouldReturn` Right
+      [ JSONBeginObject,
+        JSONObjectKey "a",
+        JSONNumber 1,
+        JSONEndObject
+      ]
+
+  it "returns the whole input for id"
+    $ runQueryPreviewTest "id" "[1,2]"
+    `shouldReturn` Right [JSONBeginArray, JSONNumber 1, JSONNumber 2, JSONEndArray]
+
+  it "stops reading input after the first match"
+    $ runQueryPreviewTest "each" "[1, 2,,]"
+    `shouldReturn` Right [JSONNumber 1]
+
 spec :: Spec
 spec = describe "HQ.Runner" $ do
   eachArraySpec
@@ -42,6 +127,7 @@ spec = describe "HQ.Runner" $ do
   eachCompositionSpec
   fieldSpec
   idSpec
+  previewSpec
 
 --------------------------------------------------------------------------------
 -- field

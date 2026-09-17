@@ -5,7 +5,7 @@
 {-# LANGUAGE StrictData #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 
-module HQ.Runner (RunnerF (..), Runner, runRunner, runRunnerIO, runRunnerIOWith, jsonRunner, runFold) where
+module HQ.Runner (RunnerF (..), Runner, runRunner, runRunnerIO, runRunnerIOWith, jsonRunner, runFold, runPreview) where
 
 import Control.Monad.Error.Class (MonadError (throwError))
 import qualified Data.ByteString as BS
@@ -254,6 +254,41 @@ runOptic (Optic optic) = run optic
 runFold :: Optic -> Cursor -> ExceptT Text IO ValueStream
 runFold optic cursor = runOptic optic cursor emitValue
 
+-- | Execute an optic, emitting at most one value: the first one it
+-- selects (lens @preview@ semantics).
+--
+-- The fold is short-circuited: once the first value has been emitted,
+-- no further input is read from the source.
+runPreview :: Optic -> Cursor -> ExceptT Text IO ValueStream
+runPreview optic cursor = do
+  values <- runOptic optic cursor emitValue
+  pure (firstValue values)
+
+-- | Keep only the first complete top-level value of a value stream and
+-- drop the rest without consuming it.
+firstValue :: ValueStream -> ValueStream
+firstValue = go 0
+  where
+    go :: Int -> ValueStream -> ValueStream
+    go depth stream = do
+      result <- lift $ S.next stream
+      case result of
+        Left () -> pure ()
+        Right (event, rest) -> do
+          S.yield event
+          case event of
+            JSONBeginArray -> go (depth + 1) rest
+            JSONBeginObject -> go (depth + 1) rest
+            JSONEndArray
+              | depth == 1 -> pure ()
+              | otherwise -> go (depth - 1) rest
+            JSONEndObject
+              | depth == 1 -> pure ()
+              | otherwise -> go (depth - 1) rest
+            _
+              | depth == 0 -> pure ()
+              | otherwise -> go depth rest
+
 -- | Emit exactly one JSON value from a cursor.
 --
 -- This is the one place where the selected value is consumed and
@@ -378,7 +413,7 @@ streamHandle chunkSize' handle = do
 
 -- | Execute a query against a JSON value.
 executeQuery :: Query -> Cursor -> ExceptT Text IO ValueStream
-executeQuery (Preview optic) val = runFold optic val
+executeQuery (Preview optic) val = runPreview optic val
 executeQuery (Fold optic) val = runFold optic val
 executeQuery _ _ = throwError "Not supported"
 

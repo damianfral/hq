@@ -71,6 +71,7 @@ tests:
       - data-fix
       - free
       - mtl
+      - optparse-applicative
       - hq
       - relude
       - megaparsec

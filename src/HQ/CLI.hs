@@ -9,6 +9,8 @@ module HQ.CLI
     Raw (..),
     OutputConfig (..),
     outputConfig,
+    CLIOptions (..),
+    optParserInfo,
     runCLI,
   )
 where
@@ -85,6 +87,7 @@ queryParser :: Parser Query
 queryParser =
   hsubparser
     $ command "fold" (info (Fold <$> opticArg) mempty)
+    <> command "preview" (info (Preview <$> opticArg) mempty)
     <> command "set" (info (Set <$> opticArg <*> valueArg) mempty)
     <> command "delete" (info (Delete <$> opticArg) mempty)
   where
