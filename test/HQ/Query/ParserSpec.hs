@@ -10,7 +10,7 @@ import Relude hiding (Compose, id)
 import Test.Syd
 
 spec :: Spec
-spec = describe "HQ.Parser" $ do
+spec = describe "HQ.Query.Parser" $ do
   parserSpec
   prismParserSpec
 

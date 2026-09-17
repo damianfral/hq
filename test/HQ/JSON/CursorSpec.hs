@@ -2,7 +2,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 
-module HQ.JSONStreamingSpec (spec) where
+module HQ.JSON.CursorSpec (spec) where
 
 import qualified Data.ByteString as BS
 import qualified Data.Text as T
@@ -46,7 +46,7 @@ runFoldChunked opticStr jsonInput chunkSize =
         evts :> _ -> pure evts
 
 spec :: Spec
-spec = describe "HQ.JSON streaming with large input" $ do
+spec = describe "HQ.JSON.Cursor" $ do
   it "streaming decode handles 5MB.json in chunks" $ do
     contents <- liftIO $ BS.readFile "test/test-resources/5MB.json"
     let text = decodeUtf8 contents
@@ -65,7 +65,7 @@ spec = describe "HQ.JSON streaming with large input" $ do
       Right evts ->
         evts `shouldBe` [JSONString "alice", JSONString "bob"]
 
-  it "fold each.#name works on 5MB.json in 32KB chunks" $ do
+  it "fold each.#name works on 5MB.json in 64-char chunks" $ do
     contents <- liftIO $ BS.readFile "test/test-resources/5MB.json"
     let text = decodeUtf8 contents
     result <- runFoldChunked "each . #name" text 64

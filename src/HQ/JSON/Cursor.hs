@@ -6,12 +6,10 @@
 module HQ.JSON.Cursor (Cursor (..), fromStream, next, skipValue, consumeValue) where
 
 import Control.Monad.Error.Class (MonadError (throwError))
+import HQ.JSON.Decoder (StreamIO)
 import HQ.JSON.Event (JSONEvent (..))
 import Relude
-import Streaming (Of, Stream)
 import qualified Streaming.Prelude as S
-
-type StreamIO s = Stream (Of s) (ExceptT Text IO)
 
 newtype Cursor = Cursor {runCursor :: ExceptT Text IO (Maybe (JSONEvent, Cursor))}
 

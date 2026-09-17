@@ -5,13 +5,12 @@
 
 module HQ.Optic.Parser where
 
+import HQ.JSON.Parser (Parser)
 import HQ.Optic
 import Relude hiding (Compose, id, many, some)
 import Text.Megaparsec
 import Text.Megaparsec.Char
 import Prelude (Read (..))
-
-type Parser = Parsec Void Text
 
 parseOptic :: Text -> Either (ParseErrorBundle Text Void) Optic
 parseOptic = parse (spaceConsumer *> opticParser <* eof) "optic"

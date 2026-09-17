@@ -9,7 +9,9 @@ module HQ.JSON.Encoder
   ( EncodeStyle (..),
     ValueOptions (..),
     encode,
-    encodeWith,
+    Raw (..),
+    Join (..),
+    EncoderConfig (..),
   )
 where
 
@@ -24,6 +26,12 @@ import Streaming (Of, Stream)
 import Streaming.Internal (Stream (..))
 import qualified Streaming.Prelude as S
 
+data EncoderConfig = EncoderConfig
+  { outputStyle :: EncodeStyle,
+    outputValueOptions :: ValueOptions
+  }
+  deriving (Show, Eq)
+
 -- | Output formatting style.
 data EncodeStyle
   = -- | Compressed output with no whitespace.
@@ -33,6 +41,15 @@ data EncodeStyle
     Pretty Int
   deriving (Eq, Show)
 
+-- | Render complete top-level string values without quotes or
+-- escaping.  Strings nested inside containers, and object keys,
+-- are unaffected.
+data Raw = NoRaw | Raw deriving (Show, Eq)
+
+-- | 'NoJoin' separates complete top-level values with a newline (like
+-- jq); 'Join' concatenates them without separators (like @jq -j@).
+data Join = NoJoin | Join deriving (Show, Eq)
+
 -- | Options controlling how complete top-level values are rendered, on
 -- top of the base 'EncodeStyle'.
 --
@@ -41,15 +58,7 @@ data EncodeStyle
 -- options control how such a stream is rendered: whether each value is
 -- terminated with a newline (like @jq@) and whether top-level strings
 -- are emitted without surrounding quotes (like @jq -r@).
-data ValueOptions = ValueOptions
-  { -- | Emit a newline after each complete top-level value.
-    separateValues :: !Bool,
-    -- | Render complete top-level string values without quotes or
-    -- escaping.  Strings nested inside containers, and object keys,
-    -- are unaffected.
-    rawStrings :: !Bool
-  }
-  deriving (Eq, Show)
+data ValueOptions = ValueOptions Raw Join deriving (Eq, Show)
 
 -- | The encoder's container stack; the head is the innermost container.
 --
@@ -104,8 +113,8 @@ formatNonInteger c e
 -- 'ValueOptions' additionally controls how back-to-back top-level
 -- values are rendered: a newline may separate them, and top-level
 -- strings may be emitted bare.
-encodeToChunks :: (Monad m) => EncodeStyle -> ValueOptions -> JSONStream m r -> ChunkStream m r
-encodeToChunks style opts = go []
+encodeToChunks :: (Monad m) => EncoderConfig -> JSONStream m r -> ChunkStream m r
+encodeToChunks (EncoderConfig style (ValueOptions rawOption joinOption)) = go []
   where
     go :: (Monad m) => [EncodeCtx] -> JSONStream m r -> ChunkStream m r
     go ctxs events = do
@@ -145,14 +154,14 @@ encodeToChunks style opts = go []
     -- Render one value event, honoring raw top-level string output.
     valueChunk :: JSONEvent -> [EncodeCtx] -> Chunk
     valueChunk (JSONString text) ctxs
-      | rawStrings opts && null ctxs = encodeRawString text
+      | rawOption == Raw && null ctxs = encodeRawString text
     valueChunk event _ = encodeEvent event
 
     -- Emit the value separator after a complete top-level value.  A
     -- top-level value is one that leaves the context stack empty.
     finishValue :: (Monad m) => [EncodeCtx] -> Stream (Of Chunk) m ()
     finishValue ctxs'
-      | separateValues opts && null ctxs' = S.yield (Chunk (char7 '\n') 1)
+      | joinOption == NoJoin && null ctxs' = S.yield (Chunk (char7 '\n') 1)
       | otherwise = pure ()
 
 -- | The structural pieces to emit before an object key: a separator for
@@ -349,8 +358,8 @@ type ChunkStream m r = Stream (Of Chunk) m r
 -- An individual output chunk may be larger than @cSize@ when a single
 -- encoded event exceeds the target size; the stream contents are
 -- unaffected by the chunk size.
-encodeWith :: (Monad m) => EncodeStyle -> ValueOptions -> Int -> JSONStream m r -> BSStream m r
-encodeWith style opts cSize = go mempty 0 . encodeToChunks style opts
+encode :: (Monad m) => EncoderConfig -> Int -> JSONStream m r -> BSStream m r
+encode config cSize = go mempty 0 . encodeToChunks config
   where
     go :: (Monad m) => Builder -> Int -> ChunkStream m r -> BSStream m r
     go !builder !size stream = do
@@ -370,12 +379,3 @@ encodeWith style opts cSize = go mempty 0 . encodeToChunks style opts
 
     flush :: Builder -> ByteString
     flush = LBS.toStrict . toLazyByteString
-
--- | Encode a stream of 'JSONEvent's into a stream of 'ByteString'
--- chunks, applying 'style' and flushing output once roughly @cSize@
--- bytes have accumulated in the buffer.
---
--- Equivalent to 'encodeWith' with 'separateValues' and 'rawStrings'
--- both disabled.
-encode :: (Monad m) => EncodeStyle -> Int -> JSONStream m r -> BSStream m r
-encode style = encodeWith style (ValueOptions False False)

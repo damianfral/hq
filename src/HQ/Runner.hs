@@ -12,16 +12,13 @@ import qualified Data.ByteString as BS
 import Data.Fix (Fix (..))
 import Data.Text.IO (hPutStrLn)
 import HQ.JSON.Cursor
-import HQ.JSON.Decoder (decodeIO)
-import HQ.JSON.Encoder (EncodeStyle (..), ValueOptions (..), encodeWith)
+import HQ.JSON.Decoder (StreamIO, decodeIO)
+import HQ.JSON.Encoder (EncodeStyle (..), EncoderConfig (EncoderConfig), Join (..), Raw (..), ValueOptions (..), encode)
 import HQ.JSON.Event
 import HQ.Optic (Optic (..), OpticF (..))
 import HQ.Query (Query (..))
 import Relude hiding (Compose)
-import Streaming (Of (..), Stream)
 import qualified Streaming.Prelude as S
-
-type StreamIO s = Stream (Of s) (ExceptT Text IO)
 
 type ValueStream = StreamIO JSONEvent ()
 
@@ -650,20 +647,21 @@ runRunner (Runner runner) query handle = runReaderT runner env
 -- | Run a query, encoding the selected values to stdout with pretty
 -- formatting and default value options.
 runRunnerIO :: Runner -> Query -> Handle -> IO ()
-runRunnerIO runner query =
-  runRunnerIOWith runner query (Pretty 2) (ValueOptions False False)
+runRunnerIO runner query = runRunnerIOWith runner query config
+  where
+    config = EncoderConfig (Pretty 2) (ValueOptions NoRaw NoJoin)
 
 -- | Run a query, encoding the selected values to stdout with the given
 -- style and value options.
 --
 -- The stream is written to stdout; errors are reported on stderr with
 -- a failing exit status.
-runRunnerIOWith :: Runner -> Query -> EncodeStyle -> ValueOptions -> Handle -> IO ()
-runRunnerIOWith runner query style valueOpts handle = do
+runRunnerIOWith :: Runner -> Query -> EncoderConfig -> Handle -> IO ()
+runRunnerIOWith runner query encConfig handle = do
   hSetBuffering stdout (BlockBuffering Nothing)
   r <- runExceptT $ do
     streamIO <- runRunner runner query handle
-    S.mapM_ write $ encodeWith style valueOpts 32 streamIO
+    S.mapM_ write $ encode encConfig 32 streamIO
   case r of
     Left e -> hPutStrLn stderr e >> exitFailure
     Right v -> pure v
@@ -703,12 +701,12 @@ decodeUtf8Stream = go mempty
       result <- lift $ S.next stream
       case result of
         -- Stream exhausted; decode any remaining leftover bytes.
-        Left () -> when (not $ BS.null leftover) $ decodeAndYield leftover
+        Left () -> when (leftover /= mempty) $ decodeAndYield leftover
         Right (chunk, rest) -> do
           let combined = leftover <> chunk
               safeLen = safePrefixLen combined
               (safe, trailing) = BS.splitAt safeLen combined
-          when (not $ BS.null safe) $ decodeAndYield safe
+          when (safe /= mempty) $ decodeAndYield safe
           go trailing rest
 
     decodeAndYield :: ByteString -> StreamIO Text ()

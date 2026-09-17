@@ -25,11 +25,14 @@ getOptic (Preview optic) = optic
 getOptic (Set optic _) = optic
 getOptic (Delete optic) = optic
 
-matchOpticType :: Query -> OpticType
-matchOpticType (Fold _) = OpticTraversal
-matchOpticType (Preview _) = OpticPrism
-matchOpticType (Set _ _) = OpticTraversal
-matchOpticType (Delete _) = OpticTraversal
+-- | The optic type a query requires: how many focus points it expects.
+-- 'typecheckQuery' compares this against the type derived from the
+-- optic itself.
+queryOpticType :: Query -> OpticType
+queryOpticType (Fold _) = OpticTraversal
+queryOpticType (Preview _) = OpticPrism
+queryOpticType (Set _ _) = OpticTraversal
+queryOpticType (Delete _) = OpticTraversal
 
 data TypeError = InvalidOpticType OpticType OpticType deriving (Eq, Show)
 
@@ -37,5 +40,5 @@ typecheckQuery :: Query -> Either TypeError Query
 typecheckQuery q = if expected == current then pure q else Left err
   where
     err = InvalidOpticType expected current
-    expected = matchOpticType q
+    expected = queryOpticType q
     OpticAST (current :< _) = buildOpticAST (getOptic q)

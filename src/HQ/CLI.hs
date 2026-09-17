@@ -1,21 +1,13 @@
 {-# LANGUAGE ApplicativeDo #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE StrictData #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 
-module HQ.CLI
-  ( Compact (..),
-    Join (..),
-    Raw (..),
-    OutputConfig (..),
-    outputConfig,
-    CLIOptions (..),
-    optParserInfo,
-    runCLI,
-  )
-where
+module HQ.CLI (CLIOptions (..), optParserInfo, runCLI) where
 
 import Data.Version (showVersion)
+import HQ.JSON.Encoder (Join (..), Raw (..))
 import qualified HQ.JSON.Encoder as Enc
 import HQ.JSON.Event (JSONEvent)
 import HQ.JSON.Parser (parseValueEvents)
@@ -29,53 +21,17 @@ import Relude
 import System.IO
 import Text.Megaparsec (errorBundlePretty)
 
-data Raw = NoRaw | Raw deriving (Show, Eq)
-
-data Compact = NoCompact | Compact deriving (Show, Eq)
-
-data Join = NoJoin | Join deriving (Show, Eq)
-
 data NullInput = NoNullInput | NullInput deriving (Show, Eq)
 
 data CLIOptions = CLIOptions
   { optQuery :: Query,
     optFile :: Maybe FilePath,
     optRaw :: Raw,
-    optCompact :: Compact,
+    optCompact :: Enc.EncodeStyle,
     optJoin :: Join,
     optNullInput :: NullInput
   }
   deriving (Show, Eq)
-
--- | The output presentation chosen by the CLI flags.
-data OutputConfig = OutputConfig
-  { outputStyle :: Enc.EncodeStyle,
-    outputValueOptions :: Enc.ValueOptions
-  }
-  deriving (Show, Eq)
-
--- | Map the CLI flags to an encoder style and value options.
---
--- The default is jq-style: pretty output with each selected value on
--- its own line.
-outputConfig :: Compact -> Join -> Raw -> OutputConfig
-outputConfig compact join' raw =
-  OutputConfig
-    { outputStyle =
-        case compact of
-          Compact -> Enc.Compact
-          NoCompact -> Enc.Pretty 2,
-      outputValueOptions =
-        Enc.ValueOptions
-          ( case join' of
-              NoJoin -> True
-              Join -> False
-          )
-          ( case raw of
-              NoRaw -> False
-              Raw -> True
-          )
-    }
 
 opticReader :: ReadM Optic
 opticReader = eitherReader $ first errorBundlePretty . parseOptic . toText
@@ -98,7 +54,7 @@ optParser :: Parser CLIOptions
 optParser = do
   file <- optional $ strOption fileMod
   raw <- fromBool NoRaw Raw <$> switch rawMod
-  compact <- fromBool NoCompact Compact <$> switch compactMod
+  compact <- fromBool (Enc.Pretty 2) Enc.Compact <$> switch compactMod
   join' <- fromBool NoJoin Join <$> switch joinMod
   nullInput <- fromBool NoNullInput NullInput <$> switch nullMod
   query <- queryParser
@@ -130,9 +86,9 @@ readInput (Just path) = openFile path ReadMode
 
 runCLI :: IO ()
 runCLI = do
-  opts <- execParser optParserInfo
-  handle <- case optNullInput opts of
+  CLIOptions {..} <- execParser optParserInfo
+  handle <- case optNullInput of
     NullInput -> pure stdin
-    NoNullInput -> readInput $ optFile opts
-  let cfg = outputConfig (optCompact opts) (optJoin opts) (optRaw opts)
-  runRunnerIOWith jsonRunner (optQuery opts) (outputStyle cfg) (outputValueOptions cfg) handle
+    NoNullInput -> readInput optFile
+  let cfg = Enc.EncoderConfig optCompact $ Enc.ValueOptions optRaw optJoin
+  runRunnerIOWith jsonRunner optQuery cfg handle

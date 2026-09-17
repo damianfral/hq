@@ -3,9 +3,9 @@
 
 module HQ.Query.Parser where
 
-import HQ.JSON.Parser (jsonValueParser, parseValueEvents)
+import HQ.JSON.Parser (Parser, jsonValueParser, parseValueEvents)
 import HQ.Optic
-import HQ.Optic.Parser (Parser, opticParser, spaceConsumer, symbol)
+import HQ.Optic.Parser (opticParser, spaceConsumer, symbol)
 import HQ.Query
 import Relude
 import Text.Megaparsec
