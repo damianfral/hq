@@ -7,7 +7,7 @@ module HQ.JSONSpec (spec) where
 import Data.Scientific (fromFloatDigits)
 import qualified Data.Text as T
 import HQ.JSON.Decoder
-import HQ.JSON.Encoder (EncodeStyle (..), encode)
+import HQ.JSON.Encoder (EncodeStyle (..), ValueOptions (..), encode, encodeWith)
 import HQ.JSON.Event
 import Relude hiding (Compose, id)
 import Streaming (Of (..))
@@ -28,6 +28,7 @@ spec = describe "HQ.JSON" $ do
   adversarialSpec
   encodeSpec
   encodePrettySpec
+  valueOptionsSpec
   roundtripSpec
 
 --------------------------------------------------------------------------------
@@ -1223,6 +1224,14 @@ encodeEventsWith style events = runIdentity $ do
   case result of
     chunks :> _ -> pure $ decodeUtf8 $ mconcat chunks
 
+-- | Encode events with the given style and value options to a single
+-- Text value.
+encodeEventsWithOptions :: EncodeStyle -> ValueOptions -> [JSONEvent] -> Text
+encodeEventsWithOptions style options events = runIdentity $ do
+  result <- S.toList (encodeWith style options 32 (S.each events))
+  case result of
+    chunks :> _ -> pure $ decodeUtf8 $ mconcat chunks
+
 --------------------------------------------------------------------------------
 -- pretty encode
 --------------------------------------------------------------------------------
@@ -1457,6 +1466,142 @@ encodePrettySpec = describe "pretty encode" $ do
       it ("pretty roundtrips " <> label) $ prettyRoundtrip input
 
 --------------------------------------------------------------------------------
+--------------------------------------------------------------------------------
+-- value output options
+--------------------------------------------------------------------------------
+
+valueOptionsSpec :: Spec
+valueOptionsSpec = describe "value output options" $ do
+  describe "newline separation" $ do
+    it "produces nothing for an empty stream"
+      $ encodeEventsWithOptions Compact (ValueOptions True False) []
+      `shouldBe` ""
+    it "terminates a single scalar with a newline"
+      $ encodeEventsWithOptions Compact (ValueOptions True False) [JSONNumber 1]
+      `shouldBe` "1\n"
+    it "places multiple scalars on separate lines"
+      $ encodeEventsWithOptions
+        Compact
+        (ValueOptions True False)
+        [JSONNumber 1, JSONString "a", JSONBool True, JSONNull]
+      `shouldBe` "1\n\"a\"\ntrue\nnull\n"
+    it "places container values on separate lines"
+      $ encodeEventsWithOptions
+        Compact
+        (ValueOptions True False)
+        [ JSONBeginObject,
+          JSONObjectKey "a",
+          JSONNumber 1,
+          JSONEndObject,
+          JSONBeginArray,
+          JSONNumber 2,
+          JSONEndArray
+        ]
+      `shouldBe` "{\"a\":1}\n[2]\n"
+    it "keeps a nested container inside one value"
+      $ encodeEventsWithOptions
+        Compact
+        (ValueOptions True False)
+        [ JSONBeginObject,
+          JSONObjectKey "a",
+          JSONBeginObject,
+          JSONObjectKey "b",
+          JSONNumber 1,
+          JSONEndObject,
+          JSONEndObject,
+          JSONNumber 2
+        ]
+      `shouldBe` "{\"a\":{\"b\":1}}\n2\n"
+    it "emits empty containers as single-line values"
+      $ encodeEventsWithOptions
+        Compact
+        (ValueOptions True False)
+        [JSONBeginObject, JSONEndObject, JSONBeginArray, JSONEndArray]
+      `shouldBe` "{}\n[]\n"
+    it "applies pretty formatting inside each value"
+      $ encodeEventsWithOptions
+        (Pretty 2)
+        (ValueOptions True False)
+        [ JSONBeginObject,
+          JSONObjectKey "a",
+          JSONNumber 1,
+          JSONEndObject,
+          JSONString "x"
+        ]
+      `shouldBe` "{\n  \"a\": 1\n}\n\"x\"\n"
+    it "matches plain encode with separation disabled" $ do
+      let events =
+            [ JSONBeginObject,
+              JSONObjectKey "a",
+              JSONNumber 1,
+              JSONEndObject,
+              JSONString "x"
+            ]
+      encodeEventsWithOptions Compact (ValueOptions False False) events
+        `shouldBe` encodeEvents events
+    it "output is independent of chunk size" $ do
+      let events =
+            [ JSONBeginObject,
+              JSONObjectKey "a",
+              JSONNumber 1,
+              JSONEndObject,
+              JSONString "x",
+              JSONBeginArray,
+              JSONNumber 2,
+              JSONEndArray
+            ]
+          expected = encodeEventsWithOptions Compact (ValueOptions True False) events
+      forM_ [1, 2, 3, 5, 8, 16] $ \chunkSize -> do
+        let concatenated = runIdentity $ do
+              result <- S.toList (encodeWith Compact (ValueOptions True False) chunkSize (S.each events))
+              case result of
+                chunks :> _ -> pure $ decodeUtf8 $ mconcat chunks
+        concatenated `shouldBe` expected
+    it "every line decodes back to the original events" $ do
+      let events =
+            [ JSONBeginObject,
+              JSONObjectKey "a",
+              JSONNumber 1,
+              JSONEndObject,
+              JSONString "x",
+              JSONBeginArray,
+              JSONNumber 2,
+              JSONEndArray
+            ]
+          encoded = encodeEventsWithOptions Compact (ValueOptions True False) events
+          lines' = filter (not . T.null) (T.splitOn "\n" encoded)
+          decodedLines = map (fromRight [] . decodeStreaming . pure) lines'
+      mconcat decodedLines `shouldBe` events
+
+  describe "raw string output" $ do
+    it "renders a top-level string without quotes or escapes"
+      $ encodeEventsWithOptions Compact (ValueOptions False True) [JSONString "a\"b\n雪"]
+      `shouldBe` "a\"b\n雪"
+    it "keeps strings inside containers quoted"
+      $ encodeEventsWithOptions
+        Compact
+        (ValueOptions False True)
+        [JSONBeginArray, JSONString "x\\y", JSONEndArray]
+      `shouldBe` "[\"x\\\\y\"]"
+    it "keeps object keys quoted"
+      $ encodeEventsWithOptions
+        Compact
+        (ValueOptions False True)
+        [JSONBeginObject, JSONObjectKey "k\"", JSONString "v", JSONEndObject]
+      `shouldBe` "{\"k\\\"\":\"v\"}"
+    it "combines raw strings with newline separation"
+      $ encodeEventsWithOptions
+        Compact
+        (ValueOptions True True)
+        [JSONString "one", JSONString "two", JSONNumber 3]
+      `shouldBe` "one\ntwo\n3\n"
+    it "combines raw strings with joining"
+      $ encodeEventsWithOptions
+        Compact
+        (ValueOptions False True)
+        [JSONString "one", JSONString "two", JSONNumber 3]
+      `shouldBe` "onetwo3"
+
 -- Roundtrip: encode . decode produces the same text
 --------------------------------------------------------------------------------
 

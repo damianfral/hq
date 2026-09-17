@@ -3,15 +3,24 @@
 {-# LANGUAGE StrictData #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 
-module HQ.CLI (runCLI) where
+module HQ.CLI
+  ( Compact (..),
+    Join (..),
+    Raw (..),
+    OutputConfig (..),
+    outputConfig,
+    runCLI,
+  )
+where
 
 import Data.Aeson (Value)
 import Data.Version (showVersion)
+import qualified HQ.JSON.Encoder as Enc
 import HQ.JSON.Parser (parseValue)
 import HQ.Optic (Optic)
 import HQ.Optic.Parser (parseOptic)
 import HQ.Query
-import HQ.Runner (jsonRunner, runRunnerIO)
+import HQ.Runner (jsonRunner, runRunnerIOWith)
 import Options.Applicative
 import Paths_hq (version)
 import Relude
@@ -35,6 +44,36 @@ data CLIOptions = CLIOptions
     optNullInput :: NullInput
   }
   deriving (Show, Eq)
+
+-- | The output presentation chosen by the CLI flags.
+data OutputConfig = OutputConfig
+  { outputStyle :: Enc.EncodeStyle,
+    outputValueOptions :: Enc.ValueOptions
+  }
+  deriving (Show, Eq)
+
+-- | Map the CLI flags to an encoder style and value options.
+--
+-- The default is jq-style: pretty output with each selected value on
+-- its own line.
+outputConfig :: Compact -> Join -> Raw -> OutputConfig
+outputConfig compact join' raw =
+  OutputConfig
+    { outputStyle =
+        case compact of
+          Compact -> Enc.Compact
+          NoCompact -> Enc.Pretty 2,
+      outputValueOptions =
+        Enc.ValueOptions
+          ( case join' of
+              NoJoin -> True
+              Join -> False
+          )
+          ( case raw of
+              NoRaw -> False
+              Raw -> True
+          )
+    }
 
 opticReader :: ReadM Optic
 opticReader = eitherReader $ first errorBundlePretty . parseOptic . toText
@@ -92,4 +131,5 @@ runCLI = do
   handle <- case optNullInput opts of
     NullInput -> pure stdin
     NoNullInput -> readInput $ optFile opts
-  runRunnerIO jsonRunner (optQuery opts) handle
+  let cfg = outputConfig (optCompact opts) (optJoin opts) (optRaw opts)
+  runRunnerIOWith jsonRunner (optQuery opts) (outputStyle cfg) (outputValueOptions cfg) handle

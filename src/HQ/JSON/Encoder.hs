@@ -3,14 +3,13 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE StrictData #-}
 {-# LANGUAGE NoImplicitPrelude #-}
--- The required @Pretty { indentWidth }@ record introduces a partial
--- field selector (the call site of the warning is the type declaration
--- itself), so opt out of that particular warning for this module only.
-{-# OPTIONS_GHC -Wno-partial-fields #-}
 
+--
 module HQ.JSON.Encoder
   ( EncodeStyle (..),
+    ValueOptions (..),
     encode,
+    encodeWith,
   )
 where
 
@@ -32,6 +31,24 @@ data EncodeStyle
   | -- | Human-readable output using @n@ spaces per nesting
     -- level.
     Pretty Int
+  deriving (Eq, Show)
+
+-- | Options controlling how complete top-level values are rendered, on
+-- top of the base 'EncodeStyle'.
+--
+-- The encoder's event stream may carry several top-level JSON values
+-- back to back (this is what a streaming query produces).  These
+-- options control how such a stream is rendered: whether each value is
+-- terminated with a newline (like @jq@) and whether top-level strings
+-- are emitted without surrounding quotes (like @jq -r@).
+data ValueOptions = ValueOptions
+  { -- | Emit a newline after each complete top-level value.
+    separateValues :: !Bool,
+    -- | Render complete top-level string values without quotes or
+    -- escaping.  Strings nested inside containers, and object keys,
+    -- are unaffected.
+    rawStrings :: !Bool
+  }
   deriving (Eq, Show)
 
 -- | The encoder's container stack; the head is the innermost container.
@@ -83,8 +100,12 @@ formatNonInteger c e
 -- and indentation) around the raw event encodings produced by
 -- 'encodeEvent'.  It never materializes the document: each event is
 -- turned into output as soon as it arrives.
-encodeToChunks :: (Monad m) => EncodeStyle -> JSONStream m r -> ChunkStream m r
-encodeToChunks style = go []
+--
+-- 'ValueOptions' additionally controls how back-to-back top-level
+-- values are rendered: a newline may separate them, and top-level
+-- strings may be emitted bare.
+encodeToChunks :: (Monad m) => EncodeStyle -> ValueOptions -> JSONStream m r -> ChunkStream m r
+encodeToChunks style opts = go []
   where
     go :: (Monad m) => [EncodeCtx] -> JSONStream m r -> ChunkStream m r
     go ctxs events = do
@@ -95,6 +116,7 @@ encodeToChunks style = go []
           | event == JSONEndArray || event == JSONEndObject -> do
               let (chunk, ctxs') = closeContainer style ctxs
               S.yield chunk
+              finishValue ctxs'
               go ctxs' rest
           | otherwise -> case event of
               JSONBeginArray -> do
@@ -115,8 +137,23 @@ encodeToChunks style = go []
               _ -> do
                 let (sep, ctxs') = beforeValue style ctxs
                 S.yield sep
-                S.yield (encodeEvent event)
-                go (afterValue ctxs') rest
+                S.yield (valueChunk event ctxs)
+                let ctxs'' = afterValue ctxs'
+                finishValue ctxs''
+                go ctxs'' rest
+
+    -- Render one value event, honoring raw top-level string output.
+    valueChunk :: JSONEvent -> [EncodeCtx] -> Chunk
+    valueChunk (JSONString text) ctxs
+      | rawStrings opts && null ctxs = encodeRawString text
+    valueChunk event _ = encodeEvent event
+
+    -- Emit the value separator after a complete top-level value.  A
+    -- top-level value is one that leaves the context stack empty.
+    finishValue :: (Monad m) => [EncodeCtx] -> Stream (Of Chunk) m ()
+    finishValue ctxs'
+      | separateValues opts && null ctxs' = S.yield (Chunk (char7 '\n') 1)
+      | otherwise = pure ()
 
 -- | The structural pieces to emit before an object key: a separator for
 -- the first or any following key, and the switch to
@@ -232,6 +269,12 @@ encodeString text =
   let Chunk body bodySize = encodeStringBody text
    in Chunk (char7 '"' <> body <> char7 '"') (bodySize + 2)
 
+-- | Render a string value as raw UTF-8, without surrounding quotes or
+-- escaping.  Used for raw top-level string output (like @jq -r@).
+encodeRawString :: Text -> Chunk
+encodeRawString text =
+  Chunk (stringUtf8 (toString text)) (utf8Length text)
+
 encodeStringBody :: Text -> Chunk
 encodeStringBody = go
   where
@@ -300,14 +343,14 @@ type BSStream m r = Stream (Of ByteString) m r
 type ChunkStream m r = Stream (Of Chunk) m r
 
 -- | Encode a stream of 'JSONEvent's into a stream of 'ByteString'
--- chunks, applying 'style' and flushing output once roughly @cSize@
--- bytes have accumulated in the buffer.
+-- chunks, applying 'style' and 'ValueOptions' and flushing output once
+-- roughly @cSize@ bytes have accumulated in the buffer.
 --
 -- An individual output chunk may be larger than @cSize@ when a single
 -- encoded event exceeds the target size; the stream contents are
 -- unaffected by the chunk size.
-encode :: (Monad m) => EncodeStyle -> Int -> JSONStream m r -> BSStream m r
-encode style cSize = go mempty 0 . encodeToChunks style
+encodeWith :: (Monad m) => EncodeStyle -> ValueOptions -> Int -> JSONStream m r -> BSStream m r
+encodeWith style opts cSize = go mempty 0 . encodeToChunks style opts
   where
     go :: (Monad m) => Builder -> Int -> ChunkStream m r -> BSStream m r
     go !builder !size stream = do
@@ -327,3 +370,12 @@ encode style cSize = go mempty 0 . encodeToChunks style
 
     flush :: Builder -> ByteString
     flush = LBS.toStrict . toLazyByteString
+
+-- | Encode a stream of 'JSONEvent's into a stream of 'ByteString'
+-- chunks, applying 'style' and flushing output once roughly @cSize@
+-- bytes have accumulated in the buffer.
+--
+-- Equivalent to 'encodeWith' with 'separateValues' and 'rawStrings'
+-- both disabled.
+encode :: (Monad m) => EncodeStyle -> Int -> JSONStream m r -> BSStream m r
+encode style = encodeWith style (ValueOptions False False)

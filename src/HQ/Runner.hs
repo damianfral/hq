@@ -5,7 +5,7 @@
 {-# LANGUAGE StrictData #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 
-module HQ.Runner (RunnerF (..), Runner, runRunner, runRunnerIO, jsonRunner, runFold) where
+module HQ.Runner (RunnerF (..), Runner, runRunner, runRunnerIO, runRunnerIOWith, jsonRunner, runFold) where
 
 import Control.Monad.Error.Class (MonadError (throwError))
 import qualified Data.ByteString as BS
@@ -13,7 +13,7 @@ import Data.Fix (Fix (..))
 import Data.Text.IO (hPutStrLn)
 import HQ.JSON.Cursor
 import HQ.JSON.Decoder (decodeIO)
-import HQ.JSON.Encoder (EncodeStyle (..), encode)
+import HQ.JSON.Encoder (EncodeStyle (..), ValueOptions (..), encodeWith)
 import HQ.JSON.Event
 import HQ.Optic (Optic (..), OpticF (..))
 import HQ.Query (Query (..))
@@ -343,12 +343,23 @@ runRunner (Runner runner) query handle = runReaderT runner env
   where
     env = RunnerEnv query $ streamHandle 64 handle
 
+-- | Run a query, encoding the selected values to stdout with pretty
+-- formatting and default value options.
 runRunnerIO :: Runner -> Query -> Handle -> IO ()
-runRunnerIO runner query handle = do
+runRunnerIO runner query =
+  runRunnerIOWith runner query (Pretty 2) (ValueOptions False False)
+
+-- | Run a query, encoding the selected values to stdout with the given
+-- style and value options.
+--
+-- The stream is written to stdout; errors are reported on stderr with
+-- a failing exit status.
+runRunnerIOWith :: Runner -> Query -> EncodeStyle -> ValueOptions -> Handle -> IO ()
+runRunnerIOWith runner query style valueOpts handle = do
   hSetBuffering stdout (BlockBuffering Nothing)
   r <- runExceptT $ do
     streamIO <- runRunner runner query handle
-    S.mapM_ write $ encode (Pretty 2) 32 streamIO
+    S.mapM_ write $ encodeWith style valueOpts 32 streamIO
   case r of
     Left e -> hPutStrLn stderr e >> exitFailure
     Right v -> pure v
