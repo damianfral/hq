@@ -5,7 +5,7 @@
 {-# LANGUAGE StrictData #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 
-module HQ.Runner (RunnerF (..), Runner, runRunner, runRunnerIO, runRunnerIOWith, jsonRunner, runFold, runPreview) where
+module HQ.Runner (RunnerF (..), Runner, runRunner, runRunnerIO, runRunnerIOWith, jsonRunner, ValueStream, runFold, runPreview, runSet, runDelete) where
 
 import Control.Monad.Error.Class (MonadError (throwError))
 import qualified Data.ByteString as BS
@@ -197,58 +197,54 @@ runOptic (Optic optic) = run optic
                     Nothing -> throwError "Empty Cursor"
                     Just newCursor -> findIndex (index - 1) newCursor k
 
-    ----------------------------------------------------------------
-    -- Cursor helpers
-    ----------------------------------------------------------------
+-- | Construct a cursor whose first event has already been read.
+--
+-- This is the crucial operation for streaming composition:
+-- @event@ is not buffered into a list; it becomes the first event
+-- of the new cursor.
+fromFirst :: JSONEvent -> Cursor -> Cursor
+fromFirst event rest = Cursor $ do
+  pure (Just (event, rest))
 
-    -- \| Construct a cursor whose first event has already been read.
-    --
-    -- This is the crucial operation for streaming composition:
-    -- `event` is not buffered into a list; it becomes the first event
-    -- of the new cursor.
-    fromFirst :: JSONEvent -> Cursor -> Cursor
-    fromFirst event rest = Cursor $ do
-      pure (Just (event, rest))
+-- | Build a cursor from a pre-collected list of events.
+--
+-- The resulting cursor reads from the list, not from the original
+-- stream.  This is safe for multiple readers (e.g., the fold and
+-- rewrite interpreters) because each 'next' call destructures the list
+-- without side effects.
+mkCursorFromList :: [JSONEvent] -> Cursor
+mkCursorFromList [] = Cursor (pure Nothing)
+mkCursorFromList (ev : rest) = Cursor (pure (Just (ev, mkCursorFromList rest)))
 
-    -- \| Build a cursor from a pre-collected list of events.
-    --
-    -- The resulting cursor reads from the list, not from the original
-    -- stream.  This is safe for multiple readers (e.g., both 'k' and
-    -- 'skipValue') because each 'next' call destructures the list
-    -- without side effects.
-    mkCursorFromList :: [JSONEvent] -> Cursor
-    mkCursorFromList [] = Cursor (pure Nothing)
-    mkCursorFromList (ev : rest) = Cursor (pure (Just (ev, mkCursorFromList rest)))
+isString :: JSONEvent -> Bool
+isString = \case
+  JSONString _ -> True
+  _ -> False
 
-    isString :: JSONEvent -> Bool
-    isString = \case
-      JSONString _ -> True
-      _ -> False
+isNumber :: JSONEvent -> Bool
+isNumber = \case
+  JSONNumber _ -> True
+  _ -> False
 
-    isNumber :: JSONEvent -> Bool
-    isNumber = \case
-      JSONNumber _ -> True
-      _ -> False
+isBool :: JSONEvent -> Bool
+isBool = \case
+  JSONBool _ -> True
+  _ -> False
 
-    isBool :: JSONEvent -> Bool
-    isBool = \case
-      JSONBool _ -> True
-      _ -> False
+isNull :: JSONEvent -> Bool
+isNull = \case
+  JSONNull -> True
+  _ -> False
 
-    isNull :: JSONEvent -> Bool
-    isNull = \case
-      JSONNull -> True
-      _ -> False
+isArray :: JSONEvent -> Bool
+isArray = \case
+  JSONBeginArray -> True
+  _ -> False
 
-    isArray :: JSONEvent -> Bool
-    isArray = \case
-      JSONBeginArray -> True
-      _ -> False
-
-    isObject :: JSONEvent -> Bool
-    isObject = \case
-      JSONBeginObject -> True
-      _ -> False
+isObject :: JSONEvent -> Bool
+isObject = \case
+  JSONBeginObject -> True
+  _ -> False
 
 -- | Execute an optic and return its selected values.
 runFold :: Optic -> Cursor -> ExceptT Text IO ValueStream
@@ -356,6 +352,279 @@ emitContainer closing cursor = void (emit closing cursor)
               S.yield event
               emit closing' rest
 
+--------------------------------------------------------------------------------
+-- Set and delete: document rewriting
+--------------------------------------------------------------------------------
+
+-- | What happens to a value focused by an optic: it is replaced with a
+-- sequence of events (@set@) or removed entirely (@delete@).
+data Splicer
+  = SpliceSet [JSONEvent]
+  | SpliceDelete
+  deriving (Show, Eq)
+
+-- | Replace every value the optic focuses on with the given replacement
+-- events, passing the rest of the document through unchanged (lens
+-- @set@).  The replacement is spliced into the output verbatim.
+runSet :: Optic -> [JSONEvent] -> Cursor -> ExceptT Text IO ValueStream
+runSet optic replacement = runSplice (SpliceSet replacement) optic
+
+-- | Remove every value the optic focuses on from the document, passing
+-- the rest of the document through unchanged (lens @delete@/@omit@).
+runDelete :: Optic -> Cursor -> ExceptT Text IO ValueStream
+runDelete = runSplice SpliceDelete
+
+-- | Rewrite the document at the cursor by splicing every value that the
+-- optic focuses on.
+--
+-- This is the streaming counterpart to 'runOptic': instead of
+-- extracting the focused values, the @rewrite@ family re-emits the
+-- document, replacing or omitting the focused values in place.  All
+-- other events pass through unchanged, so the output is the input with
+-- only the targeted values modified.
+runSplice :: Splicer -> Optic -> Cursor -> ExceptT Text IO ValueStream
+runSplice splicer (Optic optic) = run optic
+  where
+    -- \| Apply the whole optic at a value.
+    run :: Fix OpticF -> Cursor -> ExceptT Text IO ValueStream
+    run step cursor = case unFix step of
+      Id -> spliceValue splicer
+      _ -> navigate step (Fix Id) cursor
+
+    -- \| Navigate one optic step, splicing the remainder at each landing
+    -- and passing everything else through.
+    navigate :: Fix OpticF -> Fix OpticF -> Cursor -> ExceptT Text IO ValueStream
+    navigate step suffix cursor = case unFix step of
+      Id -> run suffix cursor
+      Compose left right -> navigate left (composeStep right suffix) cursor
+      Field name -> rewriteField name cursor suffix
+      Each -> rewriteEach cursor suffix
+      PrismString -> rewritePrism isString cursor suffix
+      PrismNumber -> rewritePrism isNumber cursor suffix
+      PrismBool -> rewritePrism isBool cursor suffix
+      PrismNull -> rewritePrism isNull cursor suffix
+      PrismArray -> rewritePrism isArray cursor suffix
+      PrismObject -> rewritePrism isObject cursor suffix
+      PrismJust -> rewriteJust cursor suffix
+      Prism1 -> rewriteIndex 0 cursor suffix
+      Prism2 -> rewriteIndex 1 cursor suffix
+
+    -- \| Compose two optic steps, normalizing away the identity optic.
+    --
+    -- Without this, reassociating a composition such as
+    -- @Compose a (Compose b Id)@ repeatedly rebuilds @Compose Id Id@
+    -- spines that the navigator would keep re-arranging forever.
+    composeStep :: Fix OpticF -> Fix OpticF -> Fix OpticF
+    composeStep (Fix Id) rest = rest
+    composeStep step rest = Fix (Compose step rest)
+
+    -- \| Emit the replacement for a value the whole optic lands on.
+    spliceValue :: Splicer -> ExceptT Text IO ValueStream
+    spliceValue (SpliceSet events) = pure (S.each events)
+    spliceValue SpliceDelete = pure mempty
+
+    -- \| Does the part of the optic that remains after @step@ land on
+    -- the value at the cursor itself, rather than navigating into one
+    -- of its children?
+    --
+    -- Used by @delete@ to decide whether an object member loses both
+    -- its key and its value (a landing) or keeps its key while its
+    -- value is rewritten (e.g. @delete #users.each.#name@).
+    landing :: Fix OpticF -> Cursor -> ExceptT Text IO Bool
+    landing f cursor = case unFix f of
+      Id -> pure True
+      Field _ -> pure False
+      Each -> pure False
+      Prism1 -> pure False
+      Prism2 -> pure False
+      PrismString -> peek isString
+      PrismNumber -> peek isNumber
+      PrismBool -> peek isBool
+      PrismNull -> peek isNull
+      PrismArray -> peek isArray
+      PrismObject -> peek isObject
+      PrismJust -> peek (not . isNull)
+      Compose l r -> do
+        lLands <- landing l cursor
+        if lLands then landing r cursor else pure False
+      where
+        peek predicate = do
+          result <- next cursor
+          pure $ case result of
+            Nothing -> False
+            Just (event, _) -> predicate event
+
+    -- \| A value whose first event satisfies the predicate is handed to
+    -- the remainder of the optic; anything else passes through.
+    rewritePrism :: (JSONEvent -> Bool) -> Cursor -> Fix OpticF -> ExceptT Text IO ValueStream
+    rewritePrism predicate cursor suffix =
+      next cursor >>= \case
+        Nothing -> pure mempty
+        Just (event, rest)
+          | predicate event -> run suffix (fromFirst event rest)
+          | otherwise -> emitValue (fromFirst event rest)
+
+    -- \| Prism on any non-null value.
+    rewriteJust :: Cursor -> Fix OpticF -> ExceptT Text IO ValueStream
+    rewriteJust cursor suffix =
+      next cursor >>= \case
+        Nothing -> pure mempty
+        Just (JSONNull, _) -> pure (S.yield JSONNull)
+        Just (event, rest) -> run suffix (fromFirst event rest)
+
+    -- \| Descend into an array, splicing the remainder of the optic at
+    -- the element at @index@.
+    rewriteIndex :: Int -> Cursor -> Fix OpticF -> ExceptT Text IO ValueStream
+    rewriteIndex index cursor suffix =
+      next cursor >>= \case
+        Nothing -> pure mempty
+        Just (event, rest) -> case event of
+          JSONBeginArray -> pure (rewriteIndexElements index rest suffix)
+          _ -> emitValue (fromFirst event rest)
+
+    -- \| Emit a whole array, splicing the remainder of the optic at the
+    -- element at index @target@ and passing every other element
+    -- through.
+    rewriteIndexElements :: Int -> Cursor -> Fix OpticF -> ValueStream
+    rewriteIndexElements target c suffix = do
+      S.yield JSONBeginArray
+      go target c
+      where
+        go n arr = do
+          mNext <- lift $ next arr
+          case mNext of
+            Nothing -> lift $ throwError "unexpected end of input while reading array"
+            Just (event, rest) -> case event of
+              JSONEndArray -> S.yield JSONEndArray
+              _ ->
+                let element = fromFirst event rest
+                 in consumeElement element $ \originalEvents afterValue ->
+                      if n == 0
+                        then do
+                          join (lift $ run suffix (mkCursorFromList originalEvents))
+                          go (n - 1) afterValue
+                        else do
+                          S.each originalEvents
+                          go (n - 1) afterValue
+
+    -- \| Descend into an object, splicing the value of the member named
+    -- @name@.
+    rewriteField :: Text -> Cursor -> Fix OpticF -> ExceptT Text IO ValueStream
+    rewriteField name cursor suffix =
+      next cursor >>= \case
+        Nothing -> pure mempty
+        Just (event, rest) -> case event of
+          JSONBeginObject -> pure (rewriteObjectPairs name rest suffix)
+          _ -> emitValue (fromFirst event rest)
+
+    -- \| Emit a whole object, splicing the member named @name@ and
+    -- passing every other member through.
+    rewriteObjectPairs :: Text -> Cursor -> Fix OpticF -> ValueStream
+    rewriteObjectPairs name c suffix = do
+      S.yield JSONBeginObject
+      go c
+      where
+        go obj = do
+          mNext <- lift $ next obj
+          case mNext of
+            Nothing -> lift $ throwError "unexpected end of input while reading object"
+            Just (event, rest) -> case event of
+              JSONEndObject -> S.yield JSONEndObject
+              JSONObjectKey key -> do
+                mVal <- lift $ next rest
+                case mVal of
+                  Nothing -> lift $ throwError "unexpected end of input after object key"
+                  Just (valueEvent, valueRest) -> do
+                    let value = fromFirst valueEvent valueRest
+                    consumeElement value $ \originalEvents afterValue ->
+                      if key == name
+                        then spliceMember (JSONObjectKey key) (mkCursorFromList originalEvents) afterValue suffix go
+                        else do
+                          S.yield (JSONObjectKey key)
+                          S.each originalEvents
+                          go afterValue
+              _ -> lift $ throwError "invalid JSON object"
+
+    -- \| Traverse every element of an array (the @each@ traversal).
+    rewriteEach :: Cursor -> Fix OpticF -> ExceptT Text IO ValueStream
+    rewriteEach cursor suffix =
+      next cursor >>= \case
+        Nothing -> pure mempty
+        Just (event, rest) -> case event of
+          JSONBeginArray -> pure (rewriteAllElements rest suffix)
+          JSONBeginObject -> pure (rewriteAllMembers rest suffix)
+          _ -> pure (S.yield event)
+
+    -- \| Emit a whole array, splicing the remainder of the optic at
+    -- every element.
+    rewriteAllElements :: Cursor -> Fix OpticF -> ValueStream
+    rewriteAllElements c suffix = do
+      S.yield JSONBeginArray
+      go c
+      where
+        go arr = do
+          mNext <- lift $ next arr
+          case mNext of
+            Nothing -> lift $ throwError "unexpected end of input while reading array"
+            Just (event, rest) -> case event of
+              JSONEndArray -> S.yield JSONEndArray
+              _ ->
+                let element = fromFirst event rest
+                 in consumeElement element $ \originalEvents afterValue -> do
+                      join (lift $ run suffix (mkCursorFromList originalEvents))
+                      go afterValue
+
+    -- \| Emit a whole object, splicing the remainder of the optic at
+    -- every member value.
+    rewriteAllMembers :: Cursor -> Fix OpticF -> ValueStream
+    rewriteAllMembers c suffix = do
+      S.yield JSONBeginObject
+      go c
+      where
+        go obj = do
+          mNext <- lift $ next obj
+          case mNext of
+            Nothing -> lift $ throwError "unexpected end of input while reading object"
+            Just (event, rest) -> case event of
+              JSONEndObject -> S.yield JSONEndObject
+              JSONObjectKey key -> do
+                mVal <- lift $ next rest
+                case mVal of
+                  Nothing -> lift $ throwError "unexpected end of input after object key"
+                  Just (valueEvent, valueRest) -> do
+                    let value = fromFirst valueEvent valueRest
+                    consumeElement value $ \originalEvents afterValue ->
+                      spliceMember (JSONObjectKey key) (mkCursorFromList originalEvents) afterValue suffix go
+              _ -> lift $ throwError "invalid JSON object"
+
+    -- \| Splice one object member.  The key survives unless a @delete@
+    -- lands on the member value as a whole; the walk then continues
+    -- with @continue@.
+    spliceMember :: JSONEvent -> Cursor -> Cursor -> Fix OpticF -> (Cursor -> ValueStream) -> ValueStream
+    spliceMember key freshCursor afterValue suffix continue =
+      case splicer of
+        SpliceDelete -> do
+          lands <- lift $ landing suffix freshCursor
+          if lands
+            then continue afterValue
+            else do
+              S.yield key
+              join (lift $ run suffix freshCursor)
+              continue afterValue
+        SpliceSet _ -> do
+          S.yield key
+          join (lift $ run suffix freshCursor)
+          continue afterValue
+
+    -- \| Consume a complete value, handing its materialized events and
+    -- the cursor positioned just after it to the continuation.
+    consumeElement :: Cursor -> ([JSONEvent] -> Cursor -> ValueStream) -> ValueStream
+    consumeElement cursor k = do
+      mConsumed <- lift $ consumeValue cursor
+      case mConsumed of
+        Nothing -> lift $ throwError "unexpected end of input"
+        Just (events, afterValue) -> k events afterValue
+
 data RunnerEnv = RunnerEnv
   { runnerEnvQuery :: Query,
     runnerEnvInput :: StreamIO ByteString ()
@@ -415,7 +684,8 @@ streamHandle chunkSize' handle = do
 executeQuery :: Query -> Cursor -> ExceptT Text IO ValueStream
 executeQuery (Preview optic) val = runPreview optic val
 executeQuery (Fold optic) val = runFold optic val
-executeQuery _ _ = throwError "Not supported"
+executeQuery (Set optic value) val = runSet optic value val
+executeQuery (Delete optic) val = runDelete optic val
 
 jsonRunner :: Runner
 jsonRunner = do

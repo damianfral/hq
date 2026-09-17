@@ -3,7 +3,7 @@
 
 module HQ.Query.Parser where
 
-import HQ.JSON.Parser (jsonValueParser)
+import HQ.JSON.Parser (jsonValueParser, parseValueEvents)
 import HQ.Optic
 import HQ.Optic.Parser (Parser, opticParser, spaceConsumer, symbol)
 import HQ.Query
@@ -17,7 +17,14 @@ queryParser :: Parser Query
 queryParser = setParser <|> deleteParser <|> viewOrFoldParser
 
 setParser :: Parser Query
-setParser = symbol "set" >> Set <$> opticParser <*> jsonValueParser
+setParser = do
+  void $ symbol "set"
+  optic <- opticParser
+  (raw, _) <- match jsonValueParser
+  events <- case parseValueEvents raw of
+    Left err -> fail (toString err)
+    Right events -> pure events
+  pure $ Set optic events
 
 deleteParser :: Parser Query
 deleteParser = symbol "delete" >> Delete <$> opticParser

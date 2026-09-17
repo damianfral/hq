@@ -13,8 +13,9 @@ import HQ.CLI
     outputConfig,
   )
 import qualified HQ.JSON.Encoder as Enc
+import HQ.JSON.Event (JSONEvent (..))
 import HQ.Optic (compose, each, field)
-import HQ.Query (Query (Fold, Preview))
+import HQ.Query (Query (Delete, Fold, Preview, Set))
 import Options.Applicative (ParserResult (..), defaultPrefs, execParserPure)
 import Relude hiding (Compose, id)
 import Test.Syd
@@ -77,3 +78,29 @@ spec = describe "outputConfig" $ do
           optQuery opts `shouldBe` Preview (field "name")
           optRaw opts `shouldBe` Raw
           optJoin opts `shouldBe` Join
+    it "parses set with a field optic and value"
+      $ optQuery
+      <$> parseCLI ["set", "#name", "\"bob\""]
+      `shouldBe` Right (Set (field "name") [JSONString "bob"])
+    it "parses set with each and a number"
+      $ optQuery
+      <$> parseCLI ["set", "each", "0"]
+      `shouldBe` Right (Set each [JSONNumber 0])
+    it "parses set with a composed optic"
+      $ optQuery
+      <$> parseCLI ["set", "#users.each.#name", "\"anon\""]
+      `shouldBe` Right (Set (compose (compose (field "users") each) (field "name")) [JSONString "anon"])
+    it "parses delete with a field optic"
+      $ optQuery
+      <$> parseCLI ["delete", "#name"]
+      `shouldBe` Right (Delete (field "name"))
+    it "parses delete with each"
+      $ optQuery
+      <$> parseCLI ["delete", "each"]
+      `shouldBe` Right (Delete each)
+    it "combines set with compact" $ do
+      case parseCLI ["set", "#name", "\"bob\"", "-c"] of
+        Left err -> expectationFailure (toString err)
+        Right opts -> do
+          optQuery opts `shouldBe` Set (field "name") [JSONString "bob"]
+          optCompact opts `shouldBe` Compact

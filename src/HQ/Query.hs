@@ -4,7 +4,7 @@
 module HQ.Query where
 
 import Control.Comonad.Cofree (Cofree ((:<)))
-import Data.Aeson (Value)
+import HQ.JSON.Event (JSONEvent)
 import HQ.Optic
 import HQ.Optic.AST
 import HQ.Optic.OpticType (OpticType (..))
@@ -15,7 +15,7 @@ import Relude hiding (Compose, many, some)
 data Query
   = Fold Optic
   | Preview Optic
-  | Set Optic Value
+  | Set Optic [JSONEvent]
   | Delete Optic
   deriving (Show, Eq)
 

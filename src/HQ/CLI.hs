@@ -15,10 +15,10 @@ module HQ.CLI
   )
 where
 
-import Data.Aeson (Value)
 import Data.Version (showVersion)
 import qualified HQ.JSON.Encoder as Enc
-import HQ.JSON.Parser (parseValue)
+import HQ.JSON.Event (JSONEvent)
+import HQ.JSON.Parser (parseValueEvents)
 import HQ.Optic (Optic)
 import HQ.Optic.Parser (parseOptic)
 import HQ.Query
@@ -80,8 +80,8 @@ outputConfig compact join' raw =
 opticReader :: ReadM Optic
 opticReader = eitherReader $ first errorBundlePretty . parseOptic . toText
 
-valueReader :: ReadM Value
-valueReader = eitherReader $ first errorBundlePretty . parseValue . toText
+valueReader :: ReadM [JSONEvent]
+valueReader = eitherReader $ first toString . parseValueEvents . toText
 
 queryParser :: Parser Query
 queryParser =
