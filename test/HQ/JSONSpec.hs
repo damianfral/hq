@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 
 module HQ.JSONSpec (spec) where
@@ -6,7 +7,7 @@ module HQ.JSONSpec (spec) where
 import Data.Scientific (fromFloatDigits)
 import qualified Data.Text as T
 import HQ.JSON.Decoder
-import HQ.JSON.Encoder (encode)
+import HQ.JSON.Encoder (EncodeStyle (..), encode)
 import HQ.JSON.Event
 import Relude hiding (Compose, id)
 import Streaming (Of (..))
@@ -26,6 +27,7 @@ spec = describe "HQ.JSON" $ do
   streamingSpec
   adversarialSpec
   encodeSpec
+  encodePrettySpec
   roundtripSpec
 
 --------------------------------------------------------------------------------
@@ -1210,12 +1212,249 @@ encodeSpec = describe "encode" $ do
       ]
     `shouldBe` "{\"users\":[{\"name\":\"alice\",\"age\":30},{\"name\":\"bob\",\"age\":25}],\"count\":2}"
 
--- | Encode events to a single Text value.
+-- | Encode events to a single Text value using compact style.
 encodeEvents :: [JSONEvent] -> Text
-encodeEvents events = runIdentity $ do
-  result <- S.toList (encode 32 (S.each events))
+encodeEvents = encodeEventsWith Compact
+
+-- | Encode events with the given style to a single Text value.
+encodeEventsWith :: EncodeStyle -> [JSONEvent] -> Text
+encodeEventsWith style events = runIdentity $ do
+  result <- S.toList (encode style 32 (S.each events))
   case result of
     chunks :> _ -> pure $ decodeUtf8 $ mconcat chunks
+
+--------------------------------------------------------------------------------
+-- pretty encode
+--------------------------------------------------------------------------------
+
+encodePrettySpec :: Spec
+encodePrettySpec = describe "pretty encode" $ do
+  describe "scalars are identical in compact and pretty" $ do
+    let scalarCases =
+          [ ("null", [JSONNull], "null"),
+            ("true", [JSONBool True], "true"),
+            ("false", [JSONBool False], "false"),
+            ("42", [JSONNumber 42], "42"),
+            ("1.5", [JSONNumber 1.5], "1.5"),
+            ("\"hello\"", [JSONString "hello"], "\"hello\"")
+          ]
+    forM_ scalarCases $ \(label, events, expected) ->
+      it label $ do
+        encodeEvents events `shouldBe` expected
+        encodeEventsWith (Pretty 2) events `shouldBe` expected
+
+  describe "empty containers stay compact" $ do
+    it "empty object"
+      $ encodeEventsWith (Pretty 2) [JSONBeginObject, JSONEndObject]
+      `shouldBe` "{}"
+    it "empty array"
+      $ encodeEventsWith (Pretty 2) [JSONBeginArray, JSONEndArray]
+      `shouldBe` "[]"
+    it "empty containers nested in non-empty containers" $ do
+      encodeEventsWith
+        (Pretty 2)
+        [ JSONBeginObject,
+          JSONObjectKey "a",
+          JSONBeginArray,
+          JSONEndArray,
+          JSONObjectKey "b",
+          JSONBeginObject,
+          JSONEndObject,
+          JSONEndObject
+        ]
+        `shouldBe` "{\n  \"a\": [],\n  \"b\": {}\n}"
+      encodeEventsWith
+        (Pretty 2)
+        [JSONBeginArray, JSONBeginArray, JSONEndArray, JSONBeginArray, JSONEndArray, JSONEndArray]
+        `shouldBe` "[\n  [],\n  []\n]"
+
+  describe "single-element containers" $ do
+    it "object"
+      $ encodeEventsWith
+        (Pretty 2)
+        [JSONBeginObject, JSONObjectKey "name", JSONString "Alice", JSONEndObject]
+      `shouldBe` "{\n  \"name\": \"Alice\"\n}"
+    it "array"
+      $ encodeEventsWith
+        (Pretty 2)
+        [JSONBeginArray, JSONNumber 42, JSONEndArray]
+      `shouldBe` "[\n  42\n]"
+
+  describe "multiple elements" $ do
+    it "object with multiple fields"
+      $ encodeEventsWith
+        (Pretty 2)
+        [ JSONBeginObject,
+          JSONObjectKey "a",
+          JSONNumber 1,
+          JSONObjectKey "b",
+          JSONNumber 2,
+          JSONEndObject
+        ]
+      `shouldBe` "{\n  \"a\": 1,\n  \"b\": 2\n}"
+    it "array with multiple elements"
+      $ encodeEventsWith
+        (Pretty 2)
+        [JSONBeginArray, JSONNumber 1, JSONNumber 2, JSONNumber 3, JSONEndArray]
+      `shouldBe` "[\n  1,\n  2,\n  3\n]"
+
+  describe "nested structures" $ do
+    it "object in object"
+      $ encodeEventsWith
+        (Pretty 2)
+        [ JSONBeginObject,
+          JSONObjectKey "a",
+          JSONBeginObject,
+          JSONObjectKey "b",
+          JSONNumber 1,
+          JSONEndObject,
+          JSONEndObject
+        ]
+      `shouldBe` "{\n  \"a\": {\n    \"b\": 1\n  }\n}"
+    it "array in array"
+      $ encodeEventsWith
+        (Pretty 2)
+        [JSONBeginArray, JSONBeginArray, JSONNumber 1, JSONEndArray, JSONEndArray]
+      `shouldBe` "[\n  [\n    1\n  ]\n]"
+    it "array in object"
+      $ encodeEventsWith
+        (Pretty 2)
+        [ JSONBeginObject,
+          JSONObjectKey "users",
+          JSONBeginArray,
+          JSONNumber 1,
+          JSONNumber 2,
+          JSONEndArray,
+          JSONEndObject
+        ]
+      `shouldBe` "{\n  \"users\": [\n    1,\n    2\n  ]\n}"
+    it "object in array"
+      $ encodeEventsWith
+        (Pretty 2)
+        [JSONBeginArray, JSONBeginObject, JSONObjectKey "a", JSONNumber 1, JSONEndObject, JSONEndArray]
+      `shouldBe` "[\n  {\n    \"a\": 1\n  }\n]"
+    it "deeply nested"
+      $ encodeEventsWith
+        (Pretty 2)
+        [ JSONBeginObject,
+          JSONObjectKey "a",
+          JSONBeginObject,
+          JSONObjectKey "b",
+          JSONBeginArray,
+          JSONBeginObject,
+          JSONObjectKey "c",
+          JSONNumber 1,
+          JSONEndObject,
+          JSONEndArray,
+          JSONEndObject,
+          JSONEndObject
+        ]
+      `shouldBe` "{\n  \"a\": {\n    \"b\": [\n      {\n        \"c\": 1\n      }\n    ]\n  }\n}"
+    it "complex structure"
+      $ encodeEventsWith
+        (Pretty 2)
+        [ JSONBeginObject,
+          JSONObjectKey "users",
+          JSONBeginArray,
+          JSONBeginObject,
+          JSONObjectKey "name",
+          JSONString "alice",
+          JSONObjectKey "age",
+          JSONNumber 30,
+          JSONEndObject,
+          JSONBeginObject,
+          JSONObjectKey "name",
+          JSONString "bob",
+          JSONObjectKey "age",
+          JSONNumber 25,
+          JSONEndObject,
+          JSONEndArray,
+          JSONObjectKey "count",
+          JSONNumber 2,
+          JSONEndObject
+        ]
+      `shouldBe` "{\n  \"users\": [\n    {\n      \"name\": \"alice\",\n      \"age\": 30\n    },\n    {\n      \"name\": \"bob\",\n      \"age\": 25\n    }\n  ],\n  \"count\": 2\n}"
+    it "mixed types in array"
+      $ encodeEventsWith
+        (Pretty 2)
+        [JSONBeginArray, JSONNumber 1, JSONString "hello", JSONBool True, JSONNull, JSONEndArray]
+      `shouldBe` "[\n  1,\n  \"hello\",\n  true,\n  null\n]"
+
+  describe "string escaping is preserved" $ do
+    it "special characters encode identically with surrounding formatting" $ do
+      let events =
+            [ JSONBeginArray,
+              JSONString "quote\" backslash\\ newline\n return\r tab\t bell\b formfeed\f control\x01 snowman☃ snow❄",
+              JSONEndArray
+            ]
+      encodeEvents events
+        `shouldBe` "[\"quote\\\" backslash\\\\ newline\\n return\\r tab\\t bell\\b formfeed\\f control\\u0001 snowman☃ snow❄\"]"
+      encodeEventsWith (Pretty 2) events
+        `shouldBe` "[\n  \"quote\\\" backslash\\\\ newline\\n return\\r tab\\t bell\\b formfeed\\f control\\u0001 snowman☃ snow❄\"\n]"
+    it "pretty output decodes back to the same events" $ do
+      let events =
+            [ JSONBeginArray,
+              JSONString "tab\tyes\nline2\r\n\"quoted\"\\and 日本語☃\x07",
+              JSONNumber (-1.5e-3),
+              JSONEndArray
+            ]
+          encoded = encodeEventsWith (Pretty 2) events
+      case decodeStreaming [encoded] of
+        Left err -> expectationFailure $ "Re-decode failed: " <> show err
+        Right evts' -> evts' `shouldBe` events
+
+  describe "chunk sizes do not affect pretty output" $ do
+    let events =
+          [ JSONBeginObject,
+            JSONObjectKey "users",
+            JSONBeginArray,
+            JSONBeginObject,
+            JSONObjectKey "name",
+            JSONString "alice",
+            JSONObjectKey "age",
+            JSONNumber 30,
+            JSONEndObject,
+            JSONBeginObject,
+            JSONObjectKey "name",
+            JSONString "bob",
+            JSONObjectKey "age",
+            JSONNumber 25,
+            JSONEndObject,
+            JSONEndArray,
+            JSONObjectKey "tags",
+            JSONBeginArray,
+            JSONString "a\"b",
+            JSONNull,
+            JSONEndArray,
+            JSONEndObject
+          ]
+        expected = encodeEventsWith (Pretty 2) events
+    forM_ [1, 2, 3, 5, 8, 16, 24, 40] $ \cSize ->
+      it ("chunk size " <> show cSize) $ do
+        let concatenated = runIdentity $ do
+              result <- S.toList (encode (Pretty 2) cSize (S.each events))
+              case result of
+                chunks :> _ -> pure $ decodeUtf8 $ mconcat chunks
+        concatenated `shouldBe` expected
+        case decodeStreaming [concatenated] of
+          Left err -> expectationFailure $ "Re-decode failed at chunk size " <> show cSize <> ": " <> show err
+          Right evts' -> evts' `shouldBe` events
+
+  describe "roundtrip through pretty encoding" $ do
+    let roundtripCases =
+          [ ("empty object", "{}"),
+            ("empty array", "[]"),
+            ("object", "{\"name\":\"Alice\"}"),
+            ("array", "[1,2,3]"),
+            ("nested", "{\"users\":[{\"name\":\"alice\"},{\"name\":\"bob\"}]}"),
+            ("mixed array", "[1,true,null,\"x\",-2.5]"),
+            ("escapes", "\"a\\nb\\\"c\\\\d\""),
+            ("unicode", "\"日本語☃\""),
+            ("number with exponent", "1e10"),
+            ("negative exponent", "1e-2")
+          ]
+    forM_ roundtripCases $ \(label, input) ->
+      it ("pretty roundtrips " <> label) $ prettyRoundtrip input
 
 --------------------------------------------------------------------------------
 -- Roundtrip: encode . decode produces the same text
@@ -1255,6 +1494,19 @@ roundtripSpec = describe "roundtrip (encode . decode)" $ do
   it "roundtrips number with exponent" $ roundtrip "1e10"
   it "roundtrips number with negative exponent" $ roundtrip "1e-2"
   it "roundtrips zero" $ roundtrip "0"
+
+-- | Verify that encoding with 'Pretty 2' and decoding again yields the
+-- same events as decoding the compact input, i.e. that pretty-printing
+-- only changes whitespace.
+prettyRoundtrip :: Text -> IO ()
+prettyRoundtrip input = case decodeStreaming [input] of
+  Left err -> expectationFailure $ "Decode failed: " <> show err
+  Right events -> do
+    let encoded = encodeEventsWith (Pretty 2) events
+        redecoded = decodeStreaming [encoded]
+    case redecoded of
+      Left err -> expectationFailure $ "Re-decode failed: " <> show err
+      Right events' -> events `shouldBe` events'
 
 -- | Verify that encode . decode produces the same events (wrapped in Either).
 roundtrip :: Text -> IO ()

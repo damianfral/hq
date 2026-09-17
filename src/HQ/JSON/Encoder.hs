@@ -3,8 +3,16 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE StrictData #-}
 {-# LANGUAGE NoImplicitPrelude #-}
+-- The required @Pretty { indentWidth }@ record introduces a partial
+-- field selector (the call site of the warning is the type declaration
+-- itself), so opt out of that particular warning for this module only.
+{-# OPTIONS_GHC -Wno-partial-fields #-}
 
-module HQ.JSON.Encoder (encode) where
+module HQ.JSON.Encoder
+  ( EncodeStyle (..),
+    encode,
+  )
+where
 
 import Data.Bits (Bits (..))
 import Data.ByteString.Builder (Builder, char7, charUtf8, string7, stringUtf8, toLazyByteString)
@@ -17,18 +25,28 @@ import Streaming (Of, Stream)
 import Streaming.Internal (Stream (..))
 import qualified Streaming.Prelude as S
 
--- | Context entries for the encoder's separator tracking.
+-- | Output formatting style.
+data EncodeStyle
+  = -- | Compressed output with no whitespace.
+    Compact
+  | -- | Human-readable output using @n@ spaces per nesting
+    -- level.
+    Pretty Int
+  deriving (Eq, Show)
+
+-- | The encoder's container stack; the head is the innermost container.
+--
+-- The 'Bool' distinguishes an empty container (which stays on one line
+-- even in 'Pretty' mode) from one that has already emitted a value, and
+-- 'EncodeObjectAfterKey' remembers that a key still needs its colon and
+-- value.
 data EncodeCtx
-  = -- | Inside an array, no elements yet; skip comma.
-    EncodeCtxNeedCommaInitial
-  | -- | Inside an array; need ',' before next element.
-    EncodeCtxNeedComma
-  | -- | Inside an object, just opened; no comma before first key.
-    EncodeCtxObjectInitial
-  | -- | Inside an object, after a value; need ',' before next key.
-    EncodeCtxObject
-  | -- | Just read a key; need ':' before value.
-    EncodeCtxObjectAfterKey
+  = -- | Inside an array; 'True' once at least one element was emitted.
+    EncodeArray !Bool
+  | -- | Inside an object; 'True' once at least one pair was emitted.
+    EncodeObject !Bool
+  | -- | A key was just emitted; the next event is its value.
+    EncodeObjectAfterKey
   deriving (Eq, Show)
 
 -- | Show a 'Scientific' in compact JSON-compatible form.
@@ -58,71 +76,134 @@ formatNonInteger c e
     len = Text.length (show (abs c))
     na = abs e
 
--- | Encode a stream of 'JSONEvent's into a stream of 'Text' chunks.
+-- | Encode a stream of 'JSONEvent's into a stream of 'Chunk's.
 --
--- The encoder inserts appropriate separators (commas, colons) and
--- produces compact (no whitespace) JSON output.  It does not perform
--- string escaping — it assumes the 'JSONString' and 'JSONObjectKey'
--- events already contain properly escaped text as produced by 'decode'.
-encodeToChunks :: (Monad m) => Stream (Of JSONEvent) m r -> Stream (Of Chunk) m r
-encodeToChunks = go []
+-- A small formatting state machine walks the event stream, emitting
+-- structural separators (commas, colons, and in 'Pretty' mode newlines
+-- and indentation) around the raw event encodings produced by
+-- 'encodeEvent'.  It never materializes the document: each event is
+-- turned into output as soon as it arrives.
+encodeToChunks :: (Monad m) => EncodeStyle -> JSONStream m r -> ChunkStream m r
+encodeToChunks style = go []
   where
-    go :: (Monad m) => [EncodeCtx] -> Stream (Of JSONEvent) m r -> Stream (Of Chunk) m r
+    go :: (Monad m) => [EncodeCtx] -> JSONStream m r -> ChunkStream m r
     go ctxs events = do
       result <- lift $ S.next events
       case result of
         Left r -> pure r
-        Right (event, rest) -> case event of
-          JSONEndArray -> do
-            let parent' = needCommaAfterClose ctxs
-            S.yield (encodeEvent event) >> go parent' rest
-          JSONEndObject -> do
-            S.yield (encodeEvent event)
-            let parent' = needCommaAfterClose ctxs
-            go parent' rest
-          _ -> do
-            let (sep, ctxs') = encoderSeparator ctxs
-            S.yield $ Chunk (stringUtf8 $ toString sep) 1
-            S.yield $ encodeEvent event
-            case event of
-              JSONBeginArray -> go (EncodeCtxNeedCommaInitial : ctxs') rest
-              JSONBeginObject -> go (EncodeCtxObjectInitial : ctxs') rest
-              JSONObjectKey _ -> do go (EncodeCtxObjectAfterKey : ctxs') rest
-              JSONNull -> go (afterEncodeValue ctxs') rest
-              JSONBool True -> go (afterEncodeValue ctxs') rest
-              JSONBool False -> go (afterEncodeValue ctxs') rest
-              JSONNumber _ -> go (afterEncodeValue ctxs') rest
-              JSONString _ -> do go (afterEncodeValue ctxs') rest
+        Right (event, rest)
+          | event == JSONEndArray || event == JSONEndObject -> do
+              let (chunk, ctxs') = closeContainer style ctxs
+              S.yield chunk
+              go ctxs' rest
+          | otherwise -> case event of
+              JSONBeginArray -> do
+                let (sep, ctxs') = beforeValue style ctxs
+                S.yield sep
+                S.yield (encodeEvent event)
+                go (EncodeArray False : ctxs') rest
+              JSONBeginObject -> do
+                let (sep, ctxs') = beforeValue style ctxs
+                S.yield sep
+                S.yield (encodeEvent event)
+                go (EncodeObject False : ctxs') rest
+              JSONObjectKey _ -> do
+                let (sep, ctxs') = beforeKey style ctxs
+                S.yield sep
+                S.yield (encodeEvent event)
+                go ctxs' rest
+              _ -> do
+                let (sep, ctxs') = beforeValue style ctxs
+                S.yield sep
+                S.yield (encodeEvent event)
+                go (afterValue ctxs') rest
 
-    encoderSeparator :: [EncodeCtx] -> (Text, [EncodeCtx])
-    encoderSeparator [] = ("", [])
-    encoderSeparator (EncodeCtxNeedCommaInitial : rest) = ("", EncodeCtxNeedComma : rest)
-    encoderSeparator (EncodeCtxNeedComma : rest) = (",", EncodeCtxNeedComma : rest)
-    encoderSeparator (EncodeCtxObjectInitial : rest) = ("", EncodeCtxObject : rest)
-    encoderSeparator (EncodeCtxObject : rest) = (",", EncodeCtxObject : rest)
-    encoderSeparator (EncodeCtxObjectAfterKey : rest) =
-      (":", EncodeCtxObject : rest)
+-- | The structural pieces to emit before an object key: a separator for
+-- the first or any following key, and the switch to
+-- 'EncodeObjectAfterKey' so the upcoming value gets its colon.
+beforeKey :: EncodeStyle -> [EncodeCtx] -> (Chunk, [EncodeCtx])
+beforeKey style ctxs = case ctxs of
+  EncodeObject seen : rest ->
+    ( elementSeparator style seen (length rest + 1),
+      EncodeObjectAfterKey : rest
+    )
+  -- A key outside a container; emit it bare.
+  _ -> (mempty, ctxs)
 
-    afterEncodeValue :: [EncodeCtx] -> [EncodeCtx]
-    afterEncodeValue [] = []
-    afterEncodeValue (EncodeCtxObjectAfterKey : rest) =
-      EncodeCtxObject : rest
-    afterEncodeValue (EncodeCtxNeedCommaInitial : rest) =
-      EncodeCtxNeedComma : rest
-    afterEncodeValue (EncodeCtxNeedComma : rest) = EncodeCtxNeedComma : rest
-    afterEncodeValue (EncodeCtxObjectInitial : rest) = EncodeCtxObject : rest
-    afterEncodeValue (EncodeCtxObject : rest) = EncodeCtxObject : rest
+-- | The structural pieces to emit before a value (a scalar or a
+-- container opening).  The context is left unchanged; 'afterValue'
+-- marks the parent non-empty once the value has arrived, or when a
+-- nested container closes.
+beforeValue :: EncodeStyle -> [EncodeCtx] -> (Chunk, [EncodeCtx])
+beforeValue style ctxs = case ctxs of
+  EncodeObjectAfterKey : _ -> (colonSeparator style, ctxs)
+  EncodeArray seen : rest ->
+    (elementSeparator style seen (length rest + 1), ctxs)
+  -- A value where a key was expected (malformed input); recover by
+  -- treating it as an additional array-like member.
+  EncodeObject seen : rest ->
+    (elementSeparator style seen (length rest + 1), ctxs)
+  -- A top-level value; no separator.
+  [] -> (mempty, ctxs)
 
-    needCommaAfterClose :: [EncodeCtx] -> [EncodeCtx]
-    needCommaAfterClose [] = []
-    needCommaAfterClose (_ : EncodeCtxNeedCommaInitial : rest) =
-      EncodeCtxNeedComma : rest
-    needCommaAfterClose (_ : EncodeCtxNeedComma : rest) =
-      EncodeCtxNeedComma : rest
-    needCommaAfterClose (_ : EncodeCtxObjectInitial : rest) =
-      EncodeCtxObject : rest
-    needCommaAfterClose (_ : EncodeCtxObject : rest) = EncodeCtxObject : rest
-    needCommaAfterClose (_ : rest) = rest
+-- | After a value was emitted, mark the innermost container non-empty.
+afterValue :: [EncodeCtx] -> [EncodeCtx]
+afterValue = \case
+  [] -> []
+  EncodeArray _ : rest -> EncodeArray True : rest
+  EncodeObject _ : rest -> EncodeObject True : rest
+  EncodeObjectAfterKey : rest -> EncodeObject True : rest
+
+-- | Emit the closing delimiter for a container, then pop it and mark
+-- the parent container as having received a value.
+closeContainer :: EncodeStyle -> [EncodeCtx] -> (Chunk, [EncodeCtx])
+closeContainer _ [] = (mempty, [])
+closeContainer style (ctx : rest) =
+  (closingDelimiter style (length rest) ctx, afterValue rest)
+
+-- | The closing delimiter of the innermost container.  An empty
+-- container stays on one line; a non-empty one is closed on its own
+-- line, indented to the depth of the container itself (the parent
+-- depth).
+closingDelimiter :: EncodeStyle -> Int -> EncodeCtx -> Chunk
+closingDelimiter style depth ctx = case ctx of
+  EncodeArray seen -> close seen ']'
+  EncodeObject seen -> close seen '}'
+  EncodeObjectAfterKey -> close True '}'
+  where
+    close seen delim = case style of
+      Pretty _
+        | seen ->
+            Chunk (char7 '\n') 1 <> indent style depth <> Chunk (char7 delim) 1
+      _ -> Chunk (char7 delim) 1
+
+-- | The chunk emitted before an array element or an object key.
+--
+-- In 'Compact' mode this is just a comma (or nothing for the first
+-- item); in 'Pretty' mode a newline (preceded by a comma except for the
+-- first item) and indentation to @depth@.
+elementSeparator :: EncodeStyle -> Bool -> Int -> Chunk
+elementSeparator Compact seen _ =
+  if seen then Chunk (char7 ',') 1 else mempty
+elementSeparator style@(Pretty _) seen depth =
+  newlinePrefix <> indent style depth
+  where
+    newlinePrefix
+      | seen = Chunk (char7 ',' <> char7 '\n') 2
+      | otherwise = Chunk (char7 '\n') 1
+
+-- | The chunk emitted between an object key and its value.
+colonSeparator :: EncodeStyle -> Chunk
+colonSeparator Compact = Chunk (char7 ':') 1
+colonSeparator (Pretty _) = Chunk (string7 ": ") 2
+
+-- | Indentation to @depth@ levels, as a 'Chunk' whose size accounts for
+-- every emitted space.
+indent :: EncodeStyle -> Int -> Chunk
+indent Compact _ = mempty
+indent (Pretty width) depth =
+  let size = width * depth
+   in Chunk (mconcat (replicate size (char7 ' '))) size
 
 data Chunk = Chunk {chunkBuilder :: !Builder, chunkSize :: !Int}
 
@@ -218,8 +299,15 @@ type BSStream m r = Stream (Of ByteString) m r
 
 type ChunkStream m r = Stream (Of Chunk) m r
 
-encode :: (Monad m) => Int -> JSONStream m r -> BSStream m r
-encode cSize = go mempty 0 . encodeToChunks
+-- | Encode a stream of 'JSONEvent's into a stream of 'ByteString'
+-- chunks, applying 'style' and flushing output once roughly @cSize@
+-- bytes have accumulated in the buffer.
+--
+-- An individual output chunk may be larger than @cSize@ when a single
+-- encoded event exceeds the target size; the stream contents are
+-- unaffected by the chunk size.
+encode :: (Monad m) => EncodeStyle -> Int -> JSONStream m r -> BSStream m r
+encode style cSize = go mempty 0 . encodeToChunks style
   where
     go :: (Monad m) => Builder -> Int -> ChunkStream m r -> BSStream m r
     go !builder !size stream = do

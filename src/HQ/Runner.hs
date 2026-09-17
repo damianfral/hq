@@ -13,7 +13,7 @@ import Data.Fix (Fix (..))
 import Data.Text.IO (hPutStrLn)
 import HQ.JSON.Cursor
 import HQ.JSON.Decoder (decodeIO)
-import HQ.JSON.Encoder (encode)
+import HQ.JSON.Encoder (EncodeStyle (..), encode)
 import HQ.JSON.Event
 import HQ.Optic (Optic (..), OpticF (..))
 import HQ.Query (Query (..))
@@ -348,7 +348,7 @@ runRunnerIO runner query handle = do
   hSetBuffering stdout (BlockBuffering Nothing)
   r <- runExceptT $ do
     streamIO <- runRunner runner query handle
-    S.mapM_ write $ encode 32 streamIO
+    S.mapM_ write $ encode (Pretty 2) 32 streamIO
   case r of
     Left e -> hPutStrLn stderr e >> exitFailure
     Right v -> pure v
