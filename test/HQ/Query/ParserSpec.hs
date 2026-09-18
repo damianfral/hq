@@ -20,25 +20,6 @@ spec = describe "HQ.Query.Parser" $ do
 
 parserSpec :: Spec
 parserSpec = describe "parseQuery" $ do
-  describe "view operation" $ do
-    it "parses view with a field" $ do
-      parseQuery "view #foo" `shouldBe` Right (Preview (field "foo"))
-
-    it "parses view with each" $ do
-      parseQuery "view each" `shouldBe` Right (Preview each)
-
-    it "parses view with id" $ do
-      parseQuery "view id" `shouldBe` Right (Preview id)
-
-    it "parses view with composed optics" $ do
-      parseQuery "view #foo.#bar"
-        `shouldBe` Right (Preview $ compose (field "foo") (field "bar"))
-
-    it "parses view with deeply composed optics" $ do
-      let expected =
-            Preview (compose (compose (field "a") (field "b")) (field "c"))
-      parseQuery "view #a.#b.#c" `shouldBe` Right expected
-
   describe "fold operation" $ do
     it "parses fold with a field" $ do
       parseQuery "fold #foo" `shouldBe` Right (Fold (field "foo"))
@@ -52,50 +33,50 @@ parserSpec = describe "parseQuery" $ do
 
   describe "each optic" $ do
     it "parses each standalone" $ do
-      parseQuery "view each" `shouldBe` Right (Preview each)
+      parseQuery "fold each" `shouldBe` Right (Fold each)
 
     it "parses each in composition" $ do
       let expected = Preview $ compose (field "foo") each
-      parseQuery "view #foo.each" `shouldBe` Right expected
+      parseQuery "preview #foo.each" `shouldBe` Right expected
 
     it "parses each at the start of composition" $ do
       let expected = Preview $ compose each (field "foo")
-      parseQuery "view each.#foo" `shouldBe` Right expected
+      parseQuery "preview each.#foo" `shouldBe` Right expected
 
   describe "field optic" $ do
     it "parses a simple field" $ do
-      parseQuery "view #name" `shouldBe` Right (Preview (field "name"))
+      parseQuery "preview #name" `shouldBe` Right (Preview (field "name"))
 
     it "parses a field with underscores" $ do
-      parseQuery "view #my_field" `shouldBe` Right (Preview (field "my_field"))
+      parseQuery "fold #my_field" `shouldBe` Right (Fold (field "my_field"))
 
     it "parses a field with numbers" $ do
-      parseQuery "view #field123" `shouldBe` Right (Preview (field "field123"))
+      parseQuery "preview #field123" `shouldBe` Right (Preview (field "field123"))
 
     it "parses a field with mixed alphanumeric and underscores" $ do
-      parseQuery "view #foo_bar_1" `shouldBe` Right (Preview (field "foo_bar_1"))
+      parseQuery "preview #foo_bar_1" `shouldBe` Right (Preview (field "foo_bar_1"))
 
   describe "id optic" $ do
     it "parses id standalone" $ do
-      parseQuery "view id" `shouldBe` Right (Preview id)
+      parseQuery "fold id" `shouldBe` Right (Fold id)
 
     it "parses id in composition" $ do
       let composed = Preview $ compose id (field "foo")
-      parseQuery "view id.#foo" `shouldBe` Right composed
+      parseQuery "preview id.#foo" `shouldBe` Right composed
 
   describe "whitespace handling" $ do
     it "handles extra whitespace around the query" $ do
-      parseQuery "  view #foo  " `shouldBe` Right (Preview (field "foo"))
+      parseQuery "  preview #foo  " `shouldBe` Right (Preview (field "foo"))
 
     it "handles whitespace around the dot separator" $ do
       let expected = Preview $ compose (field "foo") (field "bar")
-      parseQuery "view #foo . #bar" `shouldBe` Right expected
+      parseQuery "preview #foo . #bar" `shouldBe` Right expected
 
     it "handles no whitespace" $ do
-      parseQuery "view#foo" `shouldBe` Right (Preview (field "foo"))
+      parseQuery "preview#foo" `shouldBe` Right (Preview (field "foo"))
 
     it "handles tabs" $ do
-      parseQuery "\tview\t#foo\t" `shouldBe` Right (Preview (field "foo"))
+      parseQuery "\tpreview\t#foo\t" `shouldBe` Right (Preview (field "foo"))
 
   describe "error cases" $ do
     it "rejects empty input" $ case parseQuery "" of
@@ -106,53 +87,51 @@ parserSpec = describe "parseQuery" $ do
       Left _ -> pure ()
       Right q -> expectationFailure $ "Expected parse error, got: " <> show q
 
-    it "rejects missing optic after operation" $ case parseQuery "view" of
+    it "rejects missing optic after operation" $ case parseQuery "fold" of
       Left _ -> pure ()
       Right q -> expectationFailure $ "Expected parse error, got: " <> show q
 
-    it "rejects field without hash" $ case parseQuery "view foo" of
+    it "rejects field without hash" $ case parseQuery "fold foo" of
       Left _ -> pure ()
       Right q -> expectationFailure $ "Expected parse error, got: " <> show q
 
-    it "rejects hash without identifier" $ case parseQuery "view #" of
+    it "rejects hash without identifier" $ case parseQuery "fold #" of
       Left _ -> pure ()
       Right q -> expectationFailure $ "Expected parse error, got: " <> show q
 
 prismParserSpec :: Spec
 prismParserSpec = describe "parseQuery (prisms)" $ do
   it "parses _String" $ do
-    parseQuery "view _String" `shouldBe` Right (Preview _String)
+    parseQuery "fold _String" `shouldBe` Right (Fold _String)
 
   it "parses _Number" $ do
-    parseQuery "view _Number" `shouldBe` Right (Preview _Number)
+    parseQuery "fold _Number" `shouldBe` Right (Fold _Number)
 
   it "parses _Bool" $ do
-    parseQuery "view _Bool" `shouldBe` Right (Preview _Bool)
+    parseQuery "fold _Bool" `shouldBe` Right (Fold _Bool)
 
   it "parses _Null" $ do
-    parseQuery "view _Null" `shouldBe` Right (Preview _Null)
+    parseQuery "fold _Null" `shouldBe` Right (Fold _Null)
 
   it "parses _Array" $ do
-    parseQuery "view _Array" `shouldBe` Right (Preview _Array)
+    parseQuery "fold _Array" `shouldBe` Right (Fold _Array)
 
   it "parses _Object" $ do
-    parseQuery "view _Object" `shouldBe` Right (Preview _Object)
+    parseQuery "fold _Object" `shouldBe` Right (Fold _Object)
 
-  it "parses _Just" $ do
-    parseQuery "view _Just" `shouldBe` Right (Preview _Just)
+  it "parses _Just" $ parseQuery "fold _Just" `shouldBe` Right (Fold _Just)
 
-  it "parses _1" $ do
-    parseQuery "view _1" `shouldBe` Right (Preview _1)
+  it "parses _1" $ parseQuery "fold _1" `shouldBe` Right (Fold _1)
 
-  it "parses _2" $ do
-    parseQuery "view _2" `shouldBe` Right (Preview _2)
+  it "parses _2" $ parseQuery "fold _2" `shouldBe` Right (Fold _2)
 
   it "parses prism in composition with each" $ do
-    parseQuery "fold each._String" `shouldBe` Right (Fold (compose each _String))
+    parseQuery "fold each._String"
+      `shouldBe` Right (Fold (compose each _String))
 
   it "parses prism in composition with field" $ do
-    parseQuery "view #data._Number"
-      `shouldBe` Right (Preview (compose (field "data") _Number))
+    parseQuery "fold #data._Number"
+      `shouldBe` Right (Fold (compose (field "data") _Number))
 
   it "parses prism composed with prism" $ do
     parseQuery "fold _Array._1" `shouldBe` Right (Fold (compose _Array _1))
