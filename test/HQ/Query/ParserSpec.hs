@@ -7,7 +7,7 @@ import Data.Aeson (Value (..))
 import HQ.Optic
 import HQ.Query (Query (..))
 import HQ.Query.Parser (parseQuery)
-import HQ.Transformation (add, combine, concatString, equal, trim)
+import HQ.Transformation (add, combine, concatString, constValue, equal, trim)
 import Relude hiding (Compose, id)
 import Test.Syd
 
@@ -16,6 +16,7 @@ spec = describe "HQ.Query.Parser" $ do
   parserSpec
   prismParserSpec
   overParserSpec
+  setParserSpec
 
 parserSpec :: Spec
 parserSpec = describe "parseQuery" $ do
@@ -182,3 +183,20 @@ overParserSpec = describe "parseQuery (over)" $ do
   it "rejects over without a transformation" $ case parseQuery "over #foo" of
     Left _ -> pure ()
     Right q -> expectationFailure $ "Expected parse error, got: " <> show q
+
+setParserSpec :: Spec
+setParserSpec = describe "parseQuery (set)" $ do
+  it "parses set as a constant over" $ do
+    parseQuery "set #name \"bob\""
+      `shouldBe` Right (Over (field "name") (constValue (String "bob")))
+
+  it "parses set with a number value" $ do
+    parseQuery "set each 0" `shouldBe` Right (Over each (constValue (Number 0)))
+
+  it "parses set with a composed optic" $ do
+    parseQuery "set #users.each.#name \"anon\""
+      `shouldBe` Right
+        ( Over
+            (compose (compose (field "users") each) (field "name"))
+            (constValue (String "anon"))
+        )

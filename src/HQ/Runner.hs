@@ -5,7 +5,7 @@
 {-# LANGUAGE StrictData #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 
-module HQ.Runner (RunnerF (..), Runner, runRunner, runRunnerIO, runRunnerIOWith, jsonRunner, ValueStream, runFold, runPreview, runSet, runDelete, runOver) where
+module HQ.Runner (RunnerF (..), Runner, runRunner, runRunnerIO, runRunnerIOWith, jsonRunner, ValueStream, runFold, runPreview, runDelete, runOver) where
 
 import Control.Monad.Error.Class (MonadError (throwError))
 import qualified Data.ByteString as BS
@@ -100,7 +100,7 @@ runOptic (Optic optic) = run optic
                   let element = fromFirst event rest
                   mConsumed <- lift (consumeValue element)
                   case mConsumed of
-                    Nothing -> lift $ throwError "unexpected end of input"
+                    Nothing -> throwError "unexpected end of input"
                     Just (events, afterValue) -> do
                       let freshCursor = mkCursorFromList events
                       join $ lift $ k freshCursor
@@ -123,12 +123,12 @@ runOptic (Optic optic) = run optic
                     let value = fromFirst valueEvent valueRest
                     mConsumed <- lift (consumeValue value)
                     case mConsumed of
-                      Nothing -> lift $ throwError "unexpected end of input"
+                      Nothing -> throwError "unexpected end of input"
                       Just (events, afterValue) -> do
                         let freshCursor = mkCursorFromList events
                         join $ lift $ k freshCursor
                         eachObject afterValue
-              _ -> lift $ throwError "invalid JSON object"
+              _ -> throwError "invalid JSON object"
 
     ----------------------------------------------------------------
     -- Scalar prisms
@@ -352,23 +352,16 @@ emitContainer closing cursor = void (emit closing cursor)
               emit closing' rest
 
 --------------------------------------------------------------------------------
--- Set and delete: document rewriting
+-- Over and delete: document rewriting
 --------------------------------------------------------------------------------
 
--- | What happens to a value focused by an optic: it is replaced with a
--- sequence of events (@set@), removed entirely (@delete@), or rewritten
--- by a transformation (@over@).
+-- | What happens to a value focused by an optic: it is removed entirely
+-- (@delete@) or rewritten by a transformation (@over@, including @set@,
+-- which is @over@ with a constant).
 data Splicer
-  = SpliceSet [JSONEvent]
-  | SpliceDelete
+  = SpliceDelete
   | SpliceTransform Transformation
   deriving (Show, Eq)
-
--- | Replace every value the optic focuses on with the given replacement
--- events, passing the rest of the document through unchanged (lens
--- @set@).  The replacement is spliced into the output verbatim.
-runSet :: Optic -> [JSONEvent] -> Cursor -> ExceptT Text IO ValueStream
-runSet optic replacement = runSplice (SpliceSet replacement) optic
 
 -- | Remove every value the optic focuses on from the document, passing
 -- the rest of the document through unchanged (lens @delete@/@omit@).
@@ -427,7 +420,6 @@ runSplice splicer (Optic optic) = run optic
 
     -- \| Emit the replacement for a value the whole optic lands on.
     spliceValue :: Splicer -> Cursor -> ExceptT Text IO ValueStream
-    spliceValue (SpliceSet events) _ = pure (S.each events)
     spliceValue SpliceDelete _ = pure mempty
     spliceValue (SpliceTransform transformation) cursor = do
       mConsumed <- consumeValue cursor
@@ -509,7 +501,7 @@ runSplice splicer (Optic optic) = run optic
         go n arr = do
           mNext <- lift $ next arr
           case mNext of
-            Nothing -> lift $ throwError "unexpected end of input while reading array"
+            Nothing -> throwError "unexpected end of input while reading array"
             Just (event, rest) -> case event of
               JSONEndArray -> S.yield JSONEndArray
               _ ->
@@ -543,13 +535,13 @@ runSplice splicer (Optic optic) = run optic
         go obj = do
           mNext <- lift $ next obj
           case mNext of
-            Nothing -> lift $ throwError "unexpected end of input while reading object"
+            Nothing -> throwError "unexpected end of input while reading object"
             Just (event, rest) -> case event of
               JSONEndObject -> S.yield JSONEndObject
               JSONObjectKey key -> do
                 mVal <- lift $ next rest
                 case mVal of
-                  Nothing -> lift $ throwError "unexpected end of input after object key"
+                  Nothing -> throwError "unexpected end of input after object key"
                   Just (valueEvent, valueRest) -> do
                     let value = fromFirst valueEvent valueRest
                     consumeElement value $ \originalEvents afterValue ->
@@ -559,7 +551,7 @@ runSplice splicer (Optic optic) = run optic
                           S.yield (JSONObjectKey key)
                           S.each originalEvents
                           go afterValue
-              _ -> lift $ throwError "invalid JSON object"
+              _ -> throwError "invalid JSON object"
 
     -- \| Traverse every element of an array (the @each@ traversal).
     rewriteEach :: Cursor -> Fix OpticF -> ExceptT Text IO ValueStream
@@ -581,7 +573,7 @@ runSplice splicer (Optic optic) = run optic
         go arr = do
           mNext <- lift $ next arr
           case mNext of
-            Nothing -> lift $ throwError "unexpected end of input while reading array"
+            Nothing -> throwError "unexpected end of input while reading array"
             Just (event, rest) -> case event of
               JSONEndArray -> S.yield JSONEndArray
               _ ->
@@ -600,18 +592,18 @@ runSplice splicer (Optic optic) = run optic
         go obj = do
           mNext <- lift $ next obj
           case mNext of
-            Nothing -> lift $ throwError "unexpected end of input while reading object"
+            Nothing -> throwError "unexpected end of input while reading object"
             Just (event, rest) -> case event of
               JSONEndObject -> S.yield JSONEndObject
               JSONObjectKey key -> do
                 mVal <- lift $ next rest
                 case mVal of
-                  Nothing -> lift $ throwError "unexpected end of input after object key"
+                  Nothing -> throwError "unexpected end of input after object key"
                   Just (valueEvent, valueRest) -> do
                     let value = fromFirst valueEvent valueRest
                     consumeElement value $ \originalEvents afterValue ->
                       spliceMember (JSONObjectKey key) (mkCursorFromList originalEvents) afterValue suffix go
-              _ -> lift $ throwError "invalid JSON object"
+              _ -> throwError "invalid JSON object"
 
     -- \| Splice one object member.  The key survives unless a @delete@
     -- lands on the member value as a whole; the walk then continues
@@ -627,10 +619,6 @@ runSplice splicer (Optic optic) = run optic
               S.yield key
               join (lift $ run suffix freshCursor)
               continue afterValue
-        SpliceSet _ -> do
-          S.yield key
-          join (lift $ run suffix freshCursor)
-          continue afterValue
         SpliceTransform _ -> do
           S.yield key
           join (lift $ run suffix freshCursor)
@@ -642,7 +630,7 @@ runSplice splicer (Optic optic) = run optic
     consumeElement cursor k = do
       mConsumed <- lift $ consumeValue cursor
       case mConsumed of
-        Nothing -> lift $ throwError "unexpected end of input"
+        Nothing -> throwError "unexpected end of input"
         Just (events, afterValue) -> k events afterValue
 
 data RunnerEnv = RunnerEnv
@@ -705,7 +693,6 @@ streamHandle chunkSize' handle = do
 executeQuery :: Query -> Cursor -> ExceptT Text IO ValueStream
 executeQuery (Preview optic) val = runPreview optic val
 executeQuery (Fold optic) val = runFold optic val
-executeQuery (Set optic value) val = runSet optic value val
 executeQuery (Over optic transformation) val = runOver optic transformation val
 executeQuery (Delete optic) val = runDelete optic val
 

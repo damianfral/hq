@@ -6,12 +6,12 @@ module HQ.RunnerSpec (spec) where
 import Data.Aeson (Value (..))
 import HQ.JSON.Cursor (Cursor, fromStream)
 import HQ.JSON.Decoder (decodeIO)
-import HQ.JSON.Event (JSONEvent (..))
+import HQ.JSON.Event (JSONEvent (..), eventsToValue)
 import HQ.JSON.Parser (parseValueEvents)
 import HQ.Optic (Optic)
 import HQ.Optic.Parser (parseOptic)
-import HQ.Runner (ValueStream, runDelete, runFold, runOver, runPreview, runSet)
-import HQ.Transformation (Transformation, add, combine, concatString, equal, not, or, replace, trim)
+import HQ.Runner (ValueStream, runDelete, runFold, runOver, runPreview)
+import HQ.Transformation (Transformation, add, combine, concatString, constValue, equal, not, or, replace, trim)
 import Relude hiding (Compose, id, many, not, or, some, subtract, toStrict)
 import Streaming (Of (..), Stream)
 import qualified Streaming.Prelude as S
@@ -69,13 +69,16 @@ runRewriteTest run input = runExceptT $ do
 
 -- | Parse an optic string and a replacement value, run @set@ against
 -- JSON input, and collect the rewritten document's events.
+--
+-- @set@ is @over@ with a constant transformation, so the harness drives
+-- 'runOver' with 'constValue'.
 runSetTest :: Text -> Text -> Text -> IO (Either Text [JSONEvent])
 runSetTest opticStr valueStr jsonInput =
   case parseOptic opticStr of
     Left err -> pure (Left (show err))
-    Right optic -> case parseValueEvents valueStr of
+    Right optic -> case parseValueEvents valueStr >>= eventsToValue of
       Left err -> pure (Left err)
-      Right events -> runRewriteTest (runSet optic events) jsonInput
+      Right value -> runRewriteTest (runOver optic (constValue value)) jsonInput
 
 -- | Parse an optic string and run @delete@ against JSON input,
 -- collecting the rewritten document's events.

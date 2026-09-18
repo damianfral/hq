@@ -3,11 +3,12 @@
 
 module HQ.CLISpec (spec) where
 
+import Data.Aeson (Value (..))
 import HQ.CLI
 import HQ.JSON.Encoder (EncodeStyle (..), Join (..), Raw (..))
-import HQ.JSON.Event (JSONEvent (..))
 import HQ.Optic (compose, each, field)
-import HQ.Query (Query (Delete, Fold, Preview, Set))
+import HQ.Query (Query (Delete, Fold, Over, Preview))
+import HQ.Transformation (constValue)
 import Options.Applicative (ParserResult (..), defaultPrefs, execParserPure)
 import Relude hiding (Compose, id)
 import Test.Syd
@@ -55,18 +56,18 @@ spec = do
 
     it "parses set with a field optic and value" $ do
       optQuery <$> parseCLI ["set", "#name", "\"bob\""]
-      `shouldBe` Right (Set (field "name") [JSONString "bob"])
+      `shouldBe` Right (Over (field "name") (constValue (String "bob")))
 
     it "parses set with each and a number" $ do
       optQuery <$> parseCLI ["set", "each", "0"]
-      `shouldBe` Right (Set each [JSONNumber 0])
+      `shouldBe` Right (Over each (constValue (Number 0)))
 
     it "parses set with a composed optic" $ do
       optQuery <$> parseCLI ["set", "#users.each.#name", "\"anon\""]
       `shouldBe` Right
-        ( Set
+        ( Over
             (compose (compose (field "users") each) (field "name"))
-            [JSONString "anon"]
+            (constValue (String "anon"))
         )
 
     it "parses delete with a field optic" $ do
@@ -81,5 +82,5 @@ spec = do
       case parseCLI ["set", "#name", "\"bob\"", "-c"] of
         Left err -> expectationFailure (toString err)
         Right opts -> do
-          optQuery opts `shouldBe` Set (field "name") [JSONString "bob"]
+          optQuery opts `shouldBe` Over (field "name") (constValue (String "bob"))
           optCompact opts `shouldBe` Compact

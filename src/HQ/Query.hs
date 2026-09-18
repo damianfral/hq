@@ -4,7 +4,6 @@
 module HQ.Query where
 
 import Control.Comonad.Cofree (Cofree ((:<)))
-import HQ.JSON.Event (JSONEvent)
 import HQ.Optic
 import HQ.Optic.AST
 import HQ.Optic.OpticType (OpticType (..))
@@ -17,7 +16,6 @@ import Relude hiding (Compose, many, not, or, some, subtract)
 data Query
   = Fold Optic
   | Preview Optic
-  | Set Optic [JSONEvent]
   | -- | Apply a transformation to each of the focused values.
     Over Optic Transformation
   | Delete Optic
@@ -27,7 +25,6 @@ getOptic :: Query -> Optic
 getOptic (Fold optic) = optic
 getOptic (Preview optic) = optic
 getOptic (Over optic _) = optic
-getOptic (Set optic _) = optic
 getOptic (Delete optic) = optic
 
 -- | The optic type a query requires: how many focus points it expects.
@@ -36,7 +33,6 @@ getOptic (Delete optic) = optic
 queryOpticType :: Query -> OpticType
 queryOpticType (Fold _) = OpticTraversal
 queryOpticType (Preview _) = OpticPrism
-queryOpticType (Set _ _) = OpticTraversal
 queryOpticType (Over _ _) = OpticTraversal
 queryOpticType (Delete _) = OpticTraversal
 

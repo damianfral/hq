@@ -6,16 +6,16 @@
 
 module HQ.CLI (CLIOptions (..), optParserInfo, runCLI) where
 
+import Data.Aeson (Value)
 import Data.Version (showVersion)
 import HQ.JSON.Encoder (Join (..), Raw (..))
 import qualified HQ.JSON.Encoder as Enc
-import HQ.JSON.Event (JSONEvent)
-import HQ.JSON.Parser (parseValueEvents)
+import HQ.JSON.Parser (parseValue)
 import HQ.Optic (Optic)
 import HQ.Optic.Parser (parseOptic)
 import HQ.Query
 import HQ.Runner (jsonRunner, runRunnerIOWith)
-import HQ.Transformation (Transformation)
+import HQ.Transformation (Transformation, constValue)
 import HQ.Transformation.Parser (parseTransformation)
 import Options.Applicative
 import Paths_hq (version)
@@ -38,8 +38,8 @@ data CLIOptions = CLIOptions
 opticReader :: ReadM Optic
 opticReader = eitherReader $ first errorBundlePretty . parseOptic . toText
 
-valueReader :: ReadM [JSONEvent]
-valueReader = eitherReader $ first toString . parseValueEvents . toText
+valueReader :: ReadM Value
+valueReader = eitherReader $ first errorBundlePretty . parseValue . toText
 
 transformationReader :: ReadM Transformation
 transformationReader = eitherReader $ first errorBundlePretty . parseTransformation . toText
@@ -49,7 +49,7 @@ queryParser =
   hsubparser
     $ command "fold" (info (Fold <$> opticArg) mempty)
     <> command "preview" (info (Preview <$> opticArg) mempty)
-    <> command "set" (info (Set <$> opticArg <*> valueArg) mempty)
+    <> command "set" (info (Over <$> opticArg <*> (constValue <$> valueArg)) mempty)
     <> command "over" (info (Over <$> opticArg <*> transformationArg) mempty)
     <> command "delete" (info (Delete <$> opticArg) mempty)
   where

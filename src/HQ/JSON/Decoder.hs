@@ -795,5 +795,5 @@ decodeIO :: StreamIO Text () -> StreamIO JSONEvent ()
 decodeIO input = do
   result <- decode input
   case result of
-    Left err -> lift $ throwError (show err)
+    Left err -> throwError (show err)
     Right () -> pure ()
