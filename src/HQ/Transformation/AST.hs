@@ -8,7 +8,7 @@ import Data.Aeson.Types (Value (..))
 import Data.Fix (Fix (..), foldFix)
 import HQ.Transformation
 import HQ.Transformation.TransformationType
-import Relude hiding (many, not, or, some, subtract, toStrict)
+import Relude hiding (Const, many, not, or, some, subtract, toStrict)
 import Relude.Extra (view)
 
 -- | A transformation annotated with input and output value types at each
@@ -27,7 +27,8 @@ data TransformationTypeError
 
 -- | Build the type-annotated AST of a transformation, failing when the steps
 -- of a 'Combine' do not line up: the output type of the right step must
--- match the input type of the left step.
+-- match the input type of the left step, unless the left step accepts any
+-- value (a constant).
 buildTransformationAST :: Transformation -> Either TransformationTypeError TransformationAST
 buildTransformationAST (Transformation transformation) =
   TransformationAST <$> foldFix algebra transformation
@@ -42,6 +43,7 @@ buildTransformationAST (Transformation transformation) =
     algebra Trim = pure $ TransformationType ValueString ValueString :< Trim
     algebra (Replace a b) = pure $ TransformationType ValueString ValueString :< Replace a b
     algebra (Equal v) = pure $ TransformationType (valueType v) ValueBool :< Equal v
+    algebra (Const v) = pure $ TransformationType ValueAny (valueType v) :< Const v
     algebra Not = pure $ TransformationType ValueBool ValueBool :< Not
     algebra (Or left right) = do
       l <- left
@@ -52,7 +54,7 @@ buildTransformationAST (Transformation transformation) =
       r <- right
       let lt = view _extract l
           rt = view _extract r
-      if transformationOutput rt == transformationInput lt
+      if transformationInput lt == ValueAny || transformationOutput rt == transformationInput lt
         then pure $ TransformationType (transformationInput rt) (transformationOutput lt) :< Combine l r
         else Left $ InvalidCombine (subTransformation (Combine l r)) (transformationOutput rt) (transformationInput lt)
 

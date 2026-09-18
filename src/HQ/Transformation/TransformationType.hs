@@ -12,6 +12,9 @@ data ValueType
   | ValueNumber
   | ValueBool
   | ValueNull
+  | -- | Any value: the input type of a constant transformation, which
+    -- accepts whatever value it is given.
+    ValueAny
   deriving (Eq, Show)
 
 -- | TransformationType of a transformation: its input and output value types.

@@ -21,7 +21,7 @@ import Data.Text.Lazy (toStrict)
 import Data.Vector (Vector)
 import qualified Data.Vector as Vector
 import GHC.Show (ShowS, appPrec)
-import Relude hiding (many, not, or, some, subtract, toStrict)
+import Relude hiding (Const, many, not, or, some, subtract, toStrict)
 import Prelude (Show (showsPrec), showParen, showString)
 
 -- | Base functor for transformation expressions over JSON values.
@@ -50,6 +50,8 @@ data TransformationF a
     Replace Text Text
   | -- | @== v@ or @= v@: test the current value for equality with @v@.
     Equal Value
+  | -- | @const v@: replace the current value with @v@, whatever it is.
+    Const Value
   | -- | @not@: negate the current boolean value.
     Not
   | -- | @a or b@: boolean disjunction of two transformations.
@@ -71,6 +73,7 @@ instance Eq Transformation where
   Transformation (Fix Trim) == Transformation (Fix Trim) = True
   Transformation (Fix (Replace a b)) == Transformation (Fix (Replace c d)) = a == c && b == d
   Transformation (Fix (Equal a)) == Transformation (Fix (Equal b)) = a == b
+  Transformation (Fix (Const a)) == Transformation (Fix (Const b)) = a == b
   Transformation (Fix Not) == Transformation (Fix Not) = True
   Transformation (Fix (Or a b)) == Transformation (Fix (Or c d)) =
     Transformation a == Transformation c && Transformation b == Transformation d
@@ -100,6 +103,8 @@ instance Show Transformation where
       . showsPrec (appPrec + 1) b
   showsPrec d (Transformation (Fix (Equal v))) =
     showParen (d > appPrec) $ showString "== " . showsJson v
+  showsPrec d (Transformation (Fix (Const v))) =
+    showParen (d > appPrec) $ showString "const " . showsJson v
   showsPrec _ (Transformation (Fix Not)) = showString "not"
   showsPrec d (Transformation (Fix (Or a b))) =
     showParen (d > orPrec)
@@ -156,6 +161,10 @@ replace a b = Transformation (Fix (Replace a b))
 equal :: Value -> Transformation
 equal = Transformation . Fix . Equal
 
+-- | @const v@: replace the current value with @v@, whatever it is.
+constValue :: Value -> Transformation
+constValue = Transformation . Fix . Const
+
 -- | @not@: negate the current boolean value.
 not :: Transformation
 not = Transformation (Fix Not)
@@ -188,6 +197,7 @@ runTransformation (Transformation transformation) = run transformation
       Trim -> withString (String . Data.Text.strip) value
       Replace needle replacement -> withString (String . Data.Text.replace needle replacement) value
       Equal literal -> pure (Bool (value == literal))
+      Const v -> pure v
       Not -> withBool (Bool . Data.Bool.not) value
       Or left right -> do
         result <- run left value

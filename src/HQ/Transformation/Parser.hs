@@ -26,7 +26,7 @@ parseTransformation =
 -- > atom   := '+' number | '*' number | '-' number | '/' number
 -- >        |  '++' string | 'concat' array | 'trim' | 'not'
 -- >        |  'replace' string string | ('==' | '=') value
--- >        |  '(' or ')'
+-- >        |  'const' value | '(' or ')'
 --
 -- JSON literals (numbers, strings and arrays) are parsed with the aeson
 -- value parser from "HQ.JSON.Parser", so numbers are 'Scientific'.
@@ -46,6 +46,7 @@ combineParser =
 atomParser :: Parser Transformation
 atomParser =
   parenParser
+    <|> constParser
     <|> equalParser
     <|> try strConcatParser
     <|> addParser
@@ -59,6 +60,9 @@ atomParser =
 
 parenParser :: Parser Transformation
 parenParser = lexeme (char '(') *> transformationParser <* lexeme (char ')')
+
+constParser :: Parser Transformation
+constParser = constValue <$> (symbol "const" *> jsonValueParser)
 
 equalParser :: Parser Transformation
 equalParser = do

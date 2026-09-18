@@ -21,6 +21,28 @@ spec = describe "HQ.Transformation.AST" $ do
       rootType (concatString " x")
         `shouldBe` Right (TransformationType ValueString ValueString)
 
+    it "tags a constant as any input to its own type" $ do
+      rootType (constValue (Number 3))
+        `shouldBe` Right (TransformationType ValueAny ValueNumber)
+
+    it "composes a constant before a step" $ do
+      rootType (combine (constValue (Number 3)) (add 1))
+        `shouldBe` Right (TransformationType ValueNumber ValueNumber)
+
+    it "composes a step before a constant" $ do
+      rootType (combine (add 1) (constValue (Number 3)))
+        `shouldBe` Right (TransformationType ValueAny ValueNumber)
+
+    it "rejects a step before a mismatched constant" $ do
+      let expected =
+            InvalidCombine
+              (combine (add 1) (constValue (String "x")))
+              ValueString
+              ValueNumber
+      case buildTransformationAST (combine (add 1) (constValue (String "x"))) of
+        Left err -> err `shouldBe` expected
+        Right _ -> expectationFailure "expected an InvalidCombine"
+
     it "types a composition right to left" $ do
       rootType (combine (add 1) (multiply 2))
         `shouldBe` Right (TransformationType ValueNumber ValueNumber)

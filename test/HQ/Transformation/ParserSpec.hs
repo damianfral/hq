@@ -37,6 +37,17 @@ spec = describe "HQ.Transformation.Parser" $ do
       parseTransformation "replace \"ab\" \"bc\""
         `shouldBe` Right (replace "ab" "bc")
 
+  describe "constants" $ do
+    it "parses a constant number" $ do
+      parseTransformation "const 3" `shouldBe` Right (constValue (Number 3))
+
+    it "parses a constant string" $ do
+      parseTransformation "const \"x\"" `shouldBe` Right (constValue (String "x"))
+
+    it "composes a constant with arithmetic" $ do
+      parseTransformation "const 3 . +1"
+        `shouldBe` Right (combine (constValue (Number 3)) (add 1))
+
   describe "booleans" $ do
     it "parses equality with ==" $ do
       parseTransformation "== 3" `shouldBe` Right (equal (Number 3))
