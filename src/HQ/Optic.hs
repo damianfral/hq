@@ -46,6 +46,7 @@ data OpticF a
     Prism1
   | -- | Prism: focus on the second element of a JSON array. Fails on non-arrays or arrays with fewer than 2 elements.
     Prism2
+  | Ix Int
   deriving (Eq, Ord, Show, Functor)
 
 -- | An optic path over JSON values.
@@ -90,6 +91,7 @@ instance Show Optic where
   showsPrec _ (Optic (Fix PrismJust)) = showString "_Just"
   showsPrec _ (Optic (Fix Prism1)) = showString "_1"
   showsPrec _ (Optic (Fix Prism2)) = showString "_2"
+  showsPrec _ (Optic (Fix (Ix i))) = showString $ "ix " <> show i
 
 -- | Focus on a named field of a JSON object (affine traversal).
 field :: Text -> Optic
@@ -147,3 +149,7 @@ _1 = Optic (Fix Prism1)
 -- | Prism: focus on the second element of a JSON array.
 _2 :: Optic
 _2 = Optic (Fix Prism2)
+
+-- | Focus on a named field of a JSON object (affine traversal).
+ix :: Int -> Optic
+ix = Optic . Fix . Ix

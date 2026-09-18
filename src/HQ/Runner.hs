@@ -46,6 +46,7 @@ runOptic (Optic optic) = run optic
       PrismJust -> runJust cursor k
       Prism1 -> runIndex 0 cursor k
       Prism2 -> runIndex 1 cursor k
+      Ix i -> runIndex i cursor k
 
     runField :: Text -> Cursor -> K -> ExceptT Text IO ValueStream
     runField name cursor k =
@@ -405,6 +406,7 @@ runSplice splicer (Optic optic) = run optic
       PrismJust -> rewriteJust cursor suffix
       Prism1 -> rewriteIndex 0 cursor suffix
       Prism2 -> rewriteIndex 1 cursor suffix
+      Ix i -> rewriteIndex i cursor suffix
 
     -- \| Compose two optic steps, normalizing away the identity optic.
     --
@@ -432,6 +434,7 @@ runSplice splicer (Optic optic) = run optic
       Id -> pure True
       Field _ -> pure False
       Each -> pure False
+      Ix _ -> pure False
       Prism1 -> pure False
       Prism2 -> pure False
       PrismString -> peek isString

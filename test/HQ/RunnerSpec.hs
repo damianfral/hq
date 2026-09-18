@@ -120,10 +120,16 @@ previewSpec = describe "preview" $ do
   it "returns the first array element with _1"
     $ runQueryPreviewTest "_1" "[10,20]"
     `shouldReturn` Right [JSONNumber 10]
+  it "returns the proper array element with ix" $ do
+    runQueryPreviewTest "ix 0" "[0,1,2,3]" `shouldReturn` Right [JSONNumber 0]
+    runQueryPreviewTest "ix 3" "[0,1,2,3]" `shouldReturn` Right [JSONNumber 3]
 
   it "returns nothing when _1 finds no element"
     $ runQueryPreviewTest "_1" "[]"
     `shouldReturn` Right []
+  it "returns nothing when ix finds no element" $ do
+    runQueryPreviewTest "ix 0" "[]" `shouldReturn` Right []
+    runQueryPreviewTest "ix 4" "[0,1,2,3]" `shouldReturn` Right []
 
   it "matches a string prism"
     $ runQueryPreviewTest "_String" "\"hello\""

@@ -10,6 +10,7 @@ import HQ.Optic
 import Relude hiding (Compose, id, many, some)
 import Text.Megaparsec
 import Text.Megaparsec.Char
+import Text.Megaparsec.Char.Lexer (decimal)
 import Prelude (Read (..))
 
 parseOptic :: Text -> Either (ParseErrorBundle Text Void) Optic
@@ -22,7 +23,8 @@ opticParser = do
   pure $ foldl' compose initial opts
 
 opticAtomParser :: Parser Optic
-opticAtomParser = fieldParser <|> eachParser <|> idParser <|> prismParser
+opticAtomParser =
+  fieldParser <|> eachParser <|> idParser <|> prismParser <|> ixParser
 
 fieldParser :: Parser Optic
 fieldParser = char '#' >> field <$> identifier
@@ -38,6 +40,9 @@ idParser = symbol "id" $> id
 
 prismParser :: Parser Optic
 prismParser = char '_' *> prismNameParser
+
+ixParser :: Parser Optic
+ixParser = symbol "ix" >> ix <$> decimal
 
 prismNameParser :: Parser Optic
 prismNameParser =

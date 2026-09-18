@@ -23,22 +23,16 @@ spec = describe "HQ.JSON.Encoder" $ do
 -- Helpers
 --------------------------------------------------------------------------------
 
--- | Encode events to a single Text value using compact style.
+-- | Encode events to a single Text value using compact style, without
+-- separators between top-level values.
 encodeEvents :: [JSONEvent] -> Text
-encodeEvents = encodeEventsWith $ EncoderConfig Compact $ ValueOptions NoRaw NoJoin
+encodeEvents = encodeEventsWith $ EncoderConfig Compact $ ValueOptions NoRaw Join
 
--- | Encode events with the given style to a single Text value.
+-- | Encode events with the given 'EncoderConfig' to a single Text
+-- value.
 encodeEventsWith :: EncoderConfig -> [JSONEvent] -> Text
 encodeEventsWith encConfig events = runIdentity $ do
   result <- S.toList (encode encConfig 32 (S.each events))
-  case result of
-    chunks :> _ -> pure $ decodeUtf8 $ mconcat chunks
-
--- | Encode events with the given style and value options to a single
--- Text value.
-encodeEventsWithOptions :: EncoderConfig -> [JSONEvent] -> Text
-encodeEventsWithOptions encoderConfig events = runIdentity $ do
-  result <- S.toList (encode encoderConfig 32 (S.each events))
   case result of
     chunks :> _ -> pure $ decodeUtf8 $ mconcat chunks
 
@@ -197,8 +191,8 @@ encodeSpec = describe "encode" $ do
 
 encodePrettySpec :: Spec
 encodePrettySpec = describe "pretty encode" $ do
-  let prettyConfig = EncoderConfig (Pretty 2) $ ValueOptions NoRaw NoJoin
-  let compactConfig = EncoderConfig Compact $ ValueOptions NoRaw NoJoin
+  let prettyConfig = EncoderConfig (Pretty 2) $ ValueOptions NoRaw Join
+  let compactConfig = EncoderConfig Compact $ ValueOptions NoRaw Join
 
   describe "scalars are identical in compact and pretty" $ do
     let scalarCases =
@@ -434,19 +428,19 @@ encodePrettySpec = describe "pretty encode" $ do
 valueOptionsSpec :: Spec
 valueOptionsSpec = describe "value output options" $ do
   describe "newline separation" $ do
-    let encConfig = EncoderConfig Compact $ ValueOptions Raw NoJoin
+    let encConfig = EncoderConfig Compact $ ValueOptions NoRaw NoJoin
     it "produces nothing for an empty stream" $ do
-      encodeEventsWithOptions encConfig [] `shouldBe` ""
+      encodeEventsWith encConfig [] `shouldBe` ""
     it "terminates a single scalar with a newline" $ do
-      encodeEventsWithOptions encConfig [JSONNumber 1] `shouldBe` "1\n"
+      encodeEventsWith encConfig [JSONNumber 1] `shouldBe` "1\n"
     it "places multiple scalars on separate lines" $ do
-      encodeEventsWithOptions
+      encodeEventsWith
         encConfig
         [JSONNumber 1, JSONString "a", JSONBool True, JSONNull]
       `shouldBe` "1\n\"a\"\ntrue\nnull\n"
 
     it "places container values on separate lines" $ do
-      encodeEventsWithOptions
+      encodeEventsWith
         encConfig
         [ JSONBeginObject,
           JSONObjectKey "a",
@@ -458,7 +452,7 @@ valueOptionsSpec = describe "value output options" $ do
         ]
       `shouldBe` "{\"a\":1}\n[2]\n"
     it "keeps a nested container inside one value" $ do
-      encodeEventsWithOptions
+      encodeEventsWith
         encConfig
         [ JSONBeginObject,
           JSONObjectKey "a",
@@ -471,13 +465,13 @@ valueOptionsSpec = describe "value output options" $ do
         ]
       `shouldBe` "{\"a\":{\"b\":1}}\n2\n"
     it "emits empty containers as single-line values" $ do
-      encodeEventsWithOptions
+      encodeEventsWith
         encConfig
         [JSONBeginObject, JSONEndObject, JSONBeginArray, JSONEndArray]
       `shouldBe` "{}\n[]\n"
     it "applies pretty formatting inside each value" $ do
-      encodeEventsWithOptions
-        encConfig
+      encodeEventsWith
+        (EncoderConfig (Pretty 2) $ ValueOptions NoRaw NoJoin)
         [ JSONBeginObject,
           JSONObjectKey "a",
           JSONNumber 1,
@@ -493,7 +487,7 @@ valueOptionsSpec = describe "value output options" $ do
               JSONEndObject,
               JSONString "x"
             ]
-      encodeEventsWithOptions encConfig events
+      encodeEventsWith (EncoderConfig Compact $ ValueOptions NoRaw Join) events
         `shouldBe` encodeEvents events
     it "output is independent of chunk size" $ do
       let events =
@@ -506,7 +500,7 @@ valueOptionsSpec = describe "value output options" $ do
               JSONNumber 2,
               JSONEndArray
             ]
-          expected = encodeEventsWithOptions encConfig events
+          expected = encodeEventsWith encConfig events
       forM_ [1, 2, 3, 5, 8, 16] $ \chunkSize -> do
         let concatenated = runIdentity $ do
               result <- S.toList (encode encConfig chunkSize (S.each events))
@@ -524,32 +518,32 @@ valueOptionsSpec = describe "value output options" $ do
               JSONNumber 2,
               JSONEndArray
             ]
-          encoded = encodeEventsWithOptions encConfig events
+          encoded = encodeEventsWith encConfig events
           lines' = filter (not . T.null) (T.splitOn "\n" encoded)
           decodedLines = map (fromRight [] . decodeStreaming . pure) lines'
       mconcat decodedLines `shouldBe` events
 
   describe "raw string output" $ do
-    let encConfig = EncoderConfig (Pretty 2) $ ValueOptions Raw NoJoin
+    let encConfig = EncoderConfig Compact $ ValueOptions Raw Join
     it "renders a top-level string without quotes or escapes" $ do
-      encodeEventsWithOptions encConfig [JSONString "a\"b\n雪"] `shouldBe` "a\"b\n雪"
+      encodeEventsWith encConfig [JSONString "a\"b\n雪"] `shouldBe` "a\"b\n雪"
     it "keeps strings inside containers quoted" $ do
-      encodeEventsWithOptions
+      encodeEventsWith
         encConfig
         [JSONBeginArray, JSONString "x\\y", JSONEndArray]
       `shouldBe` "[\"x\\\\y\"]"
     it "keeps object keys quoted" $ do
-      encodeEventsWithOptions
+      encodeEventsWith
         encConfig
         [JSONBeginObject, JSONObjectKey "k\"", JSONString "v", JSONEndObject]
       `shouldBe` "{\"k\\\"\":\"v\"}"
     it "combines raw strings with newline separation" $ do
-      encodeEventsWithOptions
-        encConfig
+      encodeEventsWith
+        (EncoderConfig Compact $ ValueOptions Raw NoJoin)
         [JSONString "one", JSONString "two", JSONNumber 3]
       `shouldBe` "one\ntwo\n3\n"
     it "combines raw strings with joining" $ do
-      encodeEventsWithOptions
+      encodeEventsWith
         encConfig
         [JSONString "one", JSONString "two", JSONNumber 3]
       `shouldBe` "onetwo3"
@@ -601,7 +595,7 @@ prettyRoundtrip input = case decodeStreaming [input] of
       Left err -> expectationFailure $ "Re-decode failed: " <> show err
       Right events' -> events `shouldBe` events'
   where
-    encConfig = EncoderConfig (Pretty 2) $ ValueOptions NoRaw NoJoin
+    encConfig = EncoderConfig (Pretty 2) $ ValueOptions NoRaw Join
 
 -- | Verify that encode . decode produces the same events (wrapped in Either).
 roundtrip :: Text -> IO ()
