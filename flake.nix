@@ -26,13 +26,7 @@
       };
     filteredSrc = nix-filter.lib {
       root = ./.;
-      include = [
-        "app/"
-        "src/"
-        "test/"
-        "package.yaml"
-        "LICENSE"
-      ];
+      include = ["app" "src/" "test/" "package.yaml" "LICENSE"];
     };
   in
     {
@@ -78,8 +72,42 @@
       in rec {
         packages.hq = pkgs.hq;
         packages.default = packages.hq;
+        packages.hq-bench = pkgs.stdenv.mkDerivation {
+          name = "hq-bench";
+          pname = "hq-bench";
+          version = "0.0.0.1";
+          src = ./bench;
+          dontUnpack = true;
+          nativeBuildInputs = [pkgs.makeWrapper];
+          buildInputs = [pkgs.hq pkgs.jq pkgs.time];
+          buildPhase = ''
+            set -xue
+            mkdir -p "$out/bin"
+            cp "$src/bench.sh" "$out/bin/hq-bench"
+            chmod +x "$out/bin/hq-bench"
+            wrapProgram "$out/bin/hq-bench" \
+              --prefix PATH : ${pkgs.lib.makeBinPath [pkgs.bash pkgs.time pkgs.hq pkgs.jq pkgs.coreutils pkgs.gawk]}
+          '';
+        };
+        packages.hq-bench-results = pkgs.stdenv.mkDerivation {
+          name = "hq-bench-results";
+          pname = "hq-bench-results";
+          version = "0.0.0.1";
+          src = ./test/test-resources;
+          dontUnpack = true;
+          nativeBuildInputs = [pkgs.gnuplot];
+          buildInputs = [packages.hq-bench];
+          buildPhase = ''
+            hq-bench $src/5MB.json hq-bench.csv
+            cp ${./bench/plots.gp} plots.gp
+            export XDG_CACHE_HOME="$TMPDIR/.cache"
+            gnuplot plots.gp
+          '';
+          installPhase = "mkdir $out && cp -t $out hq-bench.csv bench_runtime.svg bench_memory.svg";
+        };
 
         apps.hq = flake-utils.lib.mkApp {drv = pkgs.hq;};
+        apps.hq-bench = flake-utils.lib.mkApp {drv = packages.hq-bench;};
         apps.default = apps.hq;
 
         devShells.default = pkgs.haskellPackages.shellFor {
