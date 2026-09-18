@@ -15,6 +15,8 @@ import HQ.Optic (Optic)
 import HQ.Optic.Parser (parseOptic)
 import HQ.Query
 import HQ.Runner (jsonRunner, runRunnerIOWith)
+import HQ.Transformation (Transformation)
+import HQ.Transformation.Parser (parseTransformation)
 import Options.Applicative
 import Paths_hq (version)
 import Relude
@@ -39,16 +41,21 @@ opticReader = eitherReader $ first errorBundlePretty . parseOptic . toText
 valueReader :: ReadM [JSONEvent]
 valueReader = eitherReader $ first toString . parseValueEvents . toText
 
+transformationReader :: ReadM Transformation
+transformationReader = eitherReader $ first errorBundlePretty . parseTransformation . toText
+
 queryParser :: Parser Query
 queryParser =
   hsubparser
     $ command "fold" (info (Fold <$> opticArg) mempty)
     <> command "preview" (info (Preview <$> opticArg) mempty)
     <> command "set" (info (Set <$> opticArg <*> valueArg) mempty)
+    <> command "over" (info (Over <$> opticArg <*> transformationArg) mempty)
     <> command "delete" (info (Delete <$> opticArg) mempty)
   where
     opticArg = argument opticReader $ metavar "OPTIC"
     valueArg = argument valueReader $ metavar "VALUE"
+    transformationArg = argument transformationReader $ metavar "TRANSFORMATION"
 
 optParser :: Parser CLIOptions
 optParser = do

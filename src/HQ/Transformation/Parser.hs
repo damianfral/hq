@@ -16,7 +16,8 @@ import Text.Megaparsec.Char
 
 -- | Parse a single transformation expression, e.g. @+1 . == 3@.
 parseTransformation :: Text -> Either (ParseErrorBundle Text Void) Transformation
-parseTransformation = parse (spaceConsumer *> transformationParser <* eof) "transformation"
+parseTransformation =
+  parse (spaceConsumer *> transformationParser <* eof) "transformation"
 
 -- | Grammar of the DSL, loosest to tightest:
 --
@@ -39,10 +40,8 @@ orParser = do
   pure $ foldl' or t0 rest
 
 combineParser :: Parser Transformation
-combineParser = do
-  t0 <- atomParser
-  rest <- many (symbol "." *> atomParser)
-  pure $ foldl' combine t0 rest
+combineParser =
+  foldl' combine <$> atomParser <*> many (symbol "." *> atomParser)
 
 atomParser :: Parser Transformation
 atomParser =

@@ -3,14 +3,16 @@
 
 module HQ.RunnerSpec (spec) where
 
+import Data.Aeson (Value (..))
 import HQ.JSON.Cursor (Cursor, fromStream)
 import HQ.JSON.Decoder (decodeIO)
 import HQ.JSON.Event (JSONEvent (..))
 import HQ.JSON.Parser (parseValueEvents)
 import HQ.Optic (Optic)
 import HQ.Optic.Parser (parseOptic)
-import HQ.Runner (ValueStream, runDelete, runFold, runPreview, runSet)
-import Relude hiding (Compose, id)
+import HQ.Runner (ValueStream, runDelete, runFold, runOver, runPreview, runSet)
+import HQ.Transformation (Transformation, add, combine, concatString, equal, not, or, replace, trim)
+import Relude hiding (Compose, id, many, not, or, some, subtract, toStrict)
 import Streaming (Of (..), Stream)
 import qualified Streaming.Prelude as S
 import Test.Syd
@@ -82,6 +84,14 @@ runDeleteTest opticStr jsonInput =
   case parseOptic opticStr of
     Left err -> pure (Left (show err))
     Right optic -> runRewriteTest (runDelete optic) jsonInput
+
+-- | Parse an optic string and a transformation, run @over@ against JSON
+-- input, and collect the rewritten document's events.
+runOverTest :: Text -> Transformation -> Text -> IO (Either Text [JSONEvent])
+runOverTest opticStr transformation jsonInput =
+  case parseOptic opticStr of
+    Left err -> pure (Left (show err))
+    Right optic -> runRewriteTest (runOver optic transformation) jsonInput
 
 --------------------------------------------------------------------------------
 -- preview
@@ -393,6 +403,109 @@ deleteSpec = describe "delete" $ do
         JSONEndObject
       ]
 
+-------------------------------------------------------------------------------
+-- over
+-------------------------------------------------------------------------------
+
+overSpec :: Spec
+overSpec = describe "over" $ do
+  it "adds to every array element" $ do
+    runOverTest "each" (add 1) "[1,2,3]"
+    `shouldReturn` Right
+      [JSONBeginArray, JSONNumber 2, JSONNumber 3, JSONNumber 4, JSONEndArray]
+
+  it "adds to a field value" $ do
+    runOverTest "#age" (add 1) "{\"name\":\"alice\",\"age\":30}"
+    `shouldReturn` Right
+      [ JSONBeginObject,
+        JSONObjectKey "name",
+        JSONString "alice",
+        JSONObjectKey "age",
+        JSONNumber 31,
+        JSONEndObject
+      ]
+
+  it "appends to string values" $ do
+    runOverTest "each . _String" (concatString "!") "[1,\"a\",\"b\"]"
+    `shouldReturn` Right
+      [ JSONBeginArray,
+        JSONNumber 1,
+        JSONString "a!",
+        JSONString "b!",
+        JSONEndArray
+      ]
+
+  it "trims string values" $ do
+    runOverTest "each . _String" trim "[\"  hi  \",5]"
+    `shouldReturn` Right
+      [JSONBeginArray, JSONString "hi", JSONNumber 5, JSONEndArray]
+
+  it "replaces substrings in string values" $ do
+    runOverTest "#name" (replace "a" "e") "{\"name\":\"alice\"}"
+    `shouldReturn` Right
+      [JSONBeginObject, JSONObjectKey "name", JSONString "elice", JSONEndObject]
+
+  it "maps values to booleans" $ do
+    runOverTest "each" (equal (Number 1)) "[1,2,1]"
+    `shouldReturn` Right
+      [ JSONBeginArray,
+        JSONBool True,
+        JSONBool False,
+        JSONBool True,
+        JSONEndArray
+      ]
+
+  it "negates boolean values" $ do
+    runOverTest "each . _Bool" not "[true,false]"
+    `shouldReturn` Right
+      [JSONBeginArray, JSONBool False, JSONBool True, JSONEndArray]
+
+  it "disjoins two transformations with or" $ do
+    runOverTest "each" (or (equal (Number 1)) (equal (Number 3))) "[1,2,3]"
+    `shouldReturn` Right
+      [ JSONBeginArray,
+        JSONBool True,
+        JSONBool False,
+        JSONBool True,
+        JSONEndArray
+      ]
+
+  it "composes transformations right-to-left" $ do
+    runOverTest "each" (combine (equal (Number 3)) (add 1)) "[1,2,3]"
+    `shouldReturn` Right
+      [ JSONBeginArray,
+        JSONBool False,
+        JSONBool True,
+        JSONBool False,
+        JSONEndArray
+      ]
+
+  it "rewrites values focused by a composed optic" $ do
+    runOverTest "#users.each.#age" (add 1) "{\"users\":[{\"age\":1},{\"age\":2}]}"
+    `shouldReturn` Right
+      [ JSONBeginObject,
+        JSONObjectKey "users",
+        JSONBeginArray,
+        JSONBeginObject,
+        JSONObjectKey "age",
+        JSONNumber 2,
+        JSONEndObject,
+        JSONBeginObject,
+        JSONObjectKey "age",
+        JSONNumber 3,
+        JSONEndObject,
+        JSONEndArray,
+        JSONEndObject
+      ]
+
+  it "replaces the whole document with id" $ do
+    runOverTest "id" (equal (Number 1)) "[1,2]"
+    `shouldReturn` Right [JSONBool False]
+
+  it "fails when the transformation does not fit the value" $ do
+    runOverTest "each" (add 1) "[\"a\",1]"
+    `shouldReturn` Left "expected a number"
+
 spec :: Spec
 spec = describe "HQ.Runner" $ do
   eachArraySpec
@@ -403,6 +516,7 @@ spec = describe "HQ.Runner" $ do
   previewSpec
   setSpec
   deleteSpec
+  overSpec
 
 --------------------------------------------------------------------------------
 -- field

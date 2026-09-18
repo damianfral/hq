@@ -7,6 +7,7 @@ import HQ.JSON.Parser (Parser, jsonValueParser, parseValueEvents)
 import HQ.Optic
 import HQ.Optic.Parser (opticParser, spaceConsumer, symbol)
 import HQ.Query
+import HQ.Transformation.Parser (transformationParser)
 import Relude
 import Text.Megaparsec
 
@@ -14,7 +15,7 @@ parseQuery :: Text -> Either (ParseErrorBundle Text Void) Query
 parseQuery = parse (spaceConsumer *> queryParser <* eof) "query"
 
 queryParser :: Parser Query
-queryParser = setParser <|> deleteParser <|> viewOrFoldParser
+queryParser = setParser <|> deleteParser <|> overParser <|> viewOrFoldParser
 
 setParser :: Parser Query
 setParser = do
@@ -28,6 +29,9 @@ setParser = do
 
 deleteParser :: Parser Query
 deleteParser = symbol "delete" >> Delete <$> opticParser
+
+overParser :: Parser Query
+overParser = Over <$> (symbol "over" *> opticParser) <*> transformationParser
 
 viewOrFoldParser :: Parser Query
 viewOrFoldParser = operationParser <*> opticParser

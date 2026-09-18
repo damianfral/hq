@@ -12,10 +12,14 @@ module HQ.Transformation where
 
 import Data.Aeson (ToJSON, Value (..))
 import Data.Aeson.Text (encodeToLazyText)
+import qualified Data.Bool (not)
 import Data.Fix
 import Data.Scientific (Scientific)
 import Data.Text (unpack)
+import qualified Data.Text (replace, strip)
 import Data.Text.Lazy (toStrict)
+import Data.Vector (Vector)
+import qualified Data.Vector as Vector
 import GHC.Show (ShowS, appPrec)
 import Relude hiding (many, not, or, some, subtract, toStrict)
 import Prelude (Show (showsPrec), showParen, showString)
@@ -163,3 +167,49 @@ or (Transformation a) (Transformation b) = Transformation (Fix (Or a b))
 -- | @a . b@: apply @b@, then apply @a@ over its result.
 combine :: Transformation -> Transformation -> Transformation
 combine (Transformation a) (Transformation b) = Transformation (Fix (Combine a b))
+
+-- | Apply a transformation to a JSON value.
+--
+-- Every step is total over 'Value': a step that does not fit the current
+-- value (for example adding to a string) fails with a description of the
+-- expected value type.  Composition applies right-to-left, matching the
+-- @a . b@ DSL syntax: @b@ runs first, then @a@ over its result.
+runTransformation :: Transformation -> Value -> Either Text Value
+runTransformation (Transformation transformation) = run transformation
+  where
+    run :: Fix TransformationF -> Value -> Either Text Value
+    run (Fix step) value = case step of
+      Add n -> withNumber (Number . (+ n)) value
+      Multiply n -> withNumber (Number . (* n)) value
+      Subtract n -> withNumber (Number . flip (-) n) value
+      Divide n -> withNumber (Number . (/ n)) value
+      ConcatString suffix -> withString (String . (<> suffix)) value
+      ConcatArray elements -> withArray (Array . (<> Vector.fromList elements)) value
+      Trim -> withString (String . Data.Text.strip) value
+      Replace needle replacement -> withString (String . Data.Text.replace needle replacement) value
+      Equal literal -> pure (Bool (value == literal))
+      Not -> withBool (Bool . Data.Bool.not) value
+      Or left right -> do
+        result <- run left value
+        case result of
+          Bool b
+            | b -> pure result
+            | otherwise -> run right value
+          _ -> Left "expected a boolean result from the left side of or"
+      Combine left right -> run right value >>= run left
+
+    withNumber :: (Scientific -> Value) -> Value -> Either Text Value
+    withNumber apply (Number n) = pure (apply n)
+    withNumber _ _ = Left "expected a number"
+
+    withString :: (Text -> Value) -> Value -> Either Text Value
+    withString apply (String s) = pure (apply s)
+    withString _ _ = Left "expected a string"
+
+    withArray :: (Vector Value -> Value) -> Value -> Either Text Value
+    withArray apply (Array a) = pure (apply a)
+    withArray _ _ = Left "expected an array"
+
+    withBool :: (Bool -> Value) -> Value -> Either Text Value
+    withBool apply (Bool b) = pure (apply b)
+    withBool _ _ = Left "expected a boolean"

@@ -3,9 +3,11 @@
 
 module HQ.Query.ParserSpec (spec) where
 
+import Data.Aeson (Value (..))
 import HQ.Optic
 import HQ.Query (Query (..))
 import HQ.Query.Parser (parseQuery)
+import HQ.Transformation (add, combine, concatString, equal, trim)
 import Relude hiding (Compose, id)
 import Test.Syd
 
@@ -13,6 +15,7 @@ spec :: Spec
 spec = describe "HQ.Query.Parser" $ do
   parserSpec
   prismParserSpec
+  overParserSpec
 
 parserSpec :: Spec
 parserSpec = describe "parseQuery" $ do
@@ -152,3 +155,30 @@ prismParserSpec = describe "parseQuery (prisms)" $ do
 
   it "parses prism composed with prism" $ do
     parseQuery "fold _Array._1" `shouldBe` Right (Fold (compose _Array _1))
+
+overParserSpec :: Spec
+overParserSpec = describe "parseQuery (over)" $ do
+  it "parses over with a field" $ do
+    parseQuery "over #foo +1" `shouldBe` Right (Over (field "foo") (add 1))
+
+  it "parses over with each" $ do
+    parseQuery "over each trim" `shouldBe` Right (Over each trim)
+
+  it "parses over with composed optics" $ do
+    parseQuery "over #foo.each +1"
+      `shouldBe` Right (Over (compose (field "foo") each) (add 1))
+
+  it "parses over with a composed transformation" $ do
+    parseQuery "over #n +1 . == 3"
+      `shouldBe` Right (Over (field "n") (combine (add 1) (equal (Number 3))))
+
+  it "parses over with a string concatenation" $ do
+    parseQuery "over #title ++\"!\""
+      `shouldBe` Right (Over (field "title") (concatString "!"))
+
+  it "parses over with no whitespace" $ do
+    parseQuery "over#foo+1" `shouldBe` Right (Over (field "foo") (add 1))
+
+  it "rejects over without a transformation" $ case parseQuery "over #foo" of
+    Left _ -> pure ()
+    Right q -> expectationFailure $ "Expected parse error, got: " <> show q

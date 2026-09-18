@@ -5,7 +5,7 @@
 {-# LANGUAGE StrictData #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 
-module HQ.Runner (RunnerF (..), Runner, runRunner, runRunnerIO, runRunnerIOWith, jsonRunner, ValueStream, runFold, runPreview, runSet, runDelete) where
+module HQ.Runner (RunnerF (..), Runner, runRunner, runRunnerIO, runRunnerIOWith, jsonRunner, ValueStream, runFold, runPreview, runSet, runDelete, runOver) where
 
 import Control.Monad.Error.Class (MonadError (throwError))
 import qualified Data.ByteString as BS
@@ -17,6 +17,7 @@ import HQ.JSON.Encoder (EncodeStyle (..), EncoderConfig (EncoderConfig), Join (.
 import HQ.JSON.Event
 import HQ.Optic (Optic (..), OpticF (..))
 import HQ.Query (Query (..))
+import HQ.Transformation (Transformation, runTransformation)
 import Relude hiding (Compose)
 import qualified Streaming.Prelude as S
 
@@ -355,10 +356,12 @@ emitContainer closing cursor = void (emit closing cursor)
 --------------------------------------------------------------------------------
 
 -- | What happens to a value focused by an optic: it is replaced with a
--- sequence of events (@set@) or removed entirely (@delete@).
+-- sequence of events (@set@), removed entirely (@delete@), or rewritten
+-- by a transformation (@over@).
 data Splicer
   = SpliceSet [JSONEvent]
   | SpliceDelete
+  | SpliceTransform Transformation
   deriving (Show, Eq)
 
 -- | Replace every value the optic focuses on with the given replacement
@@ -371,6 +374,11 @@ runSet optic replacement = runSplice (SpliceSet replacement) optic
 -- the rest of the document through unchanged (lens @delete@/@omit@).
 runDelete :: Optic -> Cursor -> ExceptT Text IO ValueStream
 runDelete = runSplice SpliceDelete
+
+-- | Apply a transformation to every value the optic focuses on, rewriting
+-- the document in place (lens @over@).
+runOver :: Optic -> Transformation -> Cursor -> ExceptT Text IO ValueStream
+runOver optic transformation = runSplice (SpliceTransform transformation) optic
 
 -- | Rewrite the document at the cursor by splicing every value that the
 -- optic focuses on.
@@ -386,7 +394,7 @@ runSplice splicer (Optic optic) = run optic
     -- \| Apply the whole optic at a value.
     run :: Fix OpticF -> Cursor -> ExceptT Text IO ValueStream
     run step cursor = case unFix step of
-      Id -> spliceValue splicer
+      Id -> spliceValue splicer cursor
       _ -> navigate step (Fix Id) cursor
 
     -- \| Navigate one optic step, splicing the remainder at each landing
@@ -418,9 +426,17 @@ runSplice splicer (Optic optic) = run optic
     composeStep step rest = Fix (Compose step rest)
 
     -- \| Emit the replacement for a value the whole optic lands on.
-    spliceValue :: Splicer -> ExceptT Text IO ValueStream
-    spliceValue (SpliceSet events) = pure (S.each events)
-    spliceValue SpliceDelete = pure mempty
+    spliceValue :: Splicer -> Cursor -> ExceptT Text IO ValueStream
+    spliceValue (SpliceSet events) _ = pure (S.each events)
+    spliceValue SpliceDelete _ = pure mempty
+    spliceValue (SpliceTransform transformation) cursor = do
+      mConsumed <- consumeValue cursor
+      case mConsumed of
+        Nothing -> throwError "unexpected end of input"
+        Just (events, _) ->
+          case eventsToValue events >>= runTransformation transformation of
+            Left err -> throwError err
+            Right value -> pure (S.each (valueToEvents value))
 
     -- \| Does the part of the optic that remains after @step@ land on
     -- the value at the cursor itself, rather than navigating into one
@@ -615,6 +631,10 @@ runSplice splicer (Optic optic) = run optic
           S.yield key
           join (lift $ run suffix freshCursor)
           continue afterValue
+        SpliceTransform _ -> do
+          S.yield key
+          join (lift $ run suffix freshCursor)
+          continue afterValue
 
     -- \| Consume a complete value, handing its materialized events and
     -- the cursor positioned just after it to the continuation.
@@ -686,6 +706,7 @@ executeQuery :: Query -> Cursor -> ExceptT Text IO ValueStream
 executeQuery (Preview optic) val = runPreview optic val
 executeQuery (Fold optic) val = runFold optic val
 executeQuery (Set optic value) val = runSet optic value val
+executeQuery (Over optic transformation) val = runOver optic transformation val
 executeQuery (Delete optic) val = runDelete optic val
 
 jsonRunner :: Runner
