@@ -7,7 +7,7 @@
 --
 -- Transformations are structured as a tree of constructors that describe
 -- how to rewrite a JSON value (see 'TransformationF') and are built with the
--- smart constructors in this module, e.g. @add 1 . equal 3@.
+-- smart constructors in this module, e.g. @equal 3 . add 1@.
 module HQ.Transformation where
 
 import Data.Aeson (ToJSON, Value (..))
@@ -25,8 +25,8 @@ import Prelude (Show (showsPrec), showParen, showString)
 -- Transformations read the current JSON value and produce a new one:
 -- numeric steps like 'Add' map numbers, string steps like 'ConcatString'
 -- map strings, and 'Equal', 'Not' and 'Or' produce booleans. 'Combine'
--- applies one transformation and passes its result to the next, like a
--- @.@ pipeline.
+-- composes two transformations right-to-left: @a . b@ applies @b@ first,
+-- then applies @a@ over its result.
 data TransformationF a
   = -- | @+ n@: add a number to the current value.
     Add Scientific
@@ -50,7 +50,7 @@ data TransformationF a
     Not
   | -- | @a or b@: boolean disjunction of two transformations.
     Or a a
-  | -- | @a . b@: apply @a@, then apply @b@ to its result.
+  | -- | @a . b@: apply @b@, then apply @a@ over its result.
     Combine a a
   deriving (Eq, Show, Functor)
 
@@ -160,6 +160,6 @@ not = Transformation (Fix Not)
 or :: Transformation -> Transformation -> Transformation
 or (Transformation a) (Transformation b) = Transformation (Fix (Or a b))
 
--- | @a . b@: apply @a@, then apply @b@ to its result.
+-- | @a . b@: apply @b@, then apply @a@ over its result.
 combine :: Transformation -> Transformation -> Transformation
 combine (Transformation a) (Transformation b) = Transformation (Fix (Combine a b))
