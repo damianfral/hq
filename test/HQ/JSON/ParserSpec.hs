@@ -3,14 +3,42 @@
 
 module HQ.JSON.ParserSpec (spec) where
 
+import Data.Aeson (Value (..))
 import HQ.JSON.Event (JSONEvent (..))
-import HQ.JSON.Parser (parseValueEvents)
+import HQ.JSON.Parser (parseValue, parseValueEvents)
 import Relude hiding (Compose, id)
 import Test.HQ (decodeStreaming)
 import Test.Syd
 
 spec :: Spec
-spec = describe "HQ.JSON.Parser" parseValueEventsSpec
+spec = describe "HQ.JSON.Parser" $ do
+  parseValueSpec
+  parseValueEventsSpec
+
+--------------------------------------------------------------------------------
+-- parseValue
+--------------------------------------------------------------------------------
+
+parseValueSpec :: Spec
+parseValueSpec = describe "parseValue" $ do
+  it "parses whole numbers"
+    $ parseValue "42"
+    `shouldBe` Right (Number 42)
+  it "parses negative numbers"
+    $ parseValue "-7"
+    `shouldBe` Right (Number (-7))
+  it "parses decimal fractions"
+    $ parseValue "0.5"
+    `shouldBe` Right (Number 0.5)
+  it "parses exponent notation"
+    $ parseValue "1e10"
+    `shouldBe` Right (Number 1e10)
+  it "parses signed exponent notation"
+    $ parseValue "-2.5e-3"
+    `shouldBe` Right (Number (-2.5e-3))
+  it "rejects non-numeric input"
+    $ parseValue "one"
+    `shouldSatisfy` isLeft
 
 --------------------------------------------------------------------------------
 -- parseValueEvents

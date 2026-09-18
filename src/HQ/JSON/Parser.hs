@@ -13,6 +13,7 @@ import Streaming (Of (..))
 import qualified Streaming.Prelude as S
 import Text.Megaparsec
 import Text.Megaparsec.Char
+import Text.Megaparsec.Char.Lexer (scientific, signed)
 
 type Parser = Parsec Void Text
 
@@ -51,17 +52,10 @@ boolParser :: Parser Value
 boolParser = (symbol "true" $> Bool True) <|> (symbol "false" $> Bool False)
 
 numberParser :: Parser Value
-numberParser = lexeme $ do
-  sign <- maybe "" (: []) <$> optional (char '-')
-  digits <- some digitChar
-  frac <- maybe "" ('.' :) <$> optional (some digitChar)
-  let numStr = sign ++ digits ++ frac
-  case readMaybe numStr of
-    Just n -> pure (Number n)
-    Nothing -> fail "invalid number"
+numberParser = lexeme $ Number <$> signed spaceConsumer scientific
 
 stringParser :: Parser Value
-stringParser = do
+stringParser = lexeme $ do
   void $ char '"'
   chars <- many (escapedChar <|> nonEscapeChar)
   void $ char '"'
