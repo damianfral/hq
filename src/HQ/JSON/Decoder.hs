@@ -10,6 +10,7 @@ import Data.Bits (Bits (..), shiftL)
 import Data.Char (digitToInt, isDigit, isHexDigit)
 import Data.Scientific (Scientific, scientific)
 import qualified Data.Text as T
+import HQ.JSON.Decoder.StringBuffer
 import HQ.JSON.Event (JSONEvent (..))
 import Relude hiding (Compose, id, many, some, state)
 import Streaming (Of, Stream)
@@ -146,7 +147,7 @@ startNumberState c =
 data StringTarget = StringKey | StringValue
   deriving (Eq, Show)
 
-data BufferedStringTarget = BufferedStringTarget StringTarget Text
+data BufferedStringTarget = BufferedStringTarget StringTarget StringBuffer
   deriving (Eq, Show)
 
 data Unicode = Unicode {unicodeValue :: Int, unicodeDigits :: Int}
@@ -204,7 +205,8 @@ finish decoder = case decoderState decoder of
   ParserStateString _ -> Left UnexpectedEnd
   ParserStateNumber numState
     | isValidNumberFinal (numberPhase numState) -> finalizeNumber decoder
-    | otherwise -> Left (InvalidNumber (reversedStringToText $ numberBuffer numState))
+    | otherwise ->
+        Left $ InvalidNumber (reversedStringToText $ numberBuffer numState)
   ParserStateKeyword _ -> finalizeKeyword decoder
   ParserStateFinished -> case decoderStack decoder of
     [] ->
@@ -315,13 +317,13 @@ startValue c rest decoder = case c of
     | otherwise -> Left (UnexpectedChar c)
 
 startString :: StringTarget -> Text -> Decoder -> Either ParseError DecoderResult
-startString target input = consumeString target input mempty
+startString target input = consumeString target input emptyStringBuffer
 
 consumeString ::
-  StringTarget -> Text -> Text -> Decoder -> Either ParseError DecoderResult
+  StringTarget -> Text -> StringBuffer -> Decoder -> Either ParseError DecoderResult
 consumeString target input buffer decoder = case T.uncons rest of
   Nothing ->
-    let bufferedTarget = BufferedStringTarget target (T.copy newBuffer)
+    let bufferedTarget = BufferedStringTarget target newBuffer
         parserString = ParserStateString (InString bufferedTarget)
         decoder' = decoder {decoderInput = mempty, decoderState = parserString}
      in Right $ NeedInput decoder'
@@ -331,35 +333,35 @@ consumeString target input buffer decoder = case T.uncons rest of
     | otherwise -> Left (UnexpectedChar c)
   where
     (chunk, rest) = T.span (\c -> c /= '"' && c /= '\\' && ord c >= 0x20) input
-    !newBuffer = if T.null buffer then chunk else buffer <> chunk
+    !newBuffer = appendStringBuffer chunk buffer
 
 consumeStringEscape ::
-  StringTarget -> Text -> Text -> Decoder -> Either ParseError DecoderResult
+  StringTarget -> Text -> StringBuffer -> Decoder -> Either ParseError DecoderResult
 consumeStringEscape target input buffer decoder = case T.uncons input of
   Nothing ->
     let parserString =
-          ParserStateString $ AfterEscape $ BufferedStringTarget target (T.copy buffer)
+          ParserStateString $ AfterEscape $ BufferedStringTarget target buffer
      in Right $ NeedInput decoder {decoderInput = mempty, decoderState = parserString}
   Just (c, rest) -> case c of
-    '"' -> consumeString target rest (T.snoc buffer '"') decoder
-    '\\' -> consumeString target rest (T.snoc buffer '\\') decoder
-    '/' -> consumeString target rest (T.snoc buffer '/') decoder
-    'b' -> consumeString target rest (T.snoc buffer '\b') decoder
-    'f' -> consumeString target rest (T.snoc buffer '\f') decoder
-    'n' -> consumeString target rest (T.snoc buffer '\n') decoder
-    'r' -> consumeString target rest (T.snoc buffer '\r') decoder
-    't' -> consumeString target rest (T.snoc buffer '\t') decoder
+    '"' -> consumeString target rest (appendCharStringBuffer '"' buffer) decoder
+    '\\' -> consumeString target rest (appendCharStringBuffer '\\' buffer) decoder
+    '/' -> consumeString target rest (appendCharStringBuffer '/' buffer) decoder
+    'b' -> consumeString target rest (appendCharStringBuffer '\b' buffer) decoder
+    'f' -> consumeString target rest (appendCharStringBuffer '\f' buffer) decoder
+    'n' -> consumeString target rest (appendCharStringBuffer '\n' buffer) decoder
+    'r' -> consumeString target rest (appendCharStringBuffer '\r' buffer) decoder
+    't' -> consumeString target rest (appendCharStringBuffer '\t' buffer) decoder
     'u' -> consumeUnicode target rest buffer decoder
     _ -> Left (InvalidEscape c)
 
 consumeUnicode ::
-  StringTarget -> Text -> Text -> Decoder -> Either ParseError DecoderResult
+  StringTarget -> Text -> StringBuffer -> Decoder -> Either ParseError DecoderResult
 consumeUnicode target input buffer = consumeUnicode' target input buffer 0 0
 
 consumeUnicode' ::
   StringTarget ->
   Text ->
-  Text ->
+  StringBuffer ->
   Int ->
   Int ->
   Decoder ->
@@ -381,7 +383,7 @@ consumeUnicode' target input buffer value digits decoder
 finishUnicode ::
   StringTarget ->
   Text ->
-  Text ->
+  StringBuffer ->
   Int ->
   Decoder ->
   Either ParseError DecoderResult
@@ -392,7 +394,8 @@ finishUnicode target input buffer value decoder
           newDecoder = decoder {decoderInput = input, decoderState = parserString}
        in Right $ NeedInput newDecoder
   | isLowSurrogate value = Left InvalidSurrogatePair
-  | otherwise = consumeString target input (T.snoc buffer (chr value)) decoder
+  | otherwise =
+      consumeString target input (appendCharStringBuffer (chr value) buffer) decoder
 
 stepString :: Decoder -> StringState -> Either ParseError DecoderResult
 stepString decoder state =
@@ -407,12 +410,7 @@ stepString decoder state =
       consumeLowSurrogate target (decoderInput decoder) buffer high decoder
 
 consumeLowSurrogate ::
-  StringTarget ->
-  Text ->
-  Text ->
-  Int ->
-  Decoder ->
-  Either ParseError DecoderResult
+  StringTarget -> Text -> StringBuffer -> Int -> Decoder -> Either ParseError DecoderResult
 consumeLowSurrogate target input buffer high decoder = case T.uncons input of
   Nothing -> Right $ NeedInput decoder {decoderInput = mempty}
   Just ('\\', rest) -> case T.uncons rest of
@@ -433,7 +431,7 @@ consumeLowSurrogate target input buffer high decoder = case T.uncons input of
 consumeLowSurrogateDigits ::
   StringTarget ->
   Text ->
-  Text ->
+  StringBuffer ->
   Int ->
   Int ->
   Int ->
@@ -447,7 +445,7 @@ consumeLowSurrogateDigits target input buffer high value digits decoder
                 0x10000
                   + ((high - 0xD800) `shiftL` 10)
                   + (value - 0xDC00)
-              newBuffer = T.snoc buffer (chr codepoint)
+              newBuffer = appendCharStringBuffer (chr codepoint) buffer
            in consumeString target input newBuffer decoder
         else Left InvalidSurrogatePair
   | otherwise =
@@ -466,7 +464,7 @@ consumeLowSurrogateDigits target input buffer high value digits decoder
                         0x10000
                           + ((high - 0xD800) `shiftL` 10)
                           + (newValue - 0xDC00)
-                      newBuffer = T.snoc buffer (chr codepoint)
+                      newBuffer = appendCharStringBuffer (chr codepoint) buffer
                    in consumeString target rest newBuffer decoder
                 else Left InvalidSurrogatePair
             else
@@ -486,17 +484,22 @@ consumeLowSurrogateDigits target input buffer high value digits decoder
                   Left InvalidUnicodeEscape
 
 finishString ::
-  StringTarget -> Text -> Text -> Decoder -> Either ParseError DecoderResult
+  StringTarget ->
+  StringBuffer ->
+  Text ->
+  Decoder ->
+  Either ParseError DecoderResult
 finishString target value remaining decoder = case target of
-  StringValue -> emitScalar (JSONString value) remaining decoder
-  StringKey ->
-    Right
-      $ Emit
-        (JSONObjectKey value)
-        decoder
-          { decoderInput = remaining,
-            decoderState = ParserStateObjectColon
-          }
+  StringValue ->
+    emitScalar (JSONString (finishStringBuffer value)) remaining decoder
+  StringKey -> do
+    let key = JSONObjectKey (finishStringBuffer value)
+    let newDecoder =
+          decoder
+            { decoderInput = remaining,
+              decoderState = ParserStateObjectColon
+            }
+    Right $ Emit key newDecoder
 
 -- | Continue parsing a number from the saved state.
 stepNumber :: Decoder -> NumberState -> Either ParseError DecoderResult
