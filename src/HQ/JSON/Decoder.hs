@@ -17,33 +17,24 @@ import qualified Streaming.Prelude as S
 
 data Decoder = Decoder
   { decoderInput :: Text,
-    decoderContext :: [Context],
-    decoderRoot :: RootState,
-    decoderLex :: LexState
+    decoderStack :: [Context],
+    decoderState :: ParserState
   }
   deriving (Show, Eq)
 
-data RootState = RootExpectValue | RootDone
+data ParserState
+  = ParserStateValue
+  | ParserStateObjectKey
+  | ParserStateObjectColon
+  | ParserStateObjectComma
+  | ParserStateArrayComma
+  | ParserStateString StringState
+  | ParserStateNumber NumberState
+  | ParserStateKeyword KeywordState
+  | ParserStateFinished
   deriving (Eq, Show)
 
-data Context = Object ObjectState | Array ArrayState
-  deriving (Eq, Show)
-
-data ObjectState
-  = ObjectExpectKey
-  | ObjectExpectColon
-  | ObjectExpectValue
-  | ObjectExpectComma
-  deriving (Eq, Show)
-
-data ArrayState = ArrayExpectValue | ArrayExpectComma
-  deriving (Eq, Show)
-
-data LexState
-  = LexNone
-  | LexString StringState
-  | LexNumber NumberState
-  | LexKeyword KeywordState
+data Context = ContextArray | ContextObject
   deriving (Eq, Show)
 
 newtype ReversedString = ReversedString {unReversedString :: String}
@@ -169,9 +160,9 @@ data StringState
   deriving (Eq, Show)
 
 data KeywordState
-  = KeywordNull !Int
-  | KeywordTrue !Int
-  | KeywordFalse !Int
+  = KeywordNull Int
+  | KeywordTrue Int
+  | KeywordFalse Int
   deriving (Eq, Show)
 
 data DecoderResult
@@ -200,120 +191,96 @@ initialDecoder :: Decoder
 initialDecoder =
   Decoder
     { decoderInput = mempty,
-      decoderContext = [],
-      decoderRoot = RootExpectValue,
-      decoderLex = LexNone
+      decoderStack = [],
+      decoderState = ParserStateValue
     }
 
 feed :: Text -> Decoder -> Either ParseError DecoderResult
 feed input decoder = step decoder {decoderInput = decoderInput decoder <> input}
 
 finish :: Decoder -> Either ParseError DecoderResult
-finish decoder = case decoderLex decoder of
-  LexNone -> case decoderRoot decoder of
-    RootExpectValue -> Left UnexpectedEnd
-    RootDone -> case decoderContext decoder of
-      [] ->
-        let isNull = T.null (decoderInput decoder)
-         in if isNull then Right (Done decoder) else Left TrailingInput
-      _ -> Left UnexpectedEnd
-  LexString (AfterHighSurrogate _ _) -> Left InvalidSurrogatePair
-  LexString _ -> Left UnexpectedEnd
-  LexNumber numState
+finish decoder = case decoderState decoder of
+  ParserStateString (AfterHighSurrogate _ _) -> Left InvalidSurrogatePair
+  ParserStateString _ -> Left UnexpectedEnd
+  ParserStateNumber numState
     | isValidNumberFinal (numberPhase numState) -> finalizeNumber decoder
     | otherwise -> Left (InvalidNumber (reversedStringToText $ numberBuffer numState))
-  LexKeyword _ -> finalizeKeyword decoder
+  ParserStateKeyword _ -> finalizeKeyword decoder
+  ParserStateFinished -> case decoderStack decoder of
+    [] ->
+      let isNull = T.null (decoderInput decoder)
+       in if isNull then Right (Done decoder) else Left TrailingInput
+    _ -> Left UnexpectedEnd
+  _ -> Left UnexpectedEnd
 
 step :: Decoder -> Either ParseError DecoderResult
-step decoder = case decoderLex decoder of
-  LexNone -> stepStructural decoder
-  LexString state -> stepString decoder state
-  LexNumber numState -> stepNumber decoder numState
-  LexKeyword state -> stepKeyword decoder state
+step decoder = case decoderState decoder of
+  ParserStateString state -> stepString decoder state
+  ParserStateNumber numState -> stepNumber decoder numState
+  ParserStateKeyword state -> stepKeyword decoder state
+  _ -> stepStructural decoder
 
 stepStructural :: Decoder -> Either ParseError DecoderResult
 stepStructural decoder = case T.uncons input of
-  Nothing -> case decoderRoot decoder of
-    RootExpectValue -> Right (NeedInput decoder {decoderInput = mempty})
-    RootDone ->
+  Nothing -> case decoderState decoder of
+    ParserStateFinished ->
       let newDecoder = decoder {decoderInput = mempty}
        in Right
-            $ if null (decoderContext decoder)
+            $ if null (decoderStack decoder)
               then Done newDecoder
               else NeedInput newDecoder
+    _ -> Right (NeedInput decoder {decoderInput = mempty})
   Just (c, rest) -> parseStructuralChar c rest decoder
   where
     input = T.dropWhile isWhitespace (decoderInput decoder)
 
 parseStructuralChar ::
   Char -> Text -> Decoder -> Either ParseError DecoderResult
-parseStructuralChar c rest decoder = case decoderContext decoder of
-  [] -> parseRootChar c rest decoder
-  Object state : contexts -> parseObjectChar c rest state decoder contexts
-  Array state : contexts -> parseArrayChar c rest state decoder contexts
-
-parseRootChar :: Char -> Text -> Decoder -> Either ParseError DecoderResult
-parseRootChar c rest decoder = case decoderRoot decoder of
-  RootDone -> Left TrailingInput
-  RootExpectValue -> startValue c rest decoder
-
-parseObjectChar ::
-  Char ->
-  Text ->
-  ObjectState ->
-  Decoder ->
-  [Context] ->
-  Either ParseError DecoderResult
-parseObjectChar c rest state decoder contexts = case state of
-  ObjectExpectKey
-    | c == '}' ->
-        let newDecoder = decoder {decoderContext = contexts}
-         in emitContainerEnd JSONEndObject rest newDecoder
+parseStructuralChar c rest decoder = case decoderState decoder of
+  ParserStateValue -> parseValueChar c rest decoder
+  ParserStateObjectKey
+    | c == '}' -> case decoderStack decoder of
+        (_ : contexts) ->
+          let newDecoder = decoder {decoderStack = contexts}
+           in emitContainerEnd JSONEndObject rest newDecoder
+        [] -> Left ExpectedObjectKey
     | c == '"' -> startString StringKey rest decoder
     | otherwise -> Left ExpectedObjectKey
-  ObjectExpectColon
+  ParserStateObjectColon
     | c == ':' ->
-        step
-          decoder
-            { decoderInput = rest,
-              decoderContext = Object ObjectExpectValue : contexts
-            }
+        step decoder {decoderInput = rest, decoderState = ParserStateValue}
     | otherwise -> Left ExpectedColon
-  ObjectExpectValue -> startValue c rest decoder
-  ObjectExpectComma
+  ParserStateObjectComma
     | c == ',' ->
         step
-          decoder
-            { decoderInput = rest,
-              decoderContext = Object ObjectExpectKey : contexts
-            }
+          decoder {decoderInput = rest, decoderState = ParserStateObjectKey}
     | c == '}' ->
-        let newDecoder = decoder {decoderContext = contexts}
-         in emitContainerEnd JSONEndObject rest newDecoder
+        case decoderStack decoder of
+          (_ : contexts) ->
+            let newDecoder = decoder {decoderStack = contexts}
+             in emitContainerEnd JSONEndObject rest newDecoder
+          [] -> Left ExpectedCommaOrEnd
     | otherwise -> Left ExpectedCommaOrEnd
-
-parseArrayChar ::
-  Char ->
-  Text ->
-  ArrayState ->
-  Decoder ->
-  [Context] ->
-  Either ParseError DecoderResult
-parseArrayChar c rest state decoder contexts = case state of
-  ArrayExpectValue
-    | c == ']' ->
-        emitContainerEnd JSONEndArray rest decoder {decoderContext = contexts}
-    | otherwise -> startValue c rest decoder
-  ArrayExpectComma
+  ParserStateArrayComma
     | c == ',' ->
-        step
-          decoder
-            { decoderInput = rest,
-              decoderContext = Array ArrayExpectValue : contexts
-            }
+        step decoder {decoderInput = rest, decoderState = ParserStateValue}
     | c == ']' ->
-        emitContainerEnd JSONEndArray rest decoder {decoderContext = contexts}
+        case decoderStack decoder of
+          (_ : contexts) ->
+            emitContainerEnd JSONEndArray rest decoder {decoderStack = contexts}
+          [] -> Left ExpectedCommaOrEnd
     | otherwise -> Left ExpectedCommaOrEnd
+  ParserStateFinished -> Left TrailingInput
+  ParserStateString _ -> Left (UnexpectedChar c)
+  ParserStateNumber _ -> Left (UnexpectedChar c)
+  ParserStateKeyword _ -> Left (UnexpectedChar c)
+
+parseValueChar :: Char -> Text -> Decoder -> Either ParseError DecoderResult
+parseValueChar c rest decoder = case decoderStack decoder of
+  ContextArray : contexts
+    | c == ']' ->
+        emitContainerEnd JSONEndArray rest decoder {decoderStack = contexts}
+  _ -> startValue c rest decoder
 
 startValue :: Char -> Text -> Decoder -> Either ParseError DecoderResult
 startValue c rest decoder = case c of
@@ -323,8 +290,8 @@ startValue c rest decoder = case c of
         JSONBeginObject
         decoder
           { decoderInput = rest,
-            decoderContext = Object ObjectExpectKey : decoderContext decoder,
-            decoderRoot = rootAfterOpeningContainer decoder
+            decoderStack = ContextObject : decoderStack decoder,
+            decoderState = ParserStateObjectKey
           }
   '[' ->
     Right
@@ -332,8 +299,8 @@ startValue c rest decoder = case c of
         JSONBeginArray
         decoder
           { decoderInput = rest,
-            decoderContext = Array ArrayExpectValue : decoderContext decoder,
-            decoderRoot = rootAfterOpeningContainer decoder
+            decoderStack = ContextArray : decoderStack decoder,
+            decoderState = ParserStateValue
           }
   '"' -> startString StringValue rest decoder
   'n' -> startKeyword decoder rest "null" 1
@@ -343,12 +310,9 @@ startValue c rest decoder = case c of
     | isNumberStart c ->
         let numState = startNumberState c
          in stepNumber
-              decoder {decoderInput = rest, decoderLex = LexNumber numState}
+              decoder {decoderInput = rest, decoderState = ParserStateNumber numState}
               numState
     | otherwise -> Left (UnexpectedChar c)
-
-rootAfterOpeningContainer :: Decoder -> RootState
-rootAfterOpeningContainer _ = RootExpectValue
 
 startString :: StringTarget -> Text -> Decoder -> Either ParseError DecoderResult
 startString target input = consumeString target input mempty
@@ -358,8 +322,8 @@ consumeString ::
 consumeString target input buffer decoder = case T.uncons rest of
   Nothing ->
     let bufferedTarget = BufferedStringTarget target (T.copy newBuffer)
-        lexString = LexString (InString bufferedTarget)
-        decoder' = decoder {decoderInput = mempty, decoderLex = lexString}
+        parserString = ParserStateString (InString bufferedTarget)
+        decoder' = decoder {decoderInput = mempty, decoderState = parserString}
      in Right $ NeedInput decoder'
   Just (c, rest')
     | c == '"' -> finishString target newBuffer rest' decoder
@@ -373,9 +337,9 @@ consumeStringEscape ::
   StringTarget -> Text -> Text -> Decoder -> Either ParseError DecoderResult
 consumeStringEscape target input buffer decoder = case T.uncons input of
   Nothing ->
-    let lexString =
-          LexString $ AfterEscape $ BufferedStringTarget target (T.copy buffer)
-     in Right $ NeedInput decoder {decoderInput = mempty, decoderLex = lexString}
+    let parserString =
+          ParserStateString $ AfterEscape $ BufferedStringTarget target (T.copy buffer)
+     in Right $ NeedInput decoder {decoderInput = mempty, decoderState = parserString}
   Just (c, rest) -> case c of
     '"' -> consumeString target rest (T.snoc buffer '"') decoder
     '\\' -> consumeString target rest (T.snoc buffer '\\') decoder
@@ -405,8 +369,8 @@ consumeUnicode' target input buffer value digits decoder
   | T.null rest =
       let unicode = Unicode newValue newDigits
           bufferedString = BufferedStringTarget target buffer
-          lexString = LexString $ InUnicodeEscape bufferedString unicode
-          newDecoder = decoder {decoderInput = "", decoderLex = lexString}
+          parserString = ParserStateString $ InUnicodeEscape bufferedString unicode
+          newDecoder = decoder {decoderInput = "", decoderState = parserString}
        in Right $ NeedInput newDecoder
   | otherwise = Left InvalidUnicodeEscape
   where
@@ -424,8 +388,8 @@ finishUnicode ::
 finishUnicode target input buffer value decoder
   | isHighSurrogate value =
       let bufferedStringT = BufferedStringTarget target buffer
-          lexString = LexString $ AfterHighSurrogate bufferedStringT value
-          newDecoder = decoder {decoderInput = input, decoderLex = lexString}
+          parserString = ParserStateString $ AfterHighSurrogate bufferedStringT value
+          newDecoder = decoder {decoderInput = input, decoderState = parserString}
        in Right $ NeedInput newDecoder
   | isLowSurrogate value = Left InvalidSurrogatePair
   | otherwise = consumeString target input (T.snoc buffer (chr value)) decoder
@@ -457,8 +421,8 @@ consumeLowSurrogate target input buffer high decoder = case T.uncons input of
         $ NeedInput
           decoder
             { decoderInput = mempty,
-              decoderLex =
-                LexString
+              decoderState =
+                ParserStateString
                   $ AfterHighSurrogate (BufferedStringTarget target buffer) high
             }
     Just ('u', rest') ->
@@ -512,8 +476,8 @@ consumeLowSurrogateDigits target input buffer high value digits decoder
                     $ NeedInput
                       decoder
                         { decoderInput = mempty,
-                          decoderLex =
-                            LexString
+                          decoderState =
+                            ParserStateString
                               $ InUnicodeEscape
                                 (BufferedStringTarget target buffer)
                                 (Unicode newValue newDigits)
@@ -531,14 +495,8 @@ finishString target value remaining decoder = case target of
         (JSONObjectKey value)
         decoder
           { decoderInput = remaining,
-            decoderContext = setObjectState ObjectExpectColon (decoderContext decoder),
-            decoderLex = LexNone
+            decoderState = ParserStateObjectColon
           }
-
-setObjectState :: ObjectState -> [Context] -> [Context]
-setObjectState state contexts = case contexts of
-  Object _ : rest -> Object state : rest
-  _ -> contexts
 
 -- | Continue parsing a number from the saved state.
 stepNumber :: Decoder -> NumberState -> Either ParseError DecoderResult
@@ -548,14 +506,14 @@ stepNumber decoder numState = case T.uncons (decoderInput decoder) of
       $ NeedInput
         decoder
           { decoderInput = mempty,
-            decoderLex = LexNumber numState
+            decoderState = ParserStateNumber numState
           }
   Just (c, rest) -> case advanceNumber (numberPhase numState) c of
     NumEnd ->
       finalizeNumber
         decoder
           { decoderInput = T.cons c rest,
-            decoderLex = LexNumber numState
+            decoderState = ParserStateNumber numState
           }
     NumError -> Left (InvalidNumber (reversedStringToText (numberBuffer numState) <> one c))
     NumStep nextPhase ->
@@ -567,14 +525,14 @@ stepNumber decoder numState = case T.uncons (decoderInput decoder) of
        in stepNumber decoder {decoderInput = rest} numState'
 
 finalizeNumber :: Decoder -> Either ParseError DecoderResult
-finalizeNumber decoder = case decoderLex decoder of
-  LexNumber numState
+finalizeNumber decoder = case decoderState decoder of
+  ParserStateNumber numState
     | isValidNumberFinal (numberPhase numState) ->
         let value = parseNumberBuffer (reversedStringToText $ numberBuffer numState)
          in emitScalar
               (JSONNumber value)
               (decoderInput decoder)
-              decoder {decoderLex = LexNone}
+              decoder
     | otherwise -> Left (InvalidNumber (reversedStringToText $ numberBuffer numState))
   _ -> Left (InvalidNumber mempty)
 
@@ -644,7 +602,7 @@ startKeyword :: Decoder -> Text -> Text -> Int -> Either ParseError DecoderResul
 startKeyword decoder input keyword consumed =
   let state = keywordState keyword consumed
    in stepKeyword
-        decoder {decoderInput = input, decoderLex = LexKeyword state}
+        decoder {decoderInput = input, decoderState = ParserStateKeyword state}
         state
 
 keywordState :: Text -> Int -> KeywordState
@@ -666,13 +624,13 @@ stepKeyword decoder state =
           Just (c, _) | isJsonDelimiter c -> finalizeKeyword decoder
           Just _ -> Left (InvalidKeyword keyword)
         else case T.uncons (decoderInput decoder) of
-          Nothing -> Right $ NeedInput decoder {decoderLex = LexKeyword state}
+          Nothing -> Right $ NeedInput decoder {decoderState = ParserStateKeyword state}
           Just (c, rest)
             | c == T.index keyword index ->
                 stepKeyword
                   decoder
                     { decoderInput = rest,
-                      decoderLex = LexKeyword (advanceKeyword state)
+                      decoderState = ParserStateKeyword (advanceKeyword state)
                     }
                   (advanceKeyword state)
           _ -> Left (InvalidKeyword keyword)
@@ -684,8 +642,8 @@ advanceKeyword state = case state of
   KeywordFalse n -> KeywordFalse (n + 1)
 
 finalizeKeyword :: Decoder -> Either ParseError DecoderResult
-finalizeKeyword decoder = case decoderLex decoder of
-  LexKeyword state ->
+finalizeKeyword decoder = case decoderState decoder of
+  ParserStateKeyword state ->
     let (keyword, index) = case state of
           KeywordNull i -> ("null", i)
           KeywordTrue i -> ("true", i)
@@ -699,30 +657,29 @@ finalizeKeyword decoder = case decoderLex decoder of
              in emitScalar
                   event
                   (decoderInput decoder)
-                  decoder {decoderLex = LexNone}
+                  decoder
           else Left (InvalidKeyword keyword)
   _ -> Left (InvalidKeyword mempty)
 
 emitScalar :: JSONEvent -> Text -> Decoder -> Either ParseError DecoderResult
 emitScalar event remaining decoder =
-  let newDec = decoder {decoderInput = remaining, decoderLex = LexNone}
-   in Right $ Emit event $ completeValue newDec
+  let newDec = decoder {decoderInput = remaining}
+   in Right $ Emit event $ finishValue newDec
 
-completeValue :: Decoder -> Decoder
-completeValue decoder = case decoderContext decoder of
-  [] -> decoder {decoderRoot = RootDone}
-  Object _ : contexts ->
-    decoder {decoderContext = Object ObjectExpectComma : contexts}
-  Array _ : contexts ->
-    decoder {decoderContext = Array ArrayExpectComma : contexts}
+-- | A JSON value has just been completed.
+-- Determine what the enclosing context expects next.
+finishValue :: Decoder -> Decoder
+finishValue decoder = case decoderStack decoder of
+  [] -> decoder {decoderState = ParserStateFinished}
+  ContextArray : _ ->
+    decoder {decoderState = ParserStateArrayComma}
+  ContextObject : _ ->
+    decoder {decoderState = ParserStateObjectComma}
 
 emitContainerEnd :: JSONEvent -> Text -> Decoder -> Either ParseError DecoderResult
 emitContainerEnd event remaining decoder =
-  let decoder' = decoder {decoderInput = remaining, decoderLex = LexNone}
-   in Right $ Emit event (completeContainer decoder')
-
-completeContainer :: Decoder -> Decoder
-completeContainer = completeValue
+  let decoder' = decoder {decoderInput = remaining}
+   in Right $ Emit event (finishValue decoder')
 
 isWhitespace :: Char -> Bool
 isWhitespace c = c `elem` [' ', '\t', '\n', '\r']
@@ -735,6 +692,11 @@ isHighSurrogate x = x >= 0xD800 && x <= 0xDBFF
 
 isLowSurrogate :: Int -> Bool
 isLowSurrogate x = x >= 0xDC00 && x <= 0xDFFF
+
+-- | The root value is complete: empty stack + finished state.
+isRootDone :: Decoder -> Bool
+isRootDone decoder =
+  decoderState decoder == ParserStateFinished && null (decoderStack decoder)
 
 decode ::
   (Monad m) =>
@@ -750,7 +712,7 @@ runDecoder decoder input = do
   result <- lift $ S.next input
   case result of
     Left r
-      | decoderRoot decoder == RootDone || decoder == initialDecoder ->
+      | isRootDone decoder || decoder == initialDecoder ->
           pure (Right r)
       | otherwise -> drainFinish decoder r
     Right (chunk, rest) -> case feed chunk decoder of
@@ -765,7 +727,7 @@ drain ::
 drain (Emit event nextDecoder) rest =
   S.yield event >> drainStep (step nextDecoder) rest
 drain (NeedInput nextDecoder) rest
-  | decoderRoot nextDecoder == RootDone && null (decoderContext nextDecoder) =
+  | isRootDone nextDecoder =
       drainDone nextDecoder rest
   | otherwise = runDecoder nextDecoder rest
 drain (Done nextDecoder) rest = drainDone nextDecoder rest
@@ -788,7 +750,7 @@ drainDone nextDecoder rest = do
   case more of
     Left r -> drainFinish nextDecoder r
     Right (chunk, rest')
-      | decoderRoot nextDecoder == RootDone && null (decoderContext nextDecoder) ->
+      | isRootDone nextDecoder ->
           if T.all isWhitespace chunk
             then drainDone nextDecoder rest'
             else pure (Left TrailingInput)
@@ -801,9 +763,8 @@ drainFinish decoder r = case finish decoder of
     | getAll
         $ foldMap
           All
-          [ decoderRoot decoder == RootExpectValue,
-            null $ decoderContext decoder,
-            decoderLex decoder == LexNone
+          [ decoderState decoder == ParserStateValue,
+            null $ decoderStack decoder
           ] ->
         pure (Right r)
   Left err -> pure (Left err)
