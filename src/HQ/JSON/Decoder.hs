@@ -9,7 +9,7 @@ import Control.Monad.Error.Class (MonadError (throwError))
 import Data.Bits (Bits (..), shiftL)
 import Data.Char (digitToInt, isDigit, isHexDigit)
 import Data.Scientific (Scientific, scientific)
-import qualified Data.Text as Text
+import qualified Data.Text as T
 import HQ.JSON.Event (JSONEvent (..))
 import Relude hiding (Compose, id, many, some, state)
 import Streaming (Of, Stream)
@@ -206,7 +206,7 @@ finish decoder = case decoderLex decoder of
     RootExpectValue -> Left UnexpectedEnd
     RootDone -> case decoderContext decoder of
       [] ->
-        let isNull = Text.null (decoderInput decoder)
+        let isNull = T.null (decoderInput decoder)
          in if isNull then Right (Done decoder) else Left TrailingInput
       _ -> Left UnexpectedEnd
   LexString (AfterHighSurrogate _ _) -> Left InvalidSurrogatePair
@@ -224,7 +224,7 @@ step decoder = case decoderLex decoder of
   LexKeyword state -> stepKeyword decoder state
 
 stepStructural :: Decoder -> Either ParseError DecoderResult
-stepStructural decoder = case Text.uncons input of
+stepStructural decoder = case T.uncons input of
   Nothing -> case decoderRoot decoder of
     RootExpectValue -> Right (NeedInput decoder {decoderInput = mempty})
     RootDone ->
@@ -235,7 +235,7 @@ stepStructural decoder = case Text.uncons input of
               else NeedInput newDecoder
   Just (c, rest) -> parseStructuralChar c rest decoder
   where
-    input = Text.dropWhile isWhitespace (decoderInput decoder)
+    input = T.dropWhile isWhitespace (decoderInput decoder)
 
 parseStructuralChar ::
   Char -> Text -> Decoder -> Either ParseError DecoderResult
@@ -347,9 +347,10 @@ startString target input = consumeString target input mempty
 
 consumeString ::
   StringTarget -> Text -> Text -> Decoder -> Either ParseError DecoderResult
-consumeString target input buffer decoder = case Text.uncons rest of
+consumeString target input buffer decoder = case T.uncons rest of
   Nothing ->
-    let bufferedTarget = BufferedStringTarget target newBuffer
+    --
+    let bufferedTarget = BufferedStringTarget target (T.copy newBuffer)
         lexString = LexString (InString bufferedTarget)
         decoder' = decoder {decoderInput = mempty, decoderLex = lexString}
      in Right $ NeedInput decoder'
@@ -359,24 +360,25 @@ consumeString target input buffer decoder = case Text.uncons rest of
     | otherwise -> Left (UnexpectedChar c)
   where
     (chunk, rest) =
-      Text.span (\c -> c /= '"' && c /= '\\' && ord c >= 0x20) input
-    !newBuffer = if Text.null buffer then chunk else buffer <> chunk
+      T.span (\c -> c /= '"' && c /= '\\' && ord c >= 0x20) input
+    !newBuffer = if T.null buffer then chunk else buffer <> chunk
 
 consumeStringEscape ::
   StringTarget -> Text -> Text -> Decoder -> Either ParseError DecoderResult
-consumeStringEscape target input buffer decoder = case Text.uncons input of
+consumeStringEscape target input buffer decoder = case T.uncons input of
   Nothing ->
-    let lexString = LexString (AfterEscape (BufferedStringTarget target buffer))
+    let lexString =
+          LexString $ AfterEscape $ BufferedStringTarget target (T.copy buffer)
      in Right $ NeedInput decoder {decoderInput = mempty, decoderLex = lexString}
   Just (c, rest) -> case c of
-    '"' -> consumeString target rest (Text.snoc buffer '"') decoder
-    '\\' -> consumeString target rest (Text.snoc buffer '\\') decoder
-    '/' -> consumeString target rest (Text.snoc buffer '/') decoder
-    'b' -> consumeString target rest (Text.snoc buffer '\b') decoder
-    'f' -> consumeString target rest (Text.snoc buffer '\f') decoder
-    'n' -> consumeString target rest (Text.snoc buffer '\n') decoder
-    'r' -> consumeString target rest (Text.snoc buffer '\r') decoder
-    't' -> consumeString target rest (Text.snoc buffer '\t') decoder
+    '"' -> consumeString target rest (T.snoc buffer '"') decoder
+    '\\' -> consumeString target rest (T.snoc buffer '\\') decoder
+    '/' -> consumeString target rest (T.snoc buffer '/') decoder
+    'b' -> consumeString target rest (T.snoc buffer '\b') decoder
+    'f' -> consumeString target rest (T.snoc buffer '\f') decoder
+    'n' -> consumeString target rest (T.snoc buffer '\n') decoder
+    'r' -> consumeString target rest (T.snoc buffer '\r') decoder
+    't' -> consumeString target rest (T.snoc buffer '\t') decoder
     'u' -> consumeUnicode target rest buffer decoder
     _ -> Left (InvalidEscape c)
 
@@ -395,7 +397,7 @@ consumeUnicode' ::
 consumeUnicode' target input buffer value digits decoder
   | digits == 4 = finishUnicode target input buffer value decoder
   | otherwise =
-      case Text.uncons input of
+      case T.uncons input of
         Nothing ->
           let unicode = Unicode value digits
               bufferedString = BufferedStringTarget target buffer
@@ -425,7 +427,7 @@ finishUnicode target input buffer value decoder
        in Right $ NeedInput newDecoder
   | isLowSurrogate value = Left InvalidSurrogatePair
   | otherwise =
-      consumeString target input (Text.snoc buffer (chr value)) decoder
+      consumeString target input (T.snoc buffer (chr value)) decoder
 
 stepString :: Decoder -> StringState -> Either ParseError DecoderResult
 stepString decoder state =
@@ -446,9 +448,9 @@ consumeLowSurrogate ::
   Int ->
   Decoder ->
   Either ParseError DecoderResult
-consumeLowSurrogate target input buffer high decoder = case Text.uncons input of
+consumeLowSurrogate target input buffer high decoder = case T.uncons input of
   Nothing -> Right $ NeedInput decoder {decoderInput = mempty}
-  Just ('\\', rest) -> case Text.uncons rest of
+  Just ('\\', rest) -> case T.uncons rest of
     Nothing ->
       Right
         $ NeedInput
@@ -477,10 +479,10 @@ consumeLowSurrogateDigits target input buffer high value digits decoder
       if isLowSurrogate value
         then
           let codepoint = 0x10000 + ((high - 0xD800) `shiftL` 10) + (value - 0xDC00)
-              newBuffer = Text.snoc buffer (chr codepoint)
+              newBuffer = T.snoc buffer (chr codepoint)
            in consumeString target input newBuffer decoder
         else Left InvalidSurrogatePair
-  | otherwise = case Text.uncons input of
+  | otherwise = case T.uncons input of
       Nothing ->
         Right
           $ NeedInput
@@ -519,7 +521,7 @@ setObjectState state contexts = case contexts of
 
 -- | Continue parsing a number from the saved state.
 stepNumber :: Decoder -> NumberState -> Either ParseError DecoderResult
-stepNumber decoder numState = case Text.uncons (decoderInput decoder) of
+stepNumber decoder numState = case T.uncons (decoderInput decoder) of
   Nothing ->
     Right
       $ NeedInput
@@ -531,14 +533,14 @@ stepNumber decoder numState = case Text.uncons (decoderInput decoder) of
     NumEnd ->
       finalizeNumber
         decoder
-          { decoderInput = Text.cons c rest,
+          { decoderInput = T.cons c rest,
             decoderLex = LexNumber numState
           }
     NumError -> Left (InvalidNumber (numberBuffer numState <> one c))
     NumStep nextPhase ->
       let numState' =
             numState
-              { numberBuffer = Text.snoc (numberBuffer numState) c,
+              { numberBuffer = T.snoc (numberBuffer numState) c,
                 numberPhase = nextPhase
               }
        in stepNumber decoder {decoderInput = rest} numState'
@@ -562,9 +564,9 @@ parseNumberBuffer buf = go (0 :: Integer) (0 :: Integer) False False False (0 ::
   where
     go :: Integer -> Integer -> Bool -> Bool -> Bool -> Integer -> Int -> Int -> Scientific
     go !intP !fracP !hasDot !hasExp !expNeg !expP !nFrac !pos
-      | pos >= Text.length buf =
+      | pos >= T.length buf =
           let signed =
-                if not (Text.null buf) && Text.take 1 buf == "-"
+                if not (T.null buf) && T.take 1 buf == "-"
                   then negate
                   else identity
               coeff = signed (intP * 10 ^ nFrac + fracP)
@@ -572,7 +574,7 @@ parseNumberBuffer buf = go (0 :: Integer) (0 :: Integer) False False False (0 ::
               finalExp = fromInteger (expVal - fromIntegral nFrac :: Integer) :: Int
            in coeff `scientific` finalExp
       | otherwise =
-          let c = Text.index buf pos
+          let c = T.index buf pos
            in case c of
                 '-' -> go intP fracP hasDot hasExp True expP nFrac (pos + 1)
                 '+' -> go intP fracP hasDot hasExp False expP nFrac (pos + 1)
@@ -637,15 +639,15 @@ stepKeyword decoder state =
         KeywordNull i -> ("null", i)
         KeywordTrue i -> ("true", i)
         KeywordFalse i -> ("false", i)
-   in if index == Text.length keyword
-        then case Text.uncons (decoderInput decoder) of
+   in if index == T.length keyword
+        then case T.uncons (decoderInput decoder) of
           Nothing -> finalizeKeyword decoder
           Just (c, _) | isJsonDelimiter c -> finalizeKeyword decoder
           Just _ -> Left (InvalidKeyword keyword)
-        else case Text.uncons (decoderInput decoder) of
+        else case T.uncons (decoderInput decoder) of
           Nothing -> Right $ NeedInput decoder {decoderLex = LexKeyword state}
           Just (c, rest)
-            | c == Text.index keyword index ->
+            | c == T.index keyword index ->
                 stepKeyword
                   decoder
                     { decoderInput = rest,
@@ -667,7 +669,7 @@ finalizeKeyword decoder = case decoderLex decoder of
           KeywordNull i -> ("null", i)
           KeywordTrue i -> ("true", i)
           KeywordFalse i -> ("false", i)
-     in if index == Text.length keyword
+     in if index == T.length keyword
           then
             let event = case state of
                   KeywordNull _ -> JSONNull
@@ -766,7 +768,7 @@ drainDone nextDecoder rest = do
     Left r -> drainFinish nextDecoder r
     Right (chunk, rest')
       | decoderRoot nextDecoder == RootDone && null (decoderContext nextDecoder) ->
-          if Text.all isWhitespace chunk
+          if T.all isWhitespace chunk
             then drainDone nextDecoder rest'
             else pure (Left TrailingInput)
       | otherwise -> pure (Left TrailingInput)
