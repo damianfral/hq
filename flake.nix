@@ -36,7 +36,7 @@
             configureFlags = oldAttrs.configureFlags ++ ["--ghc-options=-O2"];
           })
         );
-        haskellPackages = prev.haskellPackages.override (old: {
+        haskellPackages = prev.haskell.packages.ghc9124.override (old: {
           overrides =
             final.lib.composeExtensions
             (old.overrides or (_: _: {}))
