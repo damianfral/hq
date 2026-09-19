@@ -38,6 +38,9 @@ ghc-options:
   - -funbox-strict-fields
   - -flate-dmd-anal
   - -fno-omit-interface-pragmas
+  - -fregs-graph
+  - -fspec-constr-recursive=32
+  - -fmax-worker-args=32
 
 executables:
   hq:
