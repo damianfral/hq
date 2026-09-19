@@ -4,13 +4,12 @@
 module HQ.RunnerSpec (spec) where
 
 import Data.Aeson (Value (..))
-import HQ.JSON.Cursor (Cursor, fromStream)
 import HQ.JSON.Decoder (decodeIO)
 import HQ.JSON.Event (JSONEvent (..), eventsToValue)
 import HQ.JSON.Parser (parseValueEvents)
 import HQ.Optic (Optic)
 import HQ.Optic.Parser (parseOptic)
-import HQ.Runner (ValueStream, runDelete, runFold, runOver, runPreview)
+import HQ.Runner (ValueStream, ValueStreamF, runDelete, runFold, runOver, runPreview)
 import HQ.Transformation (Transformation, add, combine, concatString, constValue, equal, not, or, replace, trim)
 import Relude hiding (Compose, id, many, not, or, some, subtract, toStrict)
 import Streaming (Of (..), Stream)
@@ -27,9 +26,7 @@ runFoldTest optic input = runExceptT $ do
   let textStream :: Stream (Of Text) (ExceptT Text IO) ()
       textStream = S.yield input
   let eventStream = decodeIO textStream
-  let cursor = fromStream eventStream
-  resultStream <- runFold optic cursor
-  S.toList_ resultStream
+  S.toList_ (runFold optic eventStream)
 
 -- | Parse an optic string and run it against JSON input.
 runQueryTest :: Text -> Text -> IO (Either Text [JSONEvent])
@@ -45,9 +42,7 @@ runPreviewTest optic input = runExceptT $ do
   let textStream :: Stream (Of Text) (ExceptT Text IO) ()
       textStream = S.yield input
   let eventStream = decodeIO textStream
-  let cursor = fromStream eventStream
-  resultStream <- runPreview optic cursor
-  S.toList_ resultStream
+  S.toList_ (runPreview optic eventStream)
 
 -- | Parse an optic string and preview it against JSON input.
 runQueryPreviewTest :: Text -> Text -> IO (Either Text [JSONEvent])
@@ -58,14 +53,15 @@ runQueryPreviewTest opticStr jsonInput =
 
 -- | Run a document-rewriting query (set/delete) and collect the
 -- rewritten document's events.
-runRewriteTest :: (Cursor -> ExceptT Text IO ValueStream) -> Text -> IO (Either Text [JSONEvent])
+runRewriteTest ::
+  (ValueStream -> ValueStreamF ValueStream) ->
+  Text ->
+  IO (Either Text [JSONEvent])
 runRewriteTest run input = runExceptT $ do
   let textStream :: Stream (Of Text) (ExceptT Text IO) ()
       textStream = S.yield input
   let eventStream = decodeIO textStream
-  let cursor = fromStream eventStream
-  resultStream <- run cursor
-  S.toList_ resultStream
+  S.toList_ (run eventStream)
 
 -- | Parse an optic string and a replacement value, run @set@ against
 -- JSON input, and collect the rewritten document's events.

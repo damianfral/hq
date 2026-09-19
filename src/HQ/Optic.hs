@@ -50,7 +50,7 @@ data OpticF a
   deriving (Eq, Ord, Show, Functor)
 
 -- | An optic path over JSON values.
-newtype Optic = Optic (Fix OpticF)
+newtype Optic = Optic {unOptic :: Fix OpticF}
 
 instance Eq Optic where
   Optic (Fix (Field a)) == Optic (Fix (Field b)) = a == b
