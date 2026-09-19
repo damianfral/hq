@@ -46,9 +46,15 @@ data LexState
   | LexKeyword KeywordState
   deriving (Eq, Show)
 
+newtype ReversedString = ReversedString {unReversedString :: String}
+  deriving (Eq, Show)
+
+reversedStringToText :: ReversedString -> Text
+reversedStringToText (ReversedString str) = T.reverse $ T.pack str
+
 -- | JSON number state machine.
 data NumberState = NumberState
-  { numberBuffer :: Text,
+  { numberBuffer :: ReversedString,
     numberPhase :: NumberPhase
   }
   deriving (Eq, Show)
@@ -142,7 +148,9 @@ numberPhaseFromFirstChar c
 -- | Create an initial NumberState from the first character.
 startNumberState :: Char -> NumberState
 startNumberState c =
-  NumberState (one c) (fromMaybe NumSign (numberPhaseFromFirstChar c))
+  NumberState
+    (ReversedString $ one c)
+    (fromMaybe NumSign (numberPhaseFromFirstChar c))
 
 data StringTarget = StringKey | StringValue
   deriving (Eq, Show)
@@ -213,7 +221,7 @@ finish decoder = case decoderLex decoder of
   LexString _ -> Left UnexpectedEnd
   LexNumber numState
     | isValidNumberFinal (numberPhase numState) -> finalizeNumber decoder
-    | otherwise -> Left (InvalidNumber (numberBuffer numState))
+    | otherwise -> Left (InvalidNumber (reversedStringToText $ numberBuffer numState))
   LexKeyword _ -> finalizeKeyword decoder
 
 step :: Decoder -> Either ParseError DecoderResult
@@ -535,11 +543,11 @@ stepNumber decoder numState = case T.uncons (decoderInput decoder) of
           { decoderInput = T.cons c rest,
             decoderLex = LexNumber numState
           }
-    NumError -> Left (InvalidNumber (numberBuffer numState <> one c))
+    NumError -> Left (InvalidNumber (reversedStringToText (numberBuffer numState) <> one c))
     NumStep nextPhase ->
       let numState' =
             numState
-              { numberBuffer = T.snoc (numberBuffer numState) c,
+              { numberBuffer = ReversedString $ c : unReversedString (numberBuffer numState),
                 numberPhase = nextPhase
               }
        in stepNumber decoder {decoderInput = rest} numState'
@@ -548,12 +556,12 @@ finalizeNumber :: Decoder -> Either ParseError DecoderResult
 finalizeNumber decoder = case decoderLex decoder of
   LexNumber numState
     | isValidNumberFinal (numberPhase numState) ->
-        let value = parseNumberBuffer (numberBuffer numState)
+        let value = parseNumberBuffer (reversedStringToText $ numberBuffer numState)
          in emitScalar
               (JSONNumber value)
               (decoderInput decoder)
               decoder {decoderLex = LexNone}
-    | otherwise -> Left (InvalidNumber (numberBuffer numState))
+    | otherwise -> Left (InvalidNumber (reversedStringToText $ numberBuffer numState))
   _ -> Left (InvalidNumber mempty)
 
 -- | Parse the accumulated number buffer into a Scientific value.
