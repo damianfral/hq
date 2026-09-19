@@ -17,9 +17,9 @@ where
 
 import Data.Bits (Bits (..))
 import Data.ByteString.Builder (Builder, char7, charUtf8, string7, stringUtf8, toLazyByteString)
-import qualified Data.ByteString.Lazy as LBS
 import Data.Scientific (Scientific, base10Exponent, coefficient)
 import qualified Data.Text as Text
+import Data.Text.Encoding (encodeUtf8Builder)
 import HQ.JSON.Event (JSONEvent (..))
 import Relude hiding (Compose, id, many, some, state)
 import Streaming (Of, Stream)
@@ -285,22 +285,17 @@ encodeRawString text =
   Chunk (stringUtf8 (toString text)) (utf8Length text)
 
 encodeStringBody :: Text -> Chunk
-encodeStringBody = go
+encodeStringBody text = let Chunk b s = go text in Chunk b s
   where
-    go :: Text -> Chunk
-    go remaining
-      | Text.null remaining = mempty
+    go t
+      | Text.null t = mempty
       | otherwise =
-          let (safe, rest) = Text.span isSafe remaining
-              safeSize = utf8Length safe
-              safeBuilder = stringUtf8 $ toString safe
-              safeChunk = Chunk safeBuilder safeSize
+          let (safe, rest) = Text.span isSafe t
+              safeChunk = Chunk (encodeUtf8Builder safe) (utf8Length safe)
            in case Text.uncons rest of
-                Nothing -> Chunk safeBuilder safeSize
+                Nothing -> safeChunk
                 Just (c, rest') ->
-                  let chunk1 = encodeEscapedChar c
-                      chunk2 = go rest'
-                   in mconcat [safeChunk, chunk1, chunk2]
+                  mconcat [safeChunk, encodeEscapedChar c, go rest']
 
 isSafe :: Char -> Bool
 isSafe c = c >= '\x20' && c /= '"' && c /= '\\'
@@ -347,7 +342,7 @@ utf8Length = Text.foldl' (\size c -> size + utf8CharSize c) 0
 
 type JSONStream m r = Stream (Of JSONEvent) m r
 
-type BSStream m r = Stream (Of ByteString) m r
+type BSStream m r = Stream (Of LByteString) m r
 
 type ChunkStream m r = Stream (Of Chunk) m r
 
@@ -359,23 +354,23 @@ type ChunkStream m r = Stream (Of Chunk) m r
 -- encoded event exceeds the target size; the stream contents are
 -- unaffected by the chunk size.
 encode :: (Monad m) => EncoderConfig -> Int -> JSONStream m r -> BSStream m r
-encode config cSize = go mempty 0 . encodeToChunks config
+encode config size = go mempty 0 . encodeToChunks config
   where
     go :: (Monad m) => Builder -> Int -> ChunkStream m r -> BSStream m r
-    go !builder !size stream = do
+    go !builder !size' stream = do
       nextResult <- lift $ S.next stream
       case nextResult of
         Left r ->
-          if size == 0
+          if size' == 0
             then Return r
             else S.yield (flush builder) >> Return r
         Right (chunk, rest) ->
           let eventChunk = chunk
-              newSize = size + chunkSize eventChunk
+              newSize = size' + chunkSize eventChunk
               newBuilder = builder <> chunkBuilder eventChunk
-           in if size > 0 && newSize >= cSize
+           in if size' > 0 && newSize >= size
                 then S.yield (flush newBuilder) >> go mempty 0 rest
                 else go newBuilder newSize rest
 
-    flush :: Builder -> ByteString
-    flush = LBS.toStrict . toLazyByteString
+    flush :: Builder -> LByteString
+    flush = toLazyByteString

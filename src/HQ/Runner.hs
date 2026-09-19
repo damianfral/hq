@@ -9,6 +9,7 @@ module HQ.Runner where
 
 import Control.Monad.Error.Class (MonadError (throwError))
 import qualified Data.ByteString as BS
+import qualified Data.ByteString.Lazy as LBS
 import Data.Fix (Fix (..))
 import Data.Functor.Of (Of ((:>)))
 import Data.Text.IO (hPutStrLn)
@@ -20,6 +21,7 @@ import HQ.Query (Query (..))
 import HQ.Transformation (Transformation, runTransformation)
 import Relude hiding (Compose)
 import qualified Streaming.Prelude as S
+import System.IO (hSetBinaryMode)
 
 type ValueStreamF = StreamIO JSONEvent
 
@@ -444,7 +446,7 @@ type Runner = RunnerF ValueStream
 runRunner :: Runner -> Query -> Handle -> ExceptT Text IO ValueStream
 runRunner (Runner runner) query handle = runReaderT runner env
   where
-    env = RunnerEnv query $ streamHandle 64 handle
+    env = RunnerEnv query $ streamHandle 256 handle
 
 -- | Run a query, encoding the selected values to stdout with pretty
 -- formatting and default value options.
@@ -461,20 +463,22 @@ runRunnerIO runner query = runRunnerIOWith runner query config
 runRunnerIOWith :: Runner -> Query -> EncoderConfig -> Handle -> IO ()
 runRunnerIOWith runner query encConfig handle = do
   hSetBuffering stdout $ BlockBuffering Nothing
+  hSetBinaryMode stdout True
   r <- runExceptT $ do
     streamIO <- runRunner runner query handle
-    S.mapM_ write $ encode encConfig 32 streamIO
+    S.mapM_ write $ encode encConfig 256 streamIO
   case r of
     Left e -> hPutStrLn stderr e >> exitFailure
     Right v -> pure v
   where
-    write = liftIO . BS.hPut stdout
+    write = liftIO . LBS.hPut stdout
 
 -- | Read strict 'ByteString' chunks from a handle.
 -- The input is never loaded into memory as a whole. Each chunk is pulled
 -- only when the downstream parser needs more data.
 streamHandle :: Int -> Handle -> StreamIO ByteString ()
 streamHandle size handle = do
+  chunk <- liftIO $ BS.hGetSome handle size
   if BS.null chunk
     then pure ()
     else S.yield chunk >> streamHandle size handle

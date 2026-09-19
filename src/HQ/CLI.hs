@@ -20,7 +20,7 @@ import HQ.Transformation.Parser (parseTransformation)
 import Options.Applicative
 import Paths_hq (version)
 import Relude
-import System.IO
+import System.IO hiding (hSetBuffering)
 import Text.Megaparsec (errorBundlePretty)
 
 data NullInput = NoNullInput | NullInput deriving (Show, Eq)
@@ -87,7 +87,11 @@ optParserInfo = info (optParser <**> helper) infoMod
 readInput :: Maybe FilePath -> IO Handle
 readInput Nothing = pure stdin
 readInput (Just "-") = pure stdin
-readInput (Just path) = openFile path ReadMode
+readInput (Just path) = do
+  h <- openFile path ReadMode
+  hSetBuffering h $ BlockBuffering Nothing
+  hSetBinaryMode h True
+  pure h
 
 --------------------------------------------------------------------------------
 
