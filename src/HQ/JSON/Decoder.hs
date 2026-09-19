@@ -349,7 +349,6 @@ consumeString ::
   StringTarget -> Text -> Text -> Decoder -> Either ParseError DecoderResult
 consumeString target input buffer decoder = case T.uncons rest of
   Nothing ->
-    --
     let bufferedTarget = BufferedStringTarget target (T.copy newBuffer)
         lexString = LexString (InString bufferedTarget)
         decoder' = decoder {decoderInput = mempty, decoderLex = lexString}
@@ -371,14 +370,14 @@ consumeStringEscape target input buffer decoder = case T.uncons input of
           LexString $ AfterEscape $ BufferedStringTarget target (T.copy buffer)
      in Right $ NeedInput decoder {decoderInput = mempty, decoderLex = lexString}
   Just (c, rest) -> case c of
-    '"' -> consumeString target rest (T.snoc buffer '"') decoder
-    '\\' -> consumeString target rest (T.snoc buffer '\\') decoder
-    '/' -> consumeString target rest (T.snoc buffer '/') decoder
-    'b' -> consumeString target rest (T.snoc buffer '\b') decoder
-    'f' -> consumeString target rest (T.snoc buffer '\f') decoder
-    'n' -> consumeString target rest (T.snoc buffer '\n') decoder
-    'r' -> consumeString target rest (T.snoc buffer '\r') decoder
-    't' -> consumeString target rest (T.snoc buffer '\t') decoder
+    '"' -> consumeString target rest (buffer <> T.singleton '"') decoder
+    '\\' -> consumeString target rest (buffer <> T.singleton '\\') decoder
+    '/' -> consumeString target rest (buffer <> T.singleton '/') decoder
+    'b' -> consumeString target rest (buffer <> T.singleton '\b') decoder
+    'f' -> consumeString target rest (buffer <> T.singleton '\f') decoder
+    'n' -> consumeString target rest (buffer <> T.singleton '\n') decoder
+    'r' -> consumeString target rest (buffer <> T.singleton '\r') decoder
+    't' -> consumeString target rest (buffer <> T.singleton '\t') decoder
     'u' -> consumeUnicode target rest buffer decoder
     _ -> Left (InvalidEscape c)
 
@@ -788,8 +787,7 @@ drainFinish decoder r = case finish decoder of
   Left err -> pure (Left err)
   Right (Done _) -> pure (Right r)
   Right (NeedInput _) -> pure (Left UnexpectedEnd)
-  Right (Emit event nextDecoder) ->
-    S.yield event >> drainFinish nextDecoder r
+  Right (Emit event nextDecoder) -> S.yield event >> drainFinish nextDecoder r
 
 type StreamIO s = Stream (Of s) (ExceptT Text IO)
 
