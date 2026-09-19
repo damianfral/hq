@@ -366,8 +366,7 @@ consumeString target input buffer decoder = case T.uncons rest of
     | c == '\\' -> consumeStringEscape target rest' newBuffer decoder
     | otherwise -> Left (UnexpectedChar c)
   where
-    (chunk, rest) =
-      T.span (\c -> c /= '"' && c /= '\\' && ord c >= 0x20) input
+    (chunk, rest) = T.span (\c -> c /= '"' && c /= '\\' && ord c >= 0x20) input
     !newBuffer = if T.null buffer then chunk else buffer <> chunk
 
 consumeStringEscape ::
@@ -378,14 +377,14 @@ consumeStringEscape target input buffer decoder = case T.uncons input of
           LexString $ AfterEscape $ BufferedStringTarget target (T.copy buffer)
      in Right $ NeedInput decoder {decoderInput = mempty, decoderLex = lexString}
   Just (c, rest) -> case c of
-    '"' -> consumeString target rest (buffer <> T.singleton '"') decoder
-    '\\' -> consumeString target rest (buffer <> T.singleton '\\') decoder
-    '/' -> consumeString target rest (buffer <> T.singleton '/') decoder
-    'b' -> consumeString target rest (buffer <> T.singleton '\b') decoder
-    'f' -> consumeString target rest (buffer <> T.singleton '\f') decoder
-    'n' -> consumeString target rest (buffer <> T.singleton '\n') decoder
-    'r' -> consumeString target rest (buffer <> T.singleton '\r') decoder
-    't' -> consumeString target rest (buffer <> T.singleton '\t') decoder
+    '"' -> consumeString target rest (T.snoc buffer '"') decoder
+    '\\' -> consumeString target rest (T.snoc buffer '\\') decoder
+    '/' -> consumeString target rest (T.snoc buffer '/') decoder
+    'b' -> consumeString target rest (T.snoc buffer '\b') decoder
+    'f' -> consumeString target rest (T.snoc buffer '\f') decoder
+    'n' -> consumeString target rest (T.snoc buffer '\n') decoder
+    'r' -> consumeString target rest (T.snoc buffer '\r') decoder
+    't' -> consumeString target rest (T.snoc buffer '\t') decoder
     'u' -> consumeUnicode target rest buffer decoder
     _ -> Left (InvalidEscape c)
 
@@ -402,22 +401,18 @@ consumeUnicode' ::
   Decoder ->
   Either ParseError DecoderResult
 consumeUnicode' target input buffer value digits decoder
-  | digits == 4 = finishUnicode target input buffer value decoder
-  | otherwise =
-      case T.uncons input of
-        Nothing ->
-          let unicode = Unicode value digits
-              bufferedString = BufferedStringTarget target buffer
-              lexString = LexString $ InUnicodeEscape bufferedString unicode
-              newDecoder = decoder {decoderInput = mempty, decoderLex = lexString}
-           in Right $ NeedInput newDecoder
-        Just (c, rest)
-          | isHexDigit c ->
-              let digit = digitToInt c
-                  newDigits = digits + 1
-                  newValue = value * 16 + digit
-               in consumeUnicode' target rest buffer newValue newDigits decoder
-        _ -> Left InvalidUnicodeEscape
+  | newDigits >= 4 = finishUnicode target rest buffer newValue decoder
+  | T.null rest =
+      let unicode = Unicode newValue newDigits
+          bufferedString = BufferedStringTarget target buffer
+          lexString = LexString $ InUnicodeEscape bufferedString unicode
+          newDecoder = decoder {decoderInput = "", decoderLex = lexString}
+       in Right $ NeedInput newDecoder
+  | otherwise = Left InvalidUnicodeEscape
+  where
+    (hex, rest) = T.span isHexDigit input
+    newValue = T.foldl' (\v c -> v * 16 + digitToInt c) value hex
+    newDigits = digits + T.length hex
 
 finishUnicode ::
   StringTarget ->
@@ -433,8 +428,7 @@ finishUnicode target input buffer value decoder
           newDecoder = decoder {decoderInput = input, decoderLex = lexString}
        in Right $ NeedInput newDecoder
   | isLowSurrogate value = Left InvalidSurrogatePair
-  | otherwise =
-      consumeString target input (T.snoc buffer (chr value)) decoder
+  | otherwise = consumeString target input (T.snoc buffer (chr value)) decoder
 
 stepString :: Decoder -> StringState -> Either ParseError DecoderResult
 stepString decoder state =
@@ -485,27 +479,47 @@ consumeLowSurrogateDigits target input buffer high value digits decoder
   | digits == 4 =
       if isLowSurrogate value
         then
-          let codepoint = 0x10000 + ((high - 0xD800) `shiftL` 10) + (value - 0xDC00)
+          let codepoint =
+                0x10000
+                  + ((high - 0xD800) `shiftL` 10)
+                  + (value - 0xDC00)
               newBuffer = T.snoc buffer (chr codepoint)
            in consumeString target input newBuffer decoder
         else Left InvalidSurrogatePair
-  | otherwise = case T.uncons input of
-      Nothing ->
-        Right
-          $ NeedInput
-            decoder
-              { decoderInput = mempty,
-                decoderLex =
-                  LexString
-                    $ InUnicodeEscape
-                      (BufferedStringTarget target buffer)
-                      (Unicode value digits)
-              }
-      Just (c, rest)
-        | isHexDigit c ->
-            let newValue = value * 16 + digitToInt c
-             in consumeLowSurrogateDigits target rest buffer high newValue (digits + 1) decoder
-        | otherwise -> Left InvalidUnicodeEscape
+  | otherwise =
+      let remaining = 4 - digits
+          limitedInput = T.take remaining input
+          (hexDigits, _) = T.span isHexDigit limitedInput
+          consumed = T.length hexDigits
+          newValue = T.foldl' (\ac c -> ac * 16 + digitToInt c) value hexDigits
+          newDigits = digits + consumed
+          rest = T.drop consumed input
+       in if newDigits == 4
+            then
+              if isLowSurrogate newValue
+                then
+                  let codepoint =
+                        0x10000
+                          + ((high - 0xD800) `shiftL` 10)
+                          + (newValue - 0xDC00)
+                      newBuffer = T.snoc buffer (chr codepoint)
+                   in consumeString target rest newBuffer decoder
+                else Left InvalidSurrogatePair
+            else
+              if T.null rest
+                then
+                  Right
+                    $ NeedInput
+                      decoder
+                        { decoderInput = mempty,
+                          decoderLex =
+                            LexString
+                              $ InUnicodeEscape
+                                (BufferedStringTarget target buffer)
+                                (Unicode newValue newDigits)
+                        }
+                else
+                  Left InvalidUnicodeEscape
 
 finishString ::
   StringTarget -> Text -> Text -> Decoder -> Either ParseError DecoderResult
