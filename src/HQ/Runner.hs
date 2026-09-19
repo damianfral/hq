@@ -460,7 +460,7 @@ runRunnerIO runner query = runRunnerIOWith runner query config
 -- a failing exit status.
 runRunnerIOWith :: Runner -> Query -> EncoderConfig -> Handle -> IO ()
 runRunnerIOWith runner query encConfig handle = do
-  hSetBuffering stdout (BlockBuffering Nothing)
+  hSetBuffering stdout $ BlockBuffering Nothing
   r <- runExceptT $ do
     streamIO <- runRunner runner query handle
     S.mapM_ write $ encode encConfig 32 streamIO
@@ -474,11 +474,10 @@ runRunnerIOWith runner query encConfig handle = do
 -- The input is never loaded into memory as a whole. Each chunk is pulled
 -- only when the downstream parser needs more data.
 streamHandle :: Int -> Handle -> StreamIO ByteString ()
-streamHandle chunkSize' handle = do
-  chunk <- liftIO $ BS.hGetSome handle chunkSize'
+streamHandle size handle = do
   if BS.null chunk
     then pure ()
-    else S.yield chunk >> streamHandle chunkSize' handle
+    else S.yield chunk >> streamHandle size handle
 
 -- | Execute a query against a JSON value.
 executeQuery :: Query -> K
@@ -491,7 +490,7 @@ jsonRunner :: Runner
 jsonRunner = do
   query <- asks runnerEnvQuery
   input <- asks runnerEnvInput
-  let events = decodeIO (decodeUtf8Stream input) :: ValueStream
+  let events = decodeIO $ decodeUtf8Stream input
   pure (void (executeQuery query events))
 
 decodeUtf8Stream :: StreamIO ByteString () -> StreamIO Text ()
@@ -501,7 +500,6 @@ decodeUtf8Stream = go mempty
     go leftover stream = do
       result <- lift $ S.next stream
       case result of
-        -- Stream exhausted; decode any remaining leftover bytes.
         Left () -> when (leftover /= mempty) $ decodeAndYield leftover
         Right (chunk, rest) -> do
           let combined = leftover <> chunk

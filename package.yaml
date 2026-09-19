@@ -12,8 +12,8 @@ library:
     - base
     - data-fix
     - free
-    - megaparsec
     - incremental-parser
+    - megaparsec
     - mtl
     - optparse-applicative
     - relude
@@ -70,11 +70,11 @@ tests:
       - bytestring
       - data-fix
       - free
+      - hq
+      - megaparsec
       - mtl
       - optparse-applicative
-      - hq
       - relude
-      - megaparsec
       - scientific
       - streaming
       - sydtest
