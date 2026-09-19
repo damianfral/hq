@@ -1,10 +1,10 @@
-set terminal svg enhanced size 1600,900 font "monospace,14"
+set terminal svg enhanced size 1600,900 font "monospace,12"
 set datafile separator ","
 set boxwidth 0.8
 set style fill solid 0.8
 set yrange [0:*]
 set grid y
-set xtics font ",12"
+set xtics font ",9"
 
 color1="#DD2233"
 color2="#333333"

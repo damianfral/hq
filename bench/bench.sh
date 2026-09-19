@@ -19,6 +19,10 @@ benches=(
     "jq 'map(.score += 1)'"
     "hq over 'each.#version' '+1'"
     "jq 'map(.version += 1)'"
+    "hq set 'each.#score' '0'"
+    "jq 'map(.score = 0)'"
+    "hq delete 'each.#score'"
+    "jq 'map(del(.score))'"
 )
 
 printf '%s\n' "command,runtime,peak_rss_mb" >"$out"
