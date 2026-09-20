@@ -376,7 +376,11 @@ consumeUnicode' target input buffer value digits decoder
        in Right $ NeedInput newDecoder
   | otherwise = Left InvalidUnicodeEscape
   where
-    (hex, rest) = T.span isHexDigit input
+    needed = 4 - digits
+    -- Take at most the digits still needed to complete the escape: a
+    -- further hex digit belongs to the text following the escape.
+    hex = T.take needed (T.takeWhile isHexDigit input)
+    rest = T.drop (T.length hex) input
     newValue = T.foldl' (\v c -> v * 16 + digitToInt c) value hex
     newDigits = digits + T.length hex
 

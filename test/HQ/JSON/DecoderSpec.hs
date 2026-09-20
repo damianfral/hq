@@ -172,6 +172,10 @@ stringSpec = describe "string escape sequences" $ do
     -- U+1D11E (Musical Symbol G Clef) = D834 DD1E
     decodeComplete "\"\\uD834\\uDD1E\"" `shouldBe` Right [JSONString "\119070"]
 
+  it "does not consume a hex digit following a unicode escape" $ do
+    decodeComplete "\"\\u0026B\"" `shouldBe` Right [JSONString "&B"]
+    decodeComplete "\"\\u0041B\"" `shouldBe` Right [JSONString "AB"]
+
   it "parses string with multiple escapes" $ do
     decodeComplete "\"line1\\nline2\\ttab\""
       `shouldBe` Right [JSONString "line1\nline2\ttab"]
@@ -638,6 +642,9 @@ streamingSpec = describe "streaming decode" $ do
 
   it "parses surrogate pair across chunks" $ do
     runStreaming ["\"\\uD834", "\\uDD1E\""] `shouldBe` [JSONString "\119070"]
+
+  it "parses unicode escape split across chunks followed by hex digit" $ do
+    runStreaming ["\"\\u004", "1B\""] `shouldBe` [JSONString "AB"]
 
   it "parses object with unicode value" $ do
     let expected =

@@ -114,7 +114,8 @@ formatNonInteger c e
 -- values are rendered: a newline may separate them, and top-level
 -- strings may be emitted bare.
 encodeToChunks :: (Monad m) => EncoderConfig -> JSONStream m r -> ChunkStream m r
-encodeToChunks (EncoderConfig style (ValueOptions rawOption joinOption)) = go []
+encodeToChunks (EncoderConfig style (ValueOptions rawOption joinOption)) =
+  go []
   where
     go :: (Monad m) => [EncodeCtx] -> JSONStream m r -> ChunkStream m r
     go ctxs events = do
@@ -123,32 +124,26 @@ encodeToChunks (EncoderConfig style (ValueOptions rawOption joinOption)) = go []
         Left r -> pure r
         Right (event, rest)
           | event == JSONEndArray || event == JSONEndObject -> do
-              let (chunk, ctxs') = closeContainer style ctxs
-              S.yield chunk
-              finishValue ctxs'
+              let (sep, ctxs') = closeContainer style ctxs
+              S.yield $ sep <> finishValue ctxs'
               go ctxs' rest
           | otherwise -> case event of
               JSONBeginArray -> do
                 let (sep, ctxs') = beforeValue style ctxs
-                S.yield sep
-                S.yield (encodeEvent event)
+                S.yield $ sep <> encodeEvent event
                 go (EncodeArray False : ctxs') rest
               JSONBeginObject -> do
                 let (sep, ctxs') = beforeValue style ctxs
-                S.yield sep
-                S.yield (encodeEvent event)
+                S.yield $ sep <> encodeEvent event
                 go (EncodeObject False : ctxs') rest
               JSONObjectKey _ -> do
                 let (sep, ctxs') = beforeKey style ctxs
-                S.yield sep
-                S.yield (encodeEvent event)
+                S.yield $ sep <> encodeEvent event
                 go ctxs' rest
               _ -> do
                 let (sep, ctxs') = beforeValue style ctxs
-                S.yield sep
-                S.yield (valueChunk event ctxs)
                 let ctxs'' = afterValue ctxs'
-                finishValue ctxs''
+                S.yield $ sep <> valueChunk event ctxs <> finishValue ctxs''
                 go ctxs'' rest
 
     -- Render one value event, honoring raw top-level string output.
@@ -157,12 +152,12 @@ encodeToChunks (EncoderConfig style (ValueOptions rawOption joinOption)) = go []
       | rawOption == Raw && null ctxs = encodeRawString text
     valueChunk event _ = encodeEvent event
 
-    -- Emit the value separator after a complete top-level value.  A
-    -- top-level value is one that leaves the context stack empty.
-    finishValue :: (Monad m) => [EncodeCtx] -> Stream (Of Chunk) m ()
+    -- Separator emitted after a complete top-level value.  A top-level
+    -- value is one that leaves the context stack empty.
+    finishValue :: [EncodeCtx] -> Chunk
     finishValue ctxs'
-      | joinOption == NoJoin && null ctxs' = S.yield (Chunk (char7 '\n') 1)
-      | otherwise = pure ()
+      | joinOption == NoJoin && null ctxs' = Chunk (char7 '\n') 1
+      | otherwise = mempty
 
 -- | The structural pieces to emit before an object key: a separator for
 -- the first or any following key, and the switch to
