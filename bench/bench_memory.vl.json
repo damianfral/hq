@@ -1,0 +1,30 @@
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
+  "title": "Peak RSS (5 MB input)",
+  "width": 900,
+  "height": {"step": 40},
+  "data": {"url": "hq-bench.csv"},
+  "transform": [
+    {"calculate": "slice(datum.command, 0, 2) == 'hq' ? 'hq' : 'jq'", "as": "backend"}
+  ],
+  "mark": "bar",
+  "encoding": {
+    "y": {"field": "command", "type": "nominal", "title": null, "sort": null},
+    "x": {"field": "peak_rss_mb", "type": "quantitative", "title": "Peak RSS (MB)"},
+    "color": {
+      "field": "backend",
+      "type": "nominal",
+      "title": "backend",
+      "scale": {"domain": ["hq", "jq"], "range": ["#DD2233", "#333333"]}
+    },
+    "tooltip": [
+      {"field": "command", "type": "nominal"},
+      {"field": "peak_rss_mb", "type": "quantitative", "title": "Peak RSS (MB)"}
+    ]
+  },
+  "config": {
+    "axis": {"labelFont": "monospace", "titleFont": "monospace"},
+    "legend": {"labelFont": "monospace", "titleFont": "monospace"},
+    "title": {"font": "monospace"}
+  }
+}
