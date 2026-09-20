@@ -49,7 +49,7 @@ bench_run() {
 }
 
 # Median of each numeric column grouped by command, preserving the
-# bench order so hq/jq pairs stay adjacent for plots.gp.
+# bench order so hq/jq pairs stay adjacent in the vega-lite specs.
 aggregate_median() {
     local agg="$1"
     if command -v mlr >/dev/null 2>&1; then

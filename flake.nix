@@ -79,14 +79,14 @@
           src = ./bench;
           dontUnpack = true;
           nativeBuildInputs = [pkgs.makeWrapper];
-          buildInputs = [pkgs.hq pkgs.jq pkgs.time];
+          buildInputs = [pkgs.hq pkgs.jq pkgs.time pkgs.miller];
           buildPhase = ''
             set -xue
             mkdir -p "$out/bin"
             cp "$src/bench.sh" "$out/bin/hq-bench"
             chmod +x "$out/bin/hq-bench"
             wrapProgram "$out/bin/hq-bench" \
-              --prefix PATH : ${pkgs.lib.makeBinPath [pkgs.bash pkgs.time pkgs.hq pkgs.jq pkgs.coreutils pkgs.gawk]}
+              --prefix PATH : ${pkgs.lib.makeBinPath [pkgs.bash pkgs.time pkgs.hq pkgs.jq pkgs.coreutils pkgs.gawk pkgs.miller]}
           '';
         };
         packages.hq-bench-results = pkgs.stdenv.mkDerivation {
@@ -95,13 +95,14 @@
           version = "0.0.0.1";
           src = ./test/test-resources;
           dontUnpack = true;
-          nativeBuildInputs = [pkgs.gnuplot];
+          nativeBuildInputs = [pkgs.vega-lite];
           buildInputs = [packages.hq-bench];
           buildPhase = ''
             hq-bench $src/5MB.json hq-bench.csv
-            cp ${./bench/plots.gp} plots.gp
-            export XDG_CACHE_HOME="$TMPDIR/.cache"
-            gnuplot plots.gp
+            cp ${./bench/bench_runtime.vl.json} bench_runtime.vl.json
+            cp ${./bench/bench_memory.vl.json} bench_memory.vl.json
+            vl2svg bench_runtime.vl.json bench_runtime.svg
+            vl2svg bench_memory.vl.json bench_memory.svg
           '';
           installPhase = "mkdir $out && cp -t $out hq-bench.csv bench_runtime.svg bench_memory.svg";
         };
