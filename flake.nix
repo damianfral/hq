@@ -35,7 +35,34 @@
     };
   in
     {
-      overlays.default = final: prev: {
+      overlays.default = final: prev: let
+        # Haskell package set with profiling enabled throughout the
+        # dependency closure, so executables can be linked for profiling.
+        profHaskellPackages = prev.haskell.packages.ghc9124.override (old: {
+          overrides =
+            final.lib.composeExtensions
+            (old.overrides or (_: _: {}))
+            (pself: psuper: {
+              mkDerivation = args:
+                psuper.mkDerivation (args
+                  // {
+                    enableLibraryProfiling = true;
+                    enableExecutableProfiling = true;
+                    # Test suites (and benchmarks) of dependencies are not
+                    # needed here, and some fail to link when built with
+                    # profiling objects only (e.g. Template Haskell tests
+                    # needing .dyn_o files).
+                    doCheck = false;
+                    doBenchmark = false;
+                    doHaddock = false;
+                  });
+              hq =
+                pself.generateOptparseApplicativeCompletions
+                ["hq"]
+                (pself.callCabal2nix "hq" filteredSrc {});
+            });
+        });
+      in {
         hq = final.haskell.lib.justStaticExecutables (
           final.haskellPackages.hq.overrideAttrs (oldAttrs: {
             configureFlags = oldAttrs.configureFlags ++ ["--ghc-options=-O2"];
@@ -52,6 +79,15 @@
                 (self.callCabal2nix "hq" filteredSrc {});
             });
         });
+        # Profiling build of hq: dependencies come with profiling
+        # libraries from profHaskellPackages and hq itself gets cost
+        # centers, so running it with +RTS -p writes usable .prof files.
+        # (-rtsopts -threaded already come from package.yaml.)
+        hq-prof = final.haskell.lib.justStaticExecutables (
+          profHaskellPackages.hq.overrideAttrs (oldAttrs: {
+            configureFlags = oldAttrs.configureFlags ++ ["--ghc-options=-O2" "--ghc-options=-fprof-auto"];
+          })
+        );
       };
     }
     // flake-utils.lib.eachDefaultSystem (
@@ -77,6 +113,31 @@
       in rec {
         packages.hq = pkgs.hq;
         packages.default = packages.hq;
+        packages.hq-prof = pkgs.hq-prof;
+        packages.hq-bench-profile = pkgs.stdenv.mkDerivation {
+          name = "hq-bench-profile";
+          pname = "hq-bench-profile";
+          version = "0.0.0.1";
+          dontUnpack = true;
+          buildInputs = [packages.hq-bench pkgs.hq-prof];
+          # Run the hq benchmark commands (same list as hq-bench-results
+          # uses) under the profiling RTS; jq commands are skipped since
+          # only the Haskell binary is built for profiling. Each run
+          # writes hq.prof, renamed per command to avoid clobbering.
+          buildPhase = ''
+            set -xue
+            hq-bench --list | grep '^hq ' > commands.txt
+            i=0
+            while IFS= read -r cmd; do
+              i=$((i + 1))
+              prof=$(printf 'hq-%02d.prof' "$i")
+              echo "profiling ($i): $cmd"
+              bash -c "${pkgs.hq-prof}/bin/hq +RTS -p -RTS ''${cmd#hq }" <${json-data} >/dev/null
+              mv hq.prof "./$prof"
+            done < commands.txt
+          '';
+          installPhase = "mkdir $out && cp -t $out commands.txt hq-*.prof";
+        };
         packages.hq-bench = pkgs.stdenv.mkDerivation {
           name = "hq-bench";
           pname = "hq-bench";

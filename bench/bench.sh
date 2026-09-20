@@ -25,6 +25,13 @@ benches=(
     "jq '.users |= map(del(.age))'"
 )
 
+# Print the benchmark commands without running them, so other
+# tooling (e.g. profiling) can reuse the exact same commands.
+if [[ "${1:-}" == "--list" ]]; then
+    printf '%s\n' "${benches[@]}"
+    exit 0
+fi
+
 raw="$(mktemp)"
 trap 'rm -f "$raw" time_results.txt' EXIT
 printf '%s\n' "command,runtime,peak_rss_mb" >"$raw"
