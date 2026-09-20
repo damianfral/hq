@@ -1,6 +1,6 @@
 {
   "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
-  "title": "Peak RSS (5 MB input)",
+  "title": "Peak RSS (100 MB input)",
   "width": 900,
   "height": {"step": 40},
   "data": {"url": "hq-bench.csv"},

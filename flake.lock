@@ -146,6 +146,18 @@
         "type": "github"
       }
     },
+    "json-data": {
+      "flake": false,
+      "locked": {
+        "narHash": "sha256-5oS76VYHA6jc7y1YMi2WKWiW1TDhiOg7jPRr7aU3P3A=",
+        "type": "file",
+        "url": "https://github.com/antonmedv/json-examples/raw/master/data_100mb.json"
+      },
+      "original": {
+        "type": "file",
+        "url": "https://github.com/antonmedv/json-examples/raw/master/data_100mb.json"
+      }
+    },
     "nix-filter": {
       "locked": {
         "lastModified": 1757882181,
@@ -254,6 +266,7 @@
       "inputs": {
         "feedback": "feedback",
         "flake-utils": "flake-utils",
+        "json-data": "json-data",
         "nix-filter": "nix-filter",
         "nixpkgs": "nixpkgs_3",
         "pre-commit-hooks": "pre-commit-hooks_2"

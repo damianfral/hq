@@ -8,6 +8,10 @@
     pre-commit-hooks.url = "github:cachix/git-hooks.nix";
     pre-commit-hooks.inputs.nixpkgs.follows = "nixpkgs";
     feedback.url = "github:NorfairKing/feedback";
+    json-data = {
+      url = "https://github.com/antonmedv/json-examples/raw/master/data_100mb.json";
+      flake = false;
+    };
   };
 
   outputs = {
@@ -17,6 +21,7 @@
     nix-filter,
     pre-commit-hooks,
     feedback,
+    json-data,
     ...
   }: let
     pkgsFor = system:
@@ -93,13 +98,12 @@
           name = "hq-bench-results";
           pname = "hq-bench-results";
           version = "0.0.0.1";
-          src = ./test/test-resources;
           dontUnpack = true;
           nativeBuildInputs = [pkgs.vega-lite];
           buildInputs = [packages.hq-bench];
           buildPhase = ''
             set -xue
-            hq-bench $src/5MB.json hq-bench.csv
+            hq-bench ${json-data} hq-bench.csv 3
             cp ${./bench/bench_runtime.vl.json} bench_runtime.vl.json
             cp ${./bench/bench_memory.vl.json} bench_memory.vl.json
             vl2svg bench_runtime.vl.json bench_runtime.svg

@@ -13,16 +13,16 @@ runs="${3:-5}"
 #
 # Format: one shell command per entry (hq or jq reading JSON from stdin).
 benches=(
-    "hq fold 'each.#id'"
-    "jq '[.[].id]'"
-    "hq over 'each.#score' '+1'"
-    "jq 'map(.score += 1)'"
-    "hq over 'each.#version' '+1'"
-    "jq 'map(.version += 1)'"
-    "hq set 'each.#score' '0'"
-    "jq 'map(.score = 0)'"
-    "hq delete 'each.#score'"
-    "jq 'map(del(.score))'"
+    "hq fold '#users.each.#id'"
+    "jq '[.users[].id]'"
+    "hq over '#users.each.#age' '+1'"
+    "jq '.users |= map(.age += 1)'"
+    "hq over '#users.each.#balance' '+1'"
+    "jq '.users |= map(.balance += 1)'"
+    "hq set '#users.each.#age' '0'"
+    "jq '.users |= map(.age = 0)'"
+    "hq delete '#users.each.#age'"
+    "jq '.users |= map(del(.age))'"
 )
 
 raw="$(mktemp)"
