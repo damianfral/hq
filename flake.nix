@@ -98,6 +98,7 @@
           nativeBuildInputs = [pkgs.vega-lite];
           buildInputs = [packages.hq-bench];
           buildPhase = ''
+            set -xue
             hq-bench $src/5MB.json hq-bench.csv
             cp ${./bench/bench_runtime.vl.json} bench_runtime.vl.json
             cp ${./bench/bench_memory.vl.json} bench_memory.vl.json
