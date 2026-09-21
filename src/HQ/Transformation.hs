@@ -190,7 +190,7 @@ runTransformation (Transformation transformation) = run transformation
     run (Fix step) value = case step of
       Add n -> withNumber (Number . (+ n)) value
       Multiply n -> withNumber (Number . (* n)) value
-      Subtract n -> withNumber (Number . flip (-) n) value
+      Subtract n -> withNumber (Number . (+ negate n)) value
       Divide n -> withNumber (Number . (/ n)) value
       ConcatString suffix -> withString (String . (<> suffix)) value
       ConcatArray elements -> withArray (Array . (<> Vector.fromList elements)) value
