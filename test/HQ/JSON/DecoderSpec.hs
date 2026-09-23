@@ -113,6 +113,12 @@ scalarSpec = describe "scalars" $ do
     it "parses scientific notation with exponent" $ do
       decodeComplete "1.5e2" `shouldBe` Right [JSONNumber 150]
 
+    it "parses negative mantissa with unsigned exponent" $ do
+      decodeComplete "-1e5" `shouldBe` Right [JSONNumber (-100000)]
+
+    it "parses negative decimal with exponent" $ do
+      decodeComplete "-1.5e2" `shouldBe` Right [JSONNumber (-150)]
+
   describe "strings" $ do
     it "parses empty string" $ do
       decodeComplete "\"\"" `shouldBe` Right [JSONString ""]

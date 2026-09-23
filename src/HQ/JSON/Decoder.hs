@@ -545,65 +545,42 @@ finalizeNumber decoder = case decoderState decoder of
 
 -- | Parse the accumulated number buffer into a Scientific value.
 -- We build it manually to stay within the JSON grammar.
+--
+-- The buffer is scanned once: every digit accumulates into a single
+-- coefficient while post-dot digits are counted, so no @10 ^ n@
+-- bignum power is needed. A leading @-@ sets only the overall sign;
+-- @-@/@+@ later in the buffer is an exponent sign.
 parseNumberBuffer :: Text -> Scientific
-parseNumberBuffer buf = go (0 :: Integer) (0 :: Integer) False False False (0 :: Integer) (0 :: Int) 0
+parseNumberBuffer buf = go (0 :: Integer) (0 :: Integer) (0 :: Int) pos0 False False False
   where
-    go :: Integer -> Integer -> Bool -> Bool -> Bool -> Integer -> Int -> Int -> Scientific
-    go !intP !fracP !hasDot !hasExp !expNeg !expP !nFrac !pos
-      | pos >= T.length buf =
-          let signed =
-                if not (T.null buf) && T.take 1 buf == "-"
-                  then negate
-                  else identity
-              coeff = signed (intP * 10 ^ nFrac + fracP)
-              expVal = (if expNeg then negate else identity) expP
+    len = T.length buf
+    (negative, pos0)
+      | not (T.null buf) && T.index buf 0 == '-' = (True, 1)
+      | otherwise = (False, 0)
+    go :: Integer -> Integer -> Int -> Int -> Bool -> Bool -> Bool -> Scientific
+    go !coeff !expP !nFrac !pos !hasDot !hasExp !expNeg
+      | pos >= len =
+          let expVal = (if expNeg then negate else identity) expP
               finalExp = fromInteger (expVal - fromIntegral nFrac :: Integer) :: Int
-           in coeff `scientific` finalExp
+           in (if negative then negate else identity) coeff `scientific` finalExp
       | otherwise =
           let c = T.index buf pos
            in case c of
-                '-' -> go intP fracP hasDot hasExp True expP nFrac (pos + 1)
-                '+' -> go intP fracP hasDot hasExp False expP nFrac (pos + 1)
-                '.' -> go intP fracP True hasExp expNeg expP nFrac (pos + 1)
-                'e' -> go intP fracP hasDot True expNeg expP nFrac (pos + 1)
-                'E' -> go intP fracP hasDot True expNeg expP nFrac (pos + 1)
+                '-' -> go coeff expP nFrac (pos + 1) hasDot hasExp True
+                '+' -> go coeff expP nFrac (pos + 1) hasDot hasExp False
+                '.' -> go coeff expP nFrac (pos + 1) True hasExp expNeg
+                'e' -> go coeff expP nFrac (pos + 1) hasDot True expNeg
+                'E' -> go coeff expP nFrac (pos + 1) hasDot True expNeg
                 _
                   | isDigit c ->
                       let d = fromIntegral (digitToInt c) :: Integer
                        in if hasExp
-                            then
-                              go
-                                intP
-                                fracP
-                                hasDot
-                                True
-                                expNeg
-                                (expP * 10 + d)
-                                nFrac
-                                (pos + 1)
+                            then go coeff (expP * 10 + d) nFrac (pos + 1) hasDot True expNeg
                             else
                               if hasDot
-                                then
-                                  go
-                                    intP
-                                    (fracP * 10 + d)
-                                    True
-                                    hasExp
-                                    expNeg
-                                    expP
-                                    (nFrac + 1)
-                                    (pos + 1)
-                                else
-                                  go
-                                    (intP * 10 + d)
-                                    fracP
-                                    hasDot
-                                    hasExp
-                                    expNeg
-                                    expP
-                                    nFrac
-                                    (pos + 1)
-                _ -> go intP fracP hasDot hasExp expNeg expP nFrac (pos + 1)
+                                then go (coeff * 10 + d) expP (nFrac + 1) (pos + 1) True False expNeg
+                                else go (coeff * 10 + d) expP nFrac (pos + 1) False False expNeg
+                  | otherwise -> go coeff expP nFrac (pos + 1) hasDot hasExp expNeg
 
 startKeyword :: Decoder -> Text -> Text -> Int -> Either ParseError DecoderResult
 startKeyword decoder input keyword consumed =
