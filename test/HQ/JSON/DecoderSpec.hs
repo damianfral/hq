@@ -8,6 +8,8 @@ import qualified Data.Text as T
 import HQ.JSON.Decoder
 import HQ.JSON.Event
 import Relude hiding (Compose, id)
+import Streaming (Of (..), Stream)
+import qualified Streaming.Prelude as S
 import Test.HQ (decodeStreaming)
 import Test.Syd
 
@@ -23,6 +25,7 @@ spec = describe "HQ.JSON.Decoder" $ do
   errorSpec
   streamingSpec
   adversarialSpec
+  pullEventSpec
 
 --------------------------------------------------------------------------------
 -- Helpers
@@ -1050,3 +1053,106 @@ adversarialSpec = describe "malformed input" $ do
         Left TrailingInput -> pure ()
         other ->
           expectationFailure $ "Expected TrailingInput, got: " <> show other
+
+--------------------------------------------------------------------------------
+-- pullEvent (single-event pulls agree with streaming decode)
+--------------------------------------------------------------------------------
+
+-- | Pull every event through pullEvent.
+pullAllChunks :: [Text] -> IO (Either Text [JSONEvent])
+pullAllChunks chunks = runExceptT (collect initialDecoder stream)
+  where
+    stream :: Stream (Of Text) (ExceptT Text IO) ()
+    stream = S.each chunks
+    collect decoder text = do
+      pulled <- pullEvent decoder text
+      case pulled of
+        PulledEnd -> pure []
+        PulledEvent event decoder' rest -> (event :) <$> collect decoder' rest
+
+-- | Chunkings under which an input is decoded: whole, every two-way
+-- split, and one-character chunks for short inputs.
+splits :: Text -> [[Text]]
+splits input
+  | T.null input = [[input]]
+  | otherwise =
+      [input]
+        : [[T.take n input, T.drop n input] | n <- [1 .. T.length input - 1]]
+          ++ [[one c | c <- toString input] | T.length input <= 24]
+
+-- | Streaming decode with errors shown, for comparison with pullEvent.
+decodeShown :: [Text] -> Either Text [JSONEvent]
+decodeShown chunks = case decodeStreaming chunks of
+  Left err -> Left (show err)
+  Right events -> Right events
+
+pullEventSpec :: Spec
+pullEventSpec = describe "pullEvent" $ do
+  it "agrees with streaming decode on valid inputs under every split" $ do
+    forM_ validPullCorpus $ \input ->
+      forM_ (splits input) $ \chunks -> do
+        pulled <- pullAllChunks chunks
+        pulled `shouldBe` decodeShown chunks
+
+  it "agrees with streaming decode on malformed inputs under every split" $ do
+    forM_ malformedPullCorpus $ \input ->
+      forM_ (splits input) $ \chunks -> do
+        pulled <- pullAllChunks chunks
+        pulled `shouldBe` decodeShown chunks
+  where
+    validPullCorpus :: [Text]
+    validPullCorpus =
+      [ "42",
+        "-42",
+        "0",
+        "3.14",
+        "-3.14",
+        "0.15",
+        "1e10",
+        "1E10",
+        "1e-2",
+        "1e+2",
+        "1.5e2",
+        "-1.5e-6",
+        "-1e5",
+        "null",
+        "true",
+        "false",
+        "\"\"",
+        "\"hello\"",
+        "\"a\\\"b\\\\c\\/\\b\\f\\n\\r\\t\"",
+        "\"\\u00e9\"",
+        "\"\\ud83d\\ude00\"",
+        "[]",
+        "[1,2,3]",
+        "[1,\"a\",true,null]",
+        "{}",
+        "{\"a\":1,\"b\":[2,3]}",
+        " {\"a\" : [1, 2] } ",
+        "",
+        "   "
+      ]
+    malformedPullCorpus :: [Text]
+    malformedPullCorpus =
+      [ "\"abc",
+        "{\"a\":1",
+        "[1,2",
+        "12a",
+        "\"\\x\"",
+        "\"\\u00z1\"",
+        "\"\\ud83d\"",
+        "\"\\ud83dX\"",
+        "01",
+        "1e",
+        "1e+",
+        "{\"a\" 1}",
+        "[1,,2]",
+        "[1 2]",
+        "{,}",
+        "nul",
+        "\"a\":1",
+        "[1] trailing",
+        "{\"a\":1} x",
+        "-",
+        "--1"
+      ]

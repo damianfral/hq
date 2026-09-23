@@ -764,6 +764,58 @@ drainFinish decoder r = case finish decoder of
   Right (NeedInput _) -> pure (Left UnexpectedEnd)
   Right (Emit event nextDecoder) -> S.yield event >> drainFinish nextDecoder r
 
+-- | The result of pulling a single event: clean end of input, or one
+-- event with the decoder and text positioned immediately after it.
+data Pulled
+  = PulledEnd
+  | PulledEvent JSONEvent Decoder (StreamIO Text ())
+
+-- | Pull a single event from a decoder cursor.
+--
+-- This drives the same machine as 'decode' ('step'﻿/﻿'feed' with the
+-- same end-of-input handling as 'runDecoder'﻿/﻿'drainDone'﻿/﻿'drainFinish'),
+-- but returns one event at a time with the advanced cursor instead of
+-- an event stream. Navigation peeks at events through this; bulk
+-- take\/skip loops drive 'step' directly.
+pullEvent :: Decoder -> StreamIO Text () -> ExceptT Text IO Pulled
+pullEvent = drive
+  where
+    drive :: Decoder -> StreamIO Text () -> ExceptT Text IO Pulled
+    drive dec txt = case step dec of
+      Left err -> throwError (show err)
+      Right (Emit event dec') -> pure (PulledEvent event dec' txt)
+      Right (NeedInput dec') -> pullMore dec' txt
+      Right (Done dec') -> endCheck dec' txt
+    pullMore dec txt = do
+      result <- S.next txt
+      case result of
+        Left ()
+          | isRootDone dec || dec == initialDecoder -> pure PulledEnd
+          | otherwise -> finishEnd dec
+        Right (chunk, rest) -> case feed chunk dec of
+          Left err -> throwError (show err)
+          Right (Emit event dec') -> pure (PulledEvent event dec' rest)
+          Right (NeedInput dec') -> pullMore dec' rest
+          Right (Done dec') -> endCheck dec' rest
+    endCheck dec txt = do
+      result <- S.next txt
+      case result of
+        Left () -> finishEnd dec
+        Right (chunk, rest)
+          | isRootDone dec ->
+              if T.all isWhitespace chunk
+                then endCheck dec rest
+                else throwError (show TrailingInput)
+          | otherwise -> throwError (show TrailingInput)
+    finishEnd dec = case finish dec of
+      Left UnexpectedEnd
+        | decoderState dec == ParserStateValue && null (decoderStack dec) ->
+            pure PulledEnd
+      Left err -> throwError (show err)
+      Right (Done _) -> pure PulledEnd
+      Right (NeedInput _) -> throwError (show UnexpectedEnd)
+      Right (Emit event dec') -> pure (PulledEvent event dec' (pure ()))
+
 type StreamIO s = Stream (Of s) (ExceptT Text IO)
 
 decodeIO :: StreamIO Text () -> StreamIO JSONEvent ()
