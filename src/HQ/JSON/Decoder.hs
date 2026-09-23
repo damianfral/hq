@@ -506,30 +506,38 @@ finishString target value remaining decoder = case target of
     Right $ Emit key newDecoder
 
 -- | Continue parsing a number from the saved state.
+--
+-- The common case (the rest of the number sits in the current chunk)
+-- is handled by a tight index loop: the chunk length is measured
+-- once and no per-character 'T.uncons'.State is written back exactly once,
+-- when the number ends, fails, or runs out of input.
 stepNumber :: Decoder -> NumberState -> Either ParseError DecoderResult
-stepNumber decoder numState = case T.uncons (decoderInput decoder) of
-  Nothing ->
-    Right
-      $ NeedInput
-        decoder
-          { decoderInput = mempty,
-            decoderState = ParserStateNumber numState
-          }
-  Just (c, rest) -> case advanceNumber (numberPhase numState) c of
-    NumEnd ->
-      finalizeNumber
-        decoder
-          { decoderInput = T.cons c rest,
-            decoderState = ParserStateNumber numState
-          }
-    NumError -> Left (InvalidNumber (reversedStringToText (numberBuffer numState) <> one c))
-    NumStep nextPhase ->
-      let numState' =
-            numState
-              { numberBuffer = ReversedString $ c : unReversedString (numberBuffer numState),
-                numberPhase = nextPhase
-              }
-       in stepNumber decoder {decoderInput = rest} numState'
+stepNumber decoder numState = loop 0 rev0 phase0
+  where
+    input = decoderInput decoder
+    len = T.length input
+    ReversedString rev0 = numberBuffer numState
+    phase0 = numberPhase numState
+    loop :: Int -> String -> NumberPhase -> Either ParseError DecoderResult
+    loop !pos !rev !phase
+      | pos >= len =
+          Right
+            $ NeedInput
+              decoder
+                { decoderInput = mempty,
+                  decoderState = ParserStateNumber (NumberState (ReversedString rev) phase)
+                }
+      | otherwise =
+          let c = T.index input pos
+           in case advanceNumber phase c of
+                NumEnd ->
+                  finalizeNumber
+                    decoder
+                      { decoderInput = T.drop pos input,
+                        decoderState = ParserStateNumber (NumberState (ReversedString rev) phase)
+                      }
+                NumError -> Left (InvalidNumber (reversedStringToText (ReversedString rev) <> one c))
+                NumStep nextPhase -> loop (pos + 1) (c : rev) nextPhase
 
 finalizeNumber :: Decoder -> Either ParseError DecoderResult
 finalizeNumber decoder = case decoderState decoder of
