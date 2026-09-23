@@ -1,0 +1,48 @@
+name: build-project
+on: push
+
+jobs:
+
+  build-dev-shell:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@main
+      - uses: cachix/install-nix-action@master
+      - uses: cachix/cachix-action@master
+        with:
+          name: opensource
+          authToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
+      - uses: damianfral/nix-cache-lookup@master
+        id: cache-lookup-dev-shell
+        with:
+          flake-attribute: .#devShells.x86_64-linux.default
+      - run: nix build -L .#devShells.x86_64-linux.default --accept-flake-config
+        if: steps.cache-lookup-dev-shell.outputs.cached != 'true'
+
+  build-package:
+    runs-on: ubuntu-latest
+    needs: [build-dev-shell]
+    steps:
+      - uses: actions/checkout@main
+      - uses: cachix/install-nix-action@master
+      - uses: cachix/cachix-action@master
+        with:
+          name: opensource
+          authToken: '${{ secrets.CACHIX_AUTH_TOKEN }}'
+      - uses: damianfral/nix-cache-lookup@master
+        id: cache-lookup-hq
+        with:
+          flake-attribute: .#hq
+      - run: nix build -L .#hq --accept-flake-config
+        if: steps.cache-lookup-hq.outputs.cached != 'true'
+
+  flake-check:
+    runs-on: ubuntu-latest
+    needs: [build-package, build-dev-shell]
+    steps:
+      - uses: actions/checkout@main
+      - uses: cachix/install-nix-action@master
+        with:
+          extra_nix_config: |
+            access-tokens = github.com=${{ secrets.GITHUB_TOKEN }}
+      - run: nix flake check --accept-flake-config
