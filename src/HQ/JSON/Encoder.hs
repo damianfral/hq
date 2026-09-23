@@ -213,9 +213,11 @@ closingDelimiter style depth ctx = case ctx of
   EncodeObjectAfterKey -> close True '}'
   where
     close seen delim = case style of
-      Pretty _
+      Pretty width
         | seen ->
-            Chunk (char7 '\n') 1 <> indent style depth <> Chunk (char7 delim) 1
+            let size = width * depth
+                s = '\n' : replicate size ' ' ++ [delim]
+             in Chunk (string7 s) (size + 2)
       _ -> Chunk (char7 delim) 1
 
 -- | The chunk emitted before an array element or an object key.
@@ -226,29 +228,21 @@ closingDelimiter style depth ctx = case ctx of
 elementSeparator :: EncodeStyle -> Bool -> Int -> Chunk
 elementSeparator Compact seen _ =
   if seen then Chunk (char7 ',') 1 else mempty
-elementSeparator style@(Pretty _) seen depth =
-  newlinePrefix <> indent style depth
-  where
-    newlinePrefix
-      | seen = Chunk (char7 ',' <> char7 '\n') 2
-      | otherwise = Chunk (char7 '\n') 1
+elementSeparator (Pretty width) seen depth =
+  let size = width * depth
+      prefix = if seen then ",\n" else "\n"
+      s = prefix ++ replicate size ' '
+   in Chunk (string7 s) (size + 1 + fromEnum seen)
 
 -- | The chunk emitted between an object key and its value.
 colonSeparator :: EncodeStyle -> Chunk
 colonSeparator Compact = Chunk (char7 ':') 1
 colonSeparator (Pretty _) = Chunk (string7 ": ") 2
 
--- | Indentation to @depth@ levels, as a 'Chunk' whose size accounts for
--- every emitted space.
-indent :: EncodeStyle -> Int -> Chunk
-indent Compact _ = mempty
-indent (Pretty width) depth =
-  let size = width * depth in Chunk (string7 (replicate size ' ')) size
-
 data Chunk = Chunk {chunkBuilder :: !Builder, chunkSize :: !Int}
 
 instance Semigroup Chunk where
-  c1 <> c2 = Chunk (((<>) `on` chunkBuilder) c1 c2) (((+) `on` chunkSize) c1 c2)
+  Chunk b1 s1 <> Chunk b2 s2 = let !s = s1 + s2 in Chunk (b1 <> b2) s
 
 instance Monoid Chunk where mempty = Chunk mempty 0
 
