@@ -243,8 +243,7 @@ colonSeparator (Pretty _) = Chunk (string7 ": ") 2
 indent :: EncodeStyle -> Int -> Chunk
 indent Compact _ = mempty
 indent (Pretty width) depth =
-  let size = width * depth
-   in Chunk (mconcat (replicate size (char7 ' '))) size
+  let size = width * depth in Chunk (string7 (replicate size ' ')) size
 
 data Chunk = Chunk {chunkBuilder :: !Builder, chunkSize :: !Int}
 
