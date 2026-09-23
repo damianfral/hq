@@ -73,7 +73,7 @@ runFold (Optic optic) = run optic takeValue
             Right (JSONObjectKey key, rest)
               | key == name -> do
                   afterField <- k rest
-                  skipContainer JSONEndObject afterField
+                  skipDepth 1 afterField
               | otherwise -> do
                   afterValue <- skipValue rest
                   go afterValue
@@ -149,7 +149,7 @@ runFold (Optic optic) = run optic takeValue
         Right (event, rest) -> skipValue (S.cons event rest)
       where
         findIndex n stream
-          | n < 0 = skipContainer JSONEndArray stream
+          | n < 0 = skipDepth 1 stream
           | otherwise = do
               result <- lift (S.next stream)
               case result of
@@ -158,7 +158,7 @@ runFold (Optic optic) = run optic takeValue
                 Right (event, rest) -> case n of
                   0 -> do
                     afterField <- k (S.cons event rest)
-                    skipContainer JSONEndArray afterField
+                    skipDepth 1 afterField
                   _ -> do
                     afterValue <- skipValue (S.cons event rest)
                     findIndex (n - 1) afterValue
@@ -618,20 +618,33 @@ skipValue input = do
   case result of
     Left () -> throwError "unexpected end of JSON input"
     Right (event, rest) -> case event of
-      JSONBeginArray -> skipContainer JSONEndArray rest
-      JSONBeginObject -> skipContainer JSONEndObject rest
+      JSONBeginArray -> skipDepth 1 rest
+      JSONBeginObject -> skipDepth 1 rest
       JSONEndArray -> throwError "unexpected end of array"
       JSONEndObject -> throwError "unexpected end of object"
       JSONObjectKey _ -> throwError "unexpected object key"
       _ -> pure rest
 
-skipContainer :: JSONEvent -> ValueStream -> S.Stream (S.Of JSONEvent) (ExceptT Text IO) ValueStream
-skipContainer closing input = do
+-- | Consume the rest of a container whose opening has already been
+-- read, without yielding its events.
+--
+-- A flat depth counter replaces one 'skipValue' loop per nesting
+-- level, so skipping nested values no longer piles up @>>=@
+-- continuations. Any container end at depth zero ends the skip; the
+-- event stream only carries decoder-validated JSON, so closes always
+-- match their opens.
+skipDepth :: Int -> ValueStream -> S.Stream (S.Of JSONEvent) (ExceptT Text IO) ValueStream
+skipDepth depth input = do
   result <- lift (S.next input)
   case result of
     Left () -> throwError "unexpected end of JSON input"
-    Right (event, rest)
-      | event == closing -> pure rest
-      | event == JSONBeginArray -> skipContainer JSONEndArray rest >>= skipContainer closing
-      | event == JSONBeginObject -> skipContainer JSONEndObject rest >>= skipContainer closing
-      | otherwise -> skipContainer closing rest
+    Right (event, rest) -> case event of
+      JSONBeginArray -> skipDepth (depth + 1) rest
+      JSONBeginObject -> skipDepth (depth + 1) rest
+      JSONEndArray
+        | depth <= 1 -> pure rest
+        | otherwise -> skipDepth (depth - 1) rest
+      JSONEndObject
+        | depth <= 1 -> pure rest
+        | otherwise -> skipDepth (depth - 1) rest
+      _ -> skipDepth depth rest
