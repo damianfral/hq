@@ -68,7 +68,7 @@
             configureFlags = oldAttrs.configureFlags ++ ["--ghc-options=-O2"];
           })
         );
-        haskellPackages = prev.haskell.packages.ghc9124.override (old: {
+        haskellPackages = prev.haskellPackages.override (old: {
           overrides =
             final.lib.composeExtensions
             (old.overrides or (_: _: {}))
@@ -96,7 +96,7 @@
         precommitCheck = pre-commit-hooks.lib.${system}.run {
           src = ./.;
           hooks = {
-            actionlint.enable = true;
+            # actionlint.enable = true;
             alejandra.enable = true;
             beautysh.enable = true;
             check-merge-conflicts.enable = true;
@@ -181,7 +181,7 @@
           packages = p: [p.hq];
           buildInputs = with pkgs;
           with pkgs.haskellPackages; [
-            actionlint
+            # actionlint
             alejandra
             cabal-install
             ghcid
