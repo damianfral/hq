@@ -149,10 +149,6 @@ prismParserSpec = describe "parseQuery (prisms)" $ do
 
   it "parses _Just" $ parseQuery "fold _Just" `shouldBe` Right (Fold _Just)
 
-  it "parses _1" $ parseQuery "fold _1" `shouldBe` Right (Fold _1)
-
-  it "parses _2" $ parseQuery "fold _2" `shouldBe` Right (Fold _2)
-
   it "parses prism in composition with each" $ do
     parseQuery "fold each._String"
       `shouldBe` Right (Fold (compose each _String))
@@ -161,8 +157,8 @@ prismParserSpec = describe "parseQuery (prisms)" $ do
     parseQuery "fold #data._Number"
       `shouldBe` Right (Fold (compose (field "data") _Number))
 
-  it "parses prism composed with prism" $ do
-    parseQuery "fold _Array._1" `shouldBe` Right (Fold (compose _Array _1))
+  it "parses prism composed with an index" $ do
+    parseQuery "fold _Array.ix 0" `shouldBe` Right (Fold (compose _Array (ix 0)))
 
 overParserSpec :: Spec
 overParserSpec = describe "parseQuery (over)" $ do

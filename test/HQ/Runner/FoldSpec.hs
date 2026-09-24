@@ -107,11 +107,11 @@ previewSpec = describe "preview" $ do
     runQueryPreviewTest "each . #name" "[{\"name\":\"alice\"},{\"name\":\"bob\"}]"
     `shouldReturn` Right [JSONString "alice"]
 
-  it "returns the first array element with _1" $ do
-    runQueryPreviewTest "_1" "[10,20]" `shouldReturn` Right [JSONNumber 10]
+  it "returns the first array element with ix 0" $ do
+    runQueryPreviewTest "ix 0" "[10,20]" `shouldReturn` Right [JSONNumber 10]
 
-  it "returns nothing when _1 finds no element" $ do
-    runQueryPreviewTest "_1" "[]" `shouldReturn` Right []
+  it "returns nothing when ix 0 finds no element" $ do
+    runQueryPreviewTest "ix 0" "[]" `shouldReturn` Right []
 
   it "returns nothing for an empty array" $ do
     runQueryPreviewTest "each" "[]" `shouldReturn` Right []

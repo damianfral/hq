@@ -52,7 +52,7 @@ ixParser = symbol "ix" >> ix <$> decimal
 
 prismNameParser :: Parser Optic
 prismNameParser =
-  s_String <|> s_Number <|> s_Bool <|> s_Null <|> s_Array <|> s_Object <|> s_Just <|> s_1 <|> s_2
+  s_String <|> s_Number <|> s_Bool <|> s_Null <|> s_Array <|> s_Object <|> s_Just
   where
     s_String = symbol "String" $> _String
     s_Number = symbol "Number" $> _Number
@@ -61,8 +61,6 @@ prismNameParser =
     s_Array = symbol "Array" $> _Array
     s_Object = symbol "Object" $> _Object
     s_Just = symbol "Just" $> _Just
-    s_1 = symbol "1" $> _1
-    s_2 = symbol "2" $> _2
 
 spaceConsumer :: Parser ()
 spaceConsumer = skipMany spaceChar

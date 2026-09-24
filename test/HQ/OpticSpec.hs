@@ -21,9 +21,9 @@ spec = describe "HQ.Optic" $ do
             keys,
             values,
             ix 0,
+            ix 1,
             ix 3,
             _String,
-            _1,
             compose each keys,
             compose keys _String,
             compose values keys

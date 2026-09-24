@@ -50,10 +50,6 @@ data OpticF a
     PrismObject
   | -- | Prism: focus on any non-null JSON value. Fails on null.
     PrismJust
-  | -- | Prism: focus on the first element of a JSON array. Fails on non-arrays or empty arrays.
-    Prism1
-  | -- | Prism: focus on the second element of a JSON array. Fails on non-arrays or arrays with fewer than 2 elements.
-    Prism2
   | -- | Focus on the element at the given index of a JSON array (arrays
     -- only; objects and scalars focus on nothing). Out-of-bounds and
     -- negative indices focus on nothing.
@@ -76,8 +72,6 @@ instance Eq Optic where
   Optic (Fix PrismArray) == Optic (Fix PrismArray) = True
   Optic (Fix PrismObject) == Optic (Fix PrismObject) = True
   Optic (Fix PrismJust) == Optic (Fix PrismJust) = True
-  Optic (Fix Prism1) == Optic (Fix Prism1) = True
-  Optic (Fix Prism2) == Optic (Fix Prism2) = True
   Optic (Fix Keys) == Optic (Fix Keys) = True
   Optic (Fix Values) == Optic (Fix Values) = True
   Optic (Fix (Ix a)) == Optic (Fix (Ix b)) = a == b
@@ -105,8 +99,6 @@ instance Show Optic where
   showsPrec _ (Optic (Fix PrismArray)) = showString "_Array"
   showsPrec _ (Optic (Fix PrismObject)) = showString "_Object"
   showsPrec _ (Optic (Fix PrismJust)) = showString "_Just"
-  showsPrec _ (Optic (Fix Prism1)) = showString "_1"
-  showsPrec _ (Optic (Fix Prism2)) = showString "_2"
   showsPrec _ (Optic (Fix (Ix i))) = showString $ "ix " <> show i
 
 -- | Focus on a named field of a JSON object (affine traversal).
@@ -167,14 +159,6 @@ _Object = Optic (Fix PrismObject)
 -- | Prism: focus on any non-null JSON value.
 _Just :: Optic
 _Just = Optic (Fix PrismJust)
-
--- | Prism: focus on the first element of a JSON array.
-_1 :: Optic
-_1 = Optic (Fix Prism1)
-
--- | Prism: focus on the second element of a JSON array.
-_2 :: Optic
-_2 = Optic (Fix Prism2)
 
 -- | Focus on the element at the given index of a JSON array (arrays
 -- only; objects and scalars focus on nothing).

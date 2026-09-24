@@ -34,8 +34,6 @@ runFold (Optic optic) = run optic takeValue
       PrismArray -> runScalar isArray k input
       PrismObject -> runScalar isObject k input
       PrismJust -> runJust k input
-      Prism1 -> runIndex 0 k input
-      Prism2 -> runIndex 1 k input
       Ix i -> runIndex i k input
 
     runField :: Text -> K -> K

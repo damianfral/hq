@@ -71,8 +71,6 @@ runRewrite rewriter (Optic optic) config = run optic
       PrismArray -> rewritePrism isArray suffix input ctxs
       PrismObject -> rewritePrism isObject suffix input ctxs
       PrismJust -> rewriteJust suffix input ctxs
-      Prism1 -> rewriteIndex 0 suffix input ctxs
-      Prism2 -> rewriteIndex 1 suffix input ctxs
       Ix i -> rewriteIndex i suffix input ctxs
 
     composeStep :: Fix OpticF -> Fix OpticF -> Fix OpticF
@@ -111,8 +109,6 @@ runRewrite rewriter (Optic optic) config = run optic
       Keys -> False
       Values -> False
       Ix _ -> False
-      Prism1 -> False
-      Prism2 -> False
       PrismString -> isString event
       PrismNumber -> isNumber event
       PrismBool -> isBool event

@@ -186,7 +186,7 @@ setSpec = describe "set" $ do
       ]
 
   it "replaces the first array element" $ do
-    runSetTest "_1" "9" "[[1,2],[3]]"
+    runSetTest "ix 0" "9" "[[1,2],[3]]"
     `shouldReturn` Right
       [ JSONBeginArray,
         JSONNumber 9,
@@ -197,7 +197,7 @@ setSpec = describe "set" $ do
       ]
 
   it "replaces the second array element" $ do
-    runSetTest "_2" "9" "[1,[2,3]]"
+    runSetTest "ix 1" "9" "[1,[2,3]]"
     `shouldReturn` Right
       [JSONBeginArray, JSONNumber 1, JSONNumber 9, JSONEndArray]
 
@@ -270,7 +270,7 @@ deleteSpec = describe "delete" $ do
       [JSONBeginObject, JSONObjectKey "b", JSONString "x", JSONEndObject]
 
   it "removes the first array element" $ do
-    runDeleteTest "_1" "[10,20]"
+    runDeleteTest "ix 0" "[10,20]"
     `shouldReturn` Right [JSONBeginArray, JSONNumber 20, JSONEndArray]
 
   it "removes a member whose value is targeted by a composed optic" $ do
