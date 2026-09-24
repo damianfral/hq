@@ -8,7 +8,7 @@ module HQ.Runner
   ( module HQ.Runner.Cursor,
     module HQ.Runner.Take,
     module HQ.Runner.Fold,
-    module HQ.Runner.Splice,
+    module HQ.Runner.Rewrite,
     RunnerEnv (..),
     RunnerF (..),
     Runner,
@@ -30,7 +30,7 @@ import HQ.JSON.Encoder (BSStream, EncodeStyle (..), EncoderConfig (..), Join (..
 import HQ.Query (Query (..))
 import HQ.Runner.Cursor
 import HQ.Runner.Fold
-import HQ.Runner.Splice
+import HQ.Runner.Rewrite
 import HQ.Runner.Take
 import Relude hiding (Compose, Const)
 import qualified Streaming.Prelude as S
@@ -108,9 +108,9 @@ jsonRunner = do
     Preview optic -> pure (void (encode config 65536 (takeFirstValue (runFold optic cursor))))
     Fold optic -> pure (void (encode config 65536 (runFold optic cursor)))
     Over optic transformation ->
-      pure (void (encodeChunks 65536 (runSplice (SpliceTransform transformation) optic config cursor [])))
+      pure (void (encodeChunks 65536 (runRewrite (RewriteTransform transformation) optic config cursor [])))
     Delete optic ->
-      pure (void (encodeChunks 65536 (runSplice SpliceDelete optic config cursor [])))
+      pure (void (encodeChunks 65536 (runRewrite RewriteDelete optic config cursor [])))
 
 decodeUtf8Stream :: StreamIO ByteString () -> StreamIO Text ()
 decodeUtf8Stream = go mempty

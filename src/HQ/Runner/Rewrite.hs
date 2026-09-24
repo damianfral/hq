@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 
-module HQ.Runner.Splice where
+module HQ.Runner.Rewrite where
 
 import Control.Monad.Error.Class (MonadError (throwError))
 import Data.Aeson (Value)
@@ -10,7 +10,7 @@ import Data.Functor.Of (Of ((:>)))
 import HQ.JSON.Encoder (ChunkStream, EncodeCtx, EncoderConfig)
 import HQ.JSON.Event
 import HQ.Optic (Optic (..), OpticF (..))
-import HQ.Runner.Cursor (Cursor (..), KSplice, pullCursor, pushCursor, skipValueE)
+import HQ.Runner.Cursor (Cursor (..), KRewrite, pullCursor, pushCursor, skipValueE)
 import HQ.Runner.Take (emitChunk, takeValue, takeValueChunks)
 import HQ.Transformation (Transformation (..), TransformationF (..), runTransformation)
 import Relude hiding (Compose, Const)
@@ -23,20 +23,20 @@ import qualified Streaming.Prelude as S
 -- | What happens to a value focused by an optic: it is removed entirely
 -- (@delete@) or rewritten by a transformation (@over@, including @set@,
 -- which is @over@ with a constant).
-data Splicer = SpliceDelete | SpliceTransform Transformation
+data Rewriter = RewriteDelete | RewriteTransform Transformation
   deriving (Show, Eq)
 
 -- | Remove every value the optic focuses on from the document, passing
 -- the rest of the document through unchanged (lens @delete@/@omit@).
-runDelete :: Optic -> EncoderConfig -> KSplice
-runDelete = runSplice SpliceDelete
+runDelete :: Optic -> EncoderConfig -> KRewrite
+runDelete = runRewrite RewriteDelete
 
 -- | Apply a transformation to every value the optic focuses on, rewriting
 -- the document in place (lens @over@).
-runOver :: Optic -> Transformation -> EncoderConfig -> KSplice
-runOver optic transformation = runSplice (SpliceTransform transformation) optic
+runOver :: Optic -> Transformation -> EncoderConfig -> KRewrite
+runOver optic transformation = runRewrite (RewriteTransform transformation) optic
 
--- | Rewrite the document at the cursor by splicing every value that the
+-- | Rewrite the document at the cursor by rewriting every value that the
 -- optic focuses on.
 --
 -- This is the streaming counterpart to 'runOptic': instead of
@@ -44,15 +44,15 @@ runOver optic transformation = runSplice (SpliceTransform transformation) optic
 -- document, replacing or omitting the focused values in place.  All
 -- other events pass through unchanged, so the output is the input with
 -- only the targeted values modified.
-runSplice :: Splicer -> Optic -> EncoderConfig -> KSplice
-runSplice splicer (Optic optic) config = run optic
+runRewrite :: Rewriter -> Optic -> EncoderConfig -> KRewrite
+runRewrite rewriter (Optic optic) config = run optic
   where
-    run :: Fix OpticF -> KSplice
+    run :: Fix OpticF -> KRewrite
     run step input ctxs = case unFix step of
-      Id -> spliceValue splicer input ctxs
+      Id -> rewriteValue rewriter input ctxs
       _ -> navigate step (Fix Id) input ctxs
 
-    navigate :: Fix OpticF -> Fix OpticF -> KSplice
+    navigate :: Fix OpticF -> Fix OpticF -> KRewrite
     navigate step suffix input ctxs = case unFix step of
       Id -> run suffix input ctxs
       Compose left right -> navigate left (composeStep right suffix) input ctxs
@@ -73,16 +73,16 @@ runSplice splicer (Optic optic) config = run optic
     composeStep (Fix Id) rest = rest
     composeStep step rest = Fix (Compose step rest)
 
-    spliceValue :: Splicer -> KSplice
-    spliceValue SpliceDelete input ctxs = do
+    rewriteValue :: Rewriter -> KRewrite
+    rewriteValue RewriteDelete input ctxs = do
       after <- lift (skipValueE input)
       pure (ctxs, after)
     -- A constant replacement never reads the focused value: skip it
     -- at the text level instead of decoding it.
-    spliceValue (SpliceTransform (Transformation (Fix (Const value)))) input ctxs = do
+    rewriteValue (RewriteTransform (Transformation (Fix (Const value)))) input ctxs = do
       after <- lift (skipValueE input)
       emitValueChunks value ctxs after
-    spliceValue (SpliceTransform t) input ctxs = do
+    rewriteValue (RewriteTransform t) input ctxs = do
       events :> rest <- lift (S.toList (takeValue input))
       case eventsToValue events >>= runTransformation t of
         Left err -> throwError err
@@ -116,7 +116,7 @@ runSplice splicer (Optic optic) config = run optic
 
     -- \| Prism: value whose first event satisfies the predicate goes
     -- through the suffix; everything else passes through unchanged.
-    rewritePrism :: (JSONEvent -> Bool) -> Fix OpticF -> KSplice
+    rewritePrism :: (JSONEvent -> Bool) -> Fix OpticF -> KRewrite
     rewritePrism predicate suffix input ctxs = do
       result <- lift (pullCursor input)
       case result of
@@ -127,7 +127,7 @@ runSplice splicer (Optic optic) config = run optic
 
     -- \| Prism on non-null: null passes through, anything else goes
     -- through the suffix.
-    rewriteJust :: Fix OpticF -> KSplice
+    rewriteJust :: Fix OpticF -> KRewrite
     rewriteJust suffix input ctxs = do
       result <- lift (pullCursor input)
       case result of
@@ -137,9 +137,9 @@ runSplice splicer (Optic optic) config = run optic
           pure (ctxs', rest)
         Just (event, rest) -> run suffix (pushCursor event rest) ctxs
 
-    -- \| Array index: splice the element at @index@, pass through the
+    -- \| Array index: rewrite the element at @index@, pass through the
     -- rest of the array. Non-arrays pass through unchanged.
-    rewriteIndex :: Int -> Fix OpticF -> KSplice
+    rewriteIndex :: Int -> Fix OpticF -> KRewrite
     rewriteIndex index suffix input ctxs = do
       result <- lift (pullCursor input)
       case result of
@@ -164,10 +164,10 @@ runSplice splicer (Optic optic) config = run optic
                   (ctx', after) <- takeValueChunks config (pushCursor event rest) ctx
                   go (n - 1) after ctx'
 
-    -- \| Object field: splice the member named @name@ (dropping the key
+    -- \| Object field: rewrite the member named @name@ (dropping the key
     -- too under @delete@ when the suffix lands on the value), pass
     -- every other member through unchanged.
-    rewriteField :: Text -> Fix OpticF -> KSplice
+    rewriteField :: Text -> Fix OpticF -> KRewrite
     rewriteField name suffix input ctxs = do
       result <- lift (pullCursor input)
       case result of
@@ -186,16 +186,16 @@ runSplice splicer (Optic optic) config = run optic
               ctx' <- emitChunk config JSONEndObject ctx
               pure (ctx', rest)
             Just (JSONObjectKey key, rest)
-              | key == name -> spliceMember suffix key rest pairs ctx
+              | key == name -> rewriteMember suffix key rest pairs ctx
               | otherwise -> do
                   ctx' <- emitChunk config (JSONObjectKey key) ctx
                   (ctx'', after) <- takeValueChunks config rest ctx'
                   pairs after ctx''
             Just _ -> throwError "invalid JSON object"
 
-    -- \| The @each@ traversal: splice every array element, or every
+    -- \| The @each@ traversal: rewrite every array element, or every
     -- object member value. Non-containers pass through.
-    rewriteEach :: Fix OpticF -> KSplice
+    rewriteEach :: Fix OpticF -> KRewrite
     rewriteEach suffix input ctxs = do
       result <- lift (pullCursor input)
       case result of
@@ -229,19 +229,19 @@ runSplice splicer (Optic optic) config = run optic
               ctx' <- emitChunk config JSONEndObject ctx
               pure (ctx', rest)
             Just (JSONObjectKey key, rest) ->
-              spliceMember suffix key rest allMembers ctx
+              rewriteMember suffix key rest allMembers ctx
             Just _ -> throwError "invalid JSON object"
 
-    -- \| Splice one object member. The key survives unless a @delete@
+    -- \| Rewrite one object member. The key survives unless a @delete@
     -- lands on the member value as a whole; the walk then continues
     -- with @continue@.
-    spliceMember :: Fix OpticF -> Text -> Cursor -> KSplice -> [EncodeCtx] -> ChunkStream (ExceptT Text IO) ([EncodeCtx], Cursor)
-    spliceMember suffix key stream continue ctxs = do
+    rewriteMember :: Fix OpticF -> Text -> Cursor -> KRewrite -> [EncodeCtx] -> ChunkStream (ExceptT Text IO) ([EncodeCtx], Cursor)
+    rewriteMember suffix key stream continue ctxs = do
       result <- lift (pullCursor stream)
       case result of
         Nothing -> throwError "unexpected end of input after object key"
-        Just (event, rest) -> case splicer of
-          SpliceDelete
+        Just (event, rest) -> case rewriter of
+          RewriteDelete
             | landing suffix event -> do
                 after <- lift (skipValueE (pushCursor event rest))
                 continue after ctxs
@@ -249,7 +249,7 @@ runSplice splicer (Optic optic) config = run optic
                 ctx' <- emitChunk config (JSONObjectKey key) ctxs
                 (ctx'', after) <- run suffix (pushCursor event rest) ctx'
                 continue after ctx''
-          SpliceTransform _ -> do
+          RewriteTransform _ -> do
             ctx' <- emitChunk config (JSONObjectKey key) ctxs
             (ctx'', after) <- run suffix (pushCursor event rest) ctx'
             continue after ctx''

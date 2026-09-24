@@ -1,7 +1,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 
-module HQ.Runner.SpliceSpec (spec) where
+module HQ.Runner.RewriteSpec (spec) where
 
 import Control.Monad.Error.Class (throwError)
 import Data.Aeson (Value (..))
@@ -11,8 +11,8 @@ import HQ.JSON.Encoder (EncodeStyle (..), EncoderConfig (..), Join (..), Raw (..
 import HQ.JSON.Event (JSONEvent (..), eventsToValue)
 import HQ.JSON.Parser (parseValueEvents)
 import HQ.Optic.Parser (parseOptic)
-import HQ.Runner.Cursor (Cursor (..), KSplice)
-import HQ.Runner.Splice (runDelete, runOver)
+import HQ.Runner.Cursor (Cursor (..), KRewrite)
+import HQ.Runner.Rewrite (runDelete, runOver)
 import HQ.Transformation (Transformation, add, combine, concatString, constValue, equal, not, or, replace, trim)
 import Relude hiding (Compose, id, many, not, or, some, subtract, toStrict)
 import Streaming (Of (..), Stream)
@@ -21,11 +21,11 @@ import Test.HQ (chunkSplits)
 import Test.Syd
 
 spec :: Spec
-spec = describe "HQ.Runner.Splice" $ do
+spec = describe "HQ.Runner.Rewrite" $ do
   setSpec
   deleteSpec
   overSpec
-  chunkedSpliceSpec
+  chunkedRewriteSpec
 
 -- | Encoder config for rewrite tests: pretty output, matching the
 -- production default.
@@ -35,12 +35,12 @@ testConfig = EncoderConfig (Pretty 2) (ValueOptions NoRaw NoJoin)
 -- | Run a document-rewriting query (set/delete), reparse its output
 -- bytes back to events, and collect them. Reparsing through the
 -- independent pure parser keeps every existing event expectation
--- valid while the splice pipeline emits chunks.
-runRewriteTest :: KSplice -> Text -> IO (Either Text [JSONEvent])
+-- valid while the rewrite pipeline emits chunks.
+runRewriteTest :: KRewrite -> Text -> IO (Either Text [JSONEvent])
 runRewriteTest run input = runRewriteChunks run [input]
 
 -- | Run a document-rewriting query against chunked JSON text.
-runRewriteChunks :: KSplice -> [Text] -> IO (Either Text [JSONEvent])
+runRewriteChunks :: KRewrite -> [Text] -> IO (Either Text [JSONEvent])
 runRewriteChunks run chunks = runExceptT $ do
   (outChunks :> _) <- S.toList (run cursor [])
   (byteChunks :> _) <- S.toList (encodeChunks 65536 (S.each outChunks))
@@ -424,8 +424,8 @@ overSpec = describe "over" $ do
     runOverTest "each" (add 1) "[\"a\",1]"
     `shouldReturn` Left "expected a number"
 
-chunkedSpliceSpec :: Spec
-chunkedSpliceSpec = describe "chunked input" $ do
+chunkedRewriteSpec :: Spec
+chunkedRewriteSpec = describe "chunked input" $ do
   it "rewrites agree with whole-input runs under every split" $ do
     forM_ overChunkCases $ \(opticStr, transformation, doc) -> do
       expected <- runOverTest opticStr transformation doc

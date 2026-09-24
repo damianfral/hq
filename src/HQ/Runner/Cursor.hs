@@ -25,10 +25,10 @@ data Cursor = Cursor ![JSONEvent] !Decoder (StreamIO Text ())
 -- yielding the taken events and returning the advanced cursor.
 type K = Cursor -> ValueStreamF Cursor
 
--- | Splice output: chunk stream returning advanced encoder contexts
+-- | Rewrite output: chunk stream returning advanced encoder contexts
 -- and cursor. Passthrough regions transcribe text straight to chunks
 -- without an intermediate event stream.
-type KSplice = Cursor -> [EncodeCtx] -> ChunkStream (ExceptT Text IO) ([EncodeCtx], Cursor)
+type KRewrite = Cursor -> [EncodeCtx] -> ChunkStream (ExceptT Text IO) ([EncodeCtx], Cursor)
 
 -- | Pull one event for navigation. Buffered events come first;
 -- otherwise the decoder drives forward. Returns 'Nothing' at clean
