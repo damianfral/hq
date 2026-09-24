@@ -9,6 +9,11 @@ module HQ.JSON.Encoder
   ( EncodeStyle (..),
     ValueOptions (..),
     encode,
+    encodeChunks,
+    formatEvent,
+    Chunk,
+    ChunkStream,
+    EncodeCtx (..),
     Raw (..),
     Join (..),
     EncoderConfig (..),
@@ -114,43 +119,44 @@ formatNonInteger c e
 -- values are rendered: a newline may separate them, and top-level
 -- strings may be emitted bare.
 encodeToChunks :: (Monad m) => EncoderConfig -> JSONStream m r -> ChunkStream m r
-encodeToChunks (EncoderConfig style (ValueOptions rawOption joinOption)) =
-  go []
+encodeToChunks config = go []
   where
-    go :: (Monad m) => [EncodeCtx] -> JSONStream m r -> ChunkStream m r
     go ctxs events = do
       result <- lift $ S.next events
       case result of
         Left r -> pure r
-        Right (event, rest)
-          | event == JSONEndArray || event == JSONEndObject -> do
-              let (sep, ctxs') = closeContainer style ctxs
-              S.yield $ sep <> finishValue ctxs'
-              go ctxs' rest
-          | otherwise -> case event of
-              JSONBeginArray -> do
-                let (sep, ctxs') = beforeValue style ctxs
-                S.yield $ sep <> encodeEvent event
-                go (EncodeArray False : ctxs') rest
-              JSONBeginObject -> do
-                let (sep, ctxs') = beforeValue style ctxs
-                S.yield $ sep <> encodeEvent event
-                go (EncodeObject False : ctxs') rest
-              JSONObjectKey _ -> do
-                let (sep, ctxs') = beforeKey style ctxs
-                S.yield $ sep <> encodeEvent event
-                go ctxs' rest
-              _ -> do
-                let (sep, ctxs') = beforeValue style ctxs
-                let ctxs'' = afterValue ctxs'
-                S.yield $ sep <> valueChunk event ctxs <> finishValue ctxs''
-                go ctxs'' rest
+        Right (event, rest) ->
+          let (chunk, ctxs') = formatEvent config ctxs event
+           in S.yield chunk >> go ctxs' rest
 
+-- | Format a single event to a 'Chunk', threading the container
+-- context. This is one step of 'encodeToChunks', exposed so fused
+-- pipelines can format events without an intermediate event stream.
+formatEvent :: EncoderConfig -> [EncodeCtx] -> JSONEvent -> (Chunk, [EncodeCtx])
+formatEvent (EncoderConfig style (ValueOptions rawOption joinOption)) ctxs event
+  | event == JSONEndArray || event == JSONEndObject =
+      let (sep, ctxs') = closeContainer style ctxs
+       in (sep <> finishValue ctxs', ctxs')
+  | otherwise = case event of
+      JSONBeginArray ->
+        let (sep, ctxs') = beforeValue style ctxs
+         in (sep <> encodeEvent event, EncodeArray False : ctxs')
+      JSONBeginObject ->
+        let (sep, ctxs') = beforeValue style ctxs
+         in (sep <> encodeEvent event, EncodeObject False : ctxs')
+      JSONObjectKey _ ->
+        let (sep, ctxs') = beforeKey style ctxs
+         in (sep <> encodeEvent event, ctxs')
+      _ ->
+        let (sep, ctxs') = beforeValue style ctxs
+            ctxs'' = afterValue ctxs'
+         in (sep <> valueChunk event ctxs <> finishValue ctxs'', ctxs'')
+  where
     -- Render one value event, honoring raw top-level string output.
     valueChunk :: JSONEvent -> [EncodeCtx] -> Chunk
-    valueChunk (JSONString text) ctxs
-      | rawOption == Raw && null ctxs = encodeRawString text
-    valueChunk event _ = encodeEvent event
+    valueChunk (JSONString text) valueCtxs
+      | rawOption == Raw && null valueCtxs = encodeRawString text
+    valueChunk ev _ = encodeEvent ev
 
     -- Separator emitted after a complete top-level value.  A top-level
     -- value is one that leaves the context stack empty.
@@ -342,7 +348,13 @@ type ChunkStream m r = Stream (Of Chunk) m r
 -- encoded event exceeds the target size; the stream contents are
 -- unaffected by the chunk size.
 encode :: (Monad m) => EncoderConfig -> Int -> JSONStream m r -> BSStream m r
-encode config size = go mempty 0 . encodeToChunks config
+encode config size = encodeChunks size . encodeToChunks config
+
+-- | Buffer a stream of 'Chunk's into 'ByteString' output, flushing
+-- once roughly @cSize@ bytes have accumulated. Fused pipelines feed
+-- this directly without an intermediate event stream.
+encodeChunks :: (Monad m) => Int -> ChunkStream m r -> BSStream m r
+encodeChunks size = go mempty 0
   where
     go :: (Monad m) => Builder -> Int -> ChunkStream m r -> BSStream m r
     go !builder !size' stream = do
