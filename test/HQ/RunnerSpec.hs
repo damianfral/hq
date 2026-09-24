@@ -4,12 +4,13 @@
 module HQ.RunnerSpec (spec) where
 
 import Data.Aeson (Value (..))
-import HQ.JSON.Decoder (decodeIO)
+import qualified Data.Text as T
+import HQ.JSON.Decoder (initialDecoder)
 import HQ.JSON.Event (JSONEvent (..), eventsToValue)
 import HQ.JSON.Parser (parseValueEvents)
 import HQ.Optic (Optic)
 import HQ.Optic.Parser (parseOptic)
-import HQ.Runner (ValueStream, ValueStreamF, runDelete, runFold, runOver, runPreview)
+import HQ.Runner (Cursor (..), ValueStreamF, runDelete, runFold, runOver, runPreview)
 import HQ.Transformation (Transformation, add, combine, concatString, constValue, equal, not, or, replace, trim)
 import Relude hiding (Compose, id, many, not, or, some, subtract, toStrict)
 import Streaming (Of (..), Stream)
@@ -18,15 +19,15 @@ import Test.Syd
 
 -- | Run a fold optic against a JSON text input and collect output events.
 --
--- This test harness builds a streaming cursor from JSON text, runs the optic,
+-- This test harness builds a cursor from JSON text, runs the optic,
 -- and collects all yielded events into a list. Runs in IO because the
 -- streaming decoder and cursor use IO internally.
 runFoldTest :: Optic -> Text -> IO (Either Text [JSONEvent])
 runFoldTest optic input = runExceptT $ do
   let textStream :: Stream (Of Text) (ExceptT Text IO) ()
       textStream = S.yield input
-  let eventStream = decodeIO textStream
-  S.toList_ (runFold optic eventStream)
+  let cursor = Cursor [] initialDecoder textStream
+  S.toList_ (runFold optic cursor)
 
 -- | Parse an optic string and run it against JSON input.
 runQueryTest :: Text -> Text -> IO (Either Text [JSONEvent])
@@ -41,8 +42,8 @@ runPreviewTest :: Optic -> Text -> IO (Either Text [JSONEvent])
 runPreviewTest optic input = runExceptT $ do
   let textStream :: Stream (Of Text) (ExceptT Text IO) ()
       textStream = S.yield input
-  let eventStream = decodeIO textStream
-  S.toList_ (runPreview optic eventStream)
+  let cursor = Cursor [] initialDecoder textStream
+  S.toList_ (runPreview optic cursor)
 
 -- | Parse an optic string and preview it against JSON input.
 runQueryPreviewTest :: Text -> Text -> IO (Either Text [JSONEvent])
@@ -51,17 +52,50 @@ runQueryPreviewTest opticStr jsonInput =
     Left err -> pure (Left (show err))
     Right optic -> runPreviewTest optic jsonInput
 
+-- | Run a fold optic against chunked JSON text.
+runFoldChunks :: Optic -> [Text] -> IO (Either Text [JSONEvent])
+runFoldChunks optic chunks = runExceptT $ do
+  let textStream :: Stream (Of Text) (ExceptT Text IO) ()
+      textStream = S.each chunks
+  let cursor = Cursor [] initialDecoder textStream
+  S.toList_ (runFold optic cursor)
+
+-- | Run a preview optic against chunked JSON text.
+runPreviewChunks :: Optic -> [Text] -> IO (Either Text [JSONEvent])
+runPreviewChunks optic chunks = runExceptT $ do
+  let textStream :: Stream (Of Text) (ExceptT Text IO) ()
+      textStream = S.each chunks
+  let cursor = Cursor [] initialDecoder textStream
+  S.toList_ (runPreview optic cursor)
+
 -- | Run a document-rewriting query (set/delete) and collect the
 -- rewritten document's events.
 runRewriteTest ::
-  (ValueStream -> ValueStreamF ValueStream) ->
+  (Cursor -> ValueStreamF Cursor) ->
   Text ->
   IO (Either Text [JSONEvent])
-runRewriteTest run input = runExceptT $ do
+runRewriteTest run input = runRewriteChunks run [input]
+
+-- | Run a document-rewriting query against chunked JSON text.
+runRewriteChunks ::
+  (Cursor -> ValueStreamF Cursor) ->
+  [Text] ->
+  IO (Either Text [JSONEvent])
+runRewriteChunks run chunks = runExceptT $ do
   let textStream :: Stream (Of Text) (ExceptT Text IO) ()
-      textStream = S.yield input
-  let eventStream = decodeIO textStream
-  S.toList_ (run eventStream)
+      textStream = S.each chunks
+  let cursor = Cursor [] initialDecoder textStream
+  S.toList_ (run cursor)
+
+-- | Chunkings: whole input, every two-way split, and one-character
+-- chunks for short inputs.
+chunkSplits :: Text -> [[Text]]
+chunkSplits input
+  | T.null input = [[input]]
+  | otherwise =
+      [input]
+        : [[T.take n input, T.drop n input] | n <- [1 .. T.length input - 1]]
+          ++ [[T.singleton c | c <- toString input] | T.length input <= 24]
 
 -- | Parse an optic string and a replacement value, run @set@ against
 -- JSON input, and collect the rewritten document's events.
@@ -516,6 +550,7 @@ spec = describe "HQ.Runner" $ do
   setSpec
   deleteSpec
   overSpec
+  chunkedSpec
 
 --------------------------------------------------------------------------------
 -- field
@@ -625,3 +660,95 @@ eachCompositionSpec = describe "each . field composition" $ do
   it "each . each flattens nested arrays" $ do
     runQueryTest "each . each" "[[1,2],[3,4]]"
     `shouldReturn` Right [JSONNumber 1, JSONNumber 2, JSONNumber 3, JSONNumber 4]
+
+--------------------------------------------------------------------------------
+-- chunked input: cursor behaviour across chunk boundaries
+--------------------------------------------------------------------------------
+
+chunkedSpec :: Spec
+chunkedSpec = describe "chunked input" $ do
+  it "folds agree with whole-input runs under every split" $ do
+    forM_ foldChunkCases $ \(opticStr, doc) ->
+      case parseOptic opticStr of
+        Left err -> expectationFailure $ "bad optic: " <> show err
+        Right optic -> do
+          expected <- runFoldTest optic doc
+          forM_ (chunkSplits doc) $ \chunks -> do
+            actual <- runFoldChunks optic chunks
+            actual `shouldBe` expected
+
+  it "rewrites agree with whole-input runs under every split" $ do
+    forM_ overChunkCases $ \(opticStr, transformation, doc) -> do
+      expected <- runOverTest opticStr transformation doc
+      case parseOptic opticStr of
+        Left err -> expectationFailure $ "bad optic: " <> show err
+        Right optic ->
+          forM_ (chunkSplits doc) $ \chunks -> do
+            actual <- runRewriteChunks (runOver optic transformation) chunks
+            actual `shouldBe` expected
+
+  it "deletes agree with whole-input runs under every split" $ do
+    forM_ deleteChunkCases $ \(opticStr, doc) ->
+      case parseOptic opticStr of
+        Left err -> expectationFailure $ "bad optic: " <> show err
+        Right optic -> do
+          expected <- runDeleteTest opticStr doc
+          forM_ (chunkSplits doc) $ \chunks -> do
+            actual <- runRewriteChunks (runDelete optic) chunks
+            actual `shouldBe` expected
+
+  it "preview never touches invalid tails under any split" $ do
+    forM_ (chunkSplits "[1, 2,,]") $ \chunks -> do
+      actual <- runPreviewChunks' "each" chunks
+      actual `shouldBe` Right [JSONNumber 1]
+
+  it "malformed inputs fail the same chunked as whole" $ do
+    forM_ malformedChunkCases $ \(opticStr, doc) -> do
+      expected <- runQueryTest opticStr doc
+      case parseOptic opticStr of
+        Left err -> expectationFailure $ "bad optic: " <> show err
+        Right optic ->
+          forM_ (chunkSplits doc) $ \chunks -> do
+            actual <- runFoldChunks optic chunks
+            actual `shouldBe` expected
+
+-- | Parse an optic string and preview it against chunked JSON input.
+runPreviewChunks' :: Text -> [Text] -> IO (Either Text [JSONEvent])
+runPreviewChunks' opticStr chunks =
+  case parseOptic opticStr of
+    Left err -> pure (Left (show err))
+    Right optic -> runPreviewChunks optic chunks
+
+foldChunkCases :: [(Text, Text)]
+foldChunkCases =
+  [ ("each . #name", "[{\"name\":\"alice\"},{\"age\":30}]"),
+    ("#users.each.#name", "{\"users\":[{\"name\":\"a\",\"age\":1},{\"name\":\"b\"}]}"),
+    ("each", "[[1,2],[3]]"),
+    ("#a", "{\"a\":{\"b\":[1,2]},\"c\":3}"),
+    ("#missing", "{\"a\":1}"),
+    ("ix 2", "[1,2,3,4]"),
+    ("each . each", "[[1,2],[3,4]]"),
+    ("#a.#b", "{\"a\":{\"b\":[1,{\"c\":2}]}}")
+  ]
+
+overChunkCases :: [(Text, Transformation, Text)]
+overChunkCases =
+  [ ("#users.each.#age", add 1, "{\"users\":[{\"age\":1},{\"age\":2}]}"),
+    ("each", add 1, "[1,2,3]"),
+    ("each . _String", concatString "!", "[1,\"a\",\"b\"]")
+  ]
+
+deleteChunkCases :: [(Text, Text)]
+deleteChunkCases =
+  [ ("#users.each.#name", "{\"users\":[{\"name\":\"a\",\"age\":1},{\"age\":2}]}"),
+    ("each", "[1,2,3]"),
+    ("#a", "{\"a\":{\"b\":[1,2]},\"c\":3}")
+  ]
+
+malformedChunkCases :: [(Text, Text)]
+malformedChunkCases =
+  [ ("#b", "{\"a\":1,\"b\":tru}"),
+    ("#a", "{\"a\":1,\"b\":tru}"),
+    ("each", "[1,,2]"),
+    ("#a", "{\"a\":01}")
+  ]
