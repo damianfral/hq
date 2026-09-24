@@ -5,6 +5,7 @@ module HQ.Runner.Fold where
 
 import Control.Monad.Error.Class (MonadError (throwError))
 import Data.Fix (Fix (..))
+import HQ.JSON.Decoder (initialDecoder)
 import HQ.JSON.Event
 import HQ.Optic (Optic (..), OpticF (..))
 import HQ.Runner.Cursor (Cursor (..), K, ValueStreamF, pullCursor, pushCursor, skipMemberValue, skipValue)
@@ -23,6 +24,8 @@ runFold (Optic optic) = run optic takeValue
       Id -> k input
       Field name -> runField name k input
       Each -> runEach k input
+      Keys -> runKeys k input
+      Values -> runValues k input
       Compose left right -> run left (run right k) input
       PrismString -> runScalar isString k input
       PrismNumber -> runScalar isNumber k input
@@ -102,6 +105,52 @@ runFold (Optic optic) = run optic takeValue
             Just (JSONObjectKey _, rest) -> do
               afterValue <- k rest -- cursor is already at the value
               eachObject afterValue
+            Just _ -> throwError "invalid JSON object"
+
+    ----------------------------------------------------------------
+    -- Keys: object keys as strings (objects only)
+    ----------------------------------------------------------------
+
+    runKeys :: K -> K
+    runKeys k input = do
+      result <- lift (pullCursor input)
+      case result of
+        Nothing -> pure input
+        Just (JSONBeginObject, rest) -> keysObject rest
+        Just (event, rest) -> skipValue (pushCursor event rest)
+      where
+        keysObject :: Cursor -> ValueStreamF Cursor
+        keysObject stream = do
+          result <- lift (pullCursor stream)
+          case result of
+            Nothing -> throwError "unexpected end of input while reading object"
+            Just (JSONEndObject, rest) -> pure rest
+            Just (JSONObjectKey key, rest) -> do
+              _ <- k (Cursor [JSONString key] initialDecoder (pure ()))
+              afterValue <- skipMemberValue rest
+              keysObject afterValue
+            Just _ -> throwError "invalid JSON object"
+
+    ----------------------------------------------------------------
+    -- Values: object member values only (arrays focus on nothing)
+    ----------------------------------------------------------------
+
+    runValues :: K -> K
+    runValues k input = do
+      result <- lift (pullCursor input)
+      case result of
+        Nothing -> pure input
+        Just (JSONBeginObject, rest) -> valuesObject rest
+        Just (event, rest) -> skipValue (pushCursor event rest)
+      where
+        valuesObject stream = do
+          result <- lift (pullCursor stream)
+          case result of
+            Nothing -> throwError "unexpected end of input while reading object"
+            Just (JSONEndObject, rest) -> pure rest
+            Just (JSONObjectKey _, rest) -> do
+              afterValue <- k rest -- cursor is already at the value
+              valuesObject afterValue
             Just _ -> throwError "invalid JSON object"
 
     ----------------------------------------------------------------

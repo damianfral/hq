@@ -24,7 +24,7 @@ opticParser = do
 
 opticAtomParser :: Parser Optic
 opticAtomParser =
-  fieldParser <|> eachParser <|> idParser <|> prismParser <|> ixParser
+  fieldParser <|> eachParser <|> keysParser <|> valuesParser <|> idParser <|> prismParser <|> ixParser
 
 fieldParser :: Parser Optic
 fieldParser = char '#' >> field <$> identifier
@@ -34,6 +34,12 @@ identifier = lexeme $ fromString <$> some (alphaNumChar <|> char '_' <|> char '-
 
 eachParser :: Parser Optic
 eachParser = symbol "each" $> each
+
+keysParser :: Parser Optic
+keysParser = symbol "keys" $> keys
+
+valuesParser :: Parser Optic
+valuesParser = symbol "values" $> values
 
 idParser :: Parser Optic
 idParser = symbol "id" $> id

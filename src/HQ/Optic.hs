@@ -14,7 +14,7 @@ import Prelude (Show (showsPrec), showParen, showString)
 --
 -- Optics are structured as a tree of constructors that describe
 -- how to focus into a JSON value. 'Field' and 'Id' are single-target
--- optics (lenses/affine traversals); 'Each' and 'Every' are
+-- optics (lenses/affine traversals); 'Each', 'Keys' and 'Values' are
 -- multi-target optics (traversals).
 data OpticF a
   = -- | Focus on a named field of a JSON object. Fails on non-objects.
@@ -23,6 +23,14 @@ data OpticF a
     -- Composed with another optic, it distributes that optic over each element:
     -- @#users.each.#name@ focuses on the @name@ field of each array element.
     Each
+  | -- | Traverse object keys as string values (objects only).
+    -- Focuses on each member name (@JSONString@) in document order.
+    -- Arrays and scalars focus on nothing. Rewriting through @keys@
+    -- renames object members.
+    Keys
+  | -- | Traverse object member values (objects only, unlike 'Each').
+    -- Arrays and scalars focus on nothing; use 'Each' or 'Ix' for arrays.
+    Values
   | -- | The identity optic: focuses on the whole value unchanged.
     Id
   | -- | Sequence two optics: first focus where the left points,
@@ -46,7 +54,10 @@ data OpticF a
     Prism1
   | -- | Prism: focus on the second element of a JSON array. Fails on non-arrays or arrays with fewer than 2 elements.
     Prism2
-  | Ix Int
+  | -- | Focus on the element at the given index of a JSON array (arrays
+    -- only; objects and scalars focus on nothing). Out-of-bounds and
+    -- negative indices focus on nothing.
+    Ix Int
   deriving (Eq, Ord, Show, Functor)
 
 -- | An optic path over JSON values.
@@ -67,12 +78,17 @@ instance Eq Optic where
   Optic (Fix PrismJust) == Optic (Fix PrismJust) = True
   Optic (Fix Prism1) == Optic (Fix Prism1) = True
   Optic (Fix Prism2) == Optic (Fix Prism2) = True
+  Optic (Fix Keys) == Optic (Fix Keys) = True
+  Optic (Fix Values) == Optic (Fix Values) = True
+  Optic (Fix (Ix a)) == Optic (Fix (Ix b)) = a == b
   _ == _ = False
 
 instance Show Optic where
   showsPrec d (Optic (Fix (Field name))) =
     showParen (d > appPrec) $ showString "#" . showsPrec (appPrec + 1) name
   showsPrec _ (Optic (Fix Each)) = showString "each"
+  showsPrec _ (Optic (Fix Keys)) = showString "keys"
+  showsPrec _ (Optic (Fix Values)) = showString "values"
   showsPrec _ (Optic (Fix Id)) = showString "id"
   showsPrec d (Optic (Fix (Compose a b))) =
     showParen (d > composePrec)
@@ -99,9 +115,19 @@ field = Optic . Fix . Field
 
 -- | Traverse all elements of a JSON array, or all values of an object.
 -- Composed with another optic, it distributes that optic over each element:
--- @#users.erch.#name@ focuses on the @name@ field of each array element.
+-- @#users.each.#name@ focuses on the @name@ field of each array element.
 each :: Optic
 each = Optic (Fix Each)
+
+-- | Traverse object keys as strings (objects only).
+-- @keys@ on @{"a":1}@ focuses @"a"@; arrays focus on nothing.
+keys :: Optic
+keys = Optic (Fix Keys)
+
+-- | Traverse object member values (objects only).
+-- @values@ on @{"a":1}@ focuses @1@; arrays focus on nothing.
+values :: Optic
+values = Optic (Fix Values)
 
 -- | The identity optic: focuses on the whole value.
 -- @id@ is the unit of optic composition: @compose id o = o@ and @compose o id = o@.
@@ -150,6 +176,7 @@ _1 = Optic (Fix Prism1)
 _2 :: Optic
 _2 = Optic (Fix Prism2)
 
--- | Focus on a named field of a JSON object (affine traversal).
+-- | Focus on the element at the given index of a JSON array (arrays
+-- only; objects and scalars focus on nothing).
 ix :: Int -> Optic
 ix = Optic . Fix . Ix

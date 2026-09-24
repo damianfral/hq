@@ -19,6 +19,8 @@ buildOpticAST (Optic optic) = OpticAST $ foldFix algebra optic
   where
     algebra o@(Field _) = OpticLens :< o
     algebra o@Each = OpticTraversal :< o
+    algebra o@Keys = OpticTraversal :< o
+    algebra o@Values = OpticTraversal :< o
     algebra o@Id = OpticLens :< o
     algebra o@(Compose left right) = do
       let l = view _extract left

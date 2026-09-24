@@ -25,6 +25,9 @@ spec = describe "HQ.Runner.Rewrite" $ do
   setSpec
   deleteSpec
   overSpec
+  keysRewriteSpec
+  valuesRewriteSpec
+  ixRewriteSpec
   chunkedRewriteSpec
 
 -- | Encoder config for rewrite tests: pretty output, matching the
@@ -424,6 +427,151 @@ overSpec = describe "over" $ do
     runOverTest "each" (add 1) "[\"a\",1]"
     `shouldReturn` Left "expected a number"
 
+-------------------------------------------------------------------------------
+-- keys rewrite (object key renaming; array indices are read-only)
+-------------------------------------------------------------------------------
+
+keysRewriteSpec :: Spec
+keysRewriteSpec = describe "keys rewrite" $ do
+  it "renames every key" $ do
+    runOverTest "keys" (concatString "!") "{\"a\":1,\"b\":2}"
+    `shouldReturn` Right
+      [ JSONBeginObject,
+        JSONObjectKey "a!",
+        JSONNumber 1,
+        JSONObjectKey "b!",
+        JSONNumber 2,
+        JSONEndObject
+      ]
+
+  it "trims keys" $ do
+    runOverTest "keys" trim "{\" a \":1}"
+    `shouldReturn` Right
+      [JSONBeginObject, JSONObjectKey "a", JSONNumber 1, JSONEndObject]
+
+  it "renames through a composed string prism" $ do
+    runOverTest "keys . _String" (concatString "!") "{\"a\":1}"
+    `shouldReturn` Right
+      [JSONBeginObject, JSONObjectKey "a!", JSONNumber 1, JSONEndObject]
+
+  it "leaves keys alone when the prism does not match" $ do
+    runOverTest "keys . _Number" (add 1) "{\"a\":1}"
+    `shouldReturn` Right
+      [JSONBeginObject, JSONObjectKey "a", JSONNumber 1, JSONEndObject]
+
+  it "leaves arrays unchanged" $ do
+    runOverTest "keys" (concatString "!") "[1,2]"
+    `shouldReturn` Right [JSONBeginArray, JSONNumber 1, JSONNumber 2, JSONEndArray]
+
+  it "sets every key to a constant" $ do
+    runSetTest "keys" "\"k\"" "{\"a\":1,\"b\":2}"
+    `shouldReturn` Right
+      [ JSONBeginObject,
+        JSONObjectKey "k",
+        JSONNumber 1,
+        JSONObjectKey "k",
+        JSONNumber 2,
+        JSONEndObject
+      ]
+
+  it "fails when the replacement is not a string" $ do
+    runSetTest "keys" "5" "{\"a\":1}"
+    `shouldReturn` Left "key transformation must yield a string"
+
+  it "fails when the transformation does not fit keys" $ do
+    runOverTest "keys" (add 1) "{\"a\":1}"
+    `shouldReturn` Left "expected a number"
+
+  it "removes every member" $ do
+    runDeleteTest "keys" "{\"a\":1,\"b\":2}"
+    `shouldReturn` Right [JSONBeginObject, JSONEndObject]
+
+  it "removes every member through a matching prism" $ do
+    runDeleteTest "keys . _String" "{\"a\":1}"
+    `shouldReturn` Right [JSONBeginObject, JSONEndObject]
+
+  it "keeps members when the prism does not match" $ do
+    runDeleteTest "keys . _Number" "{\"a\":1}"
+    `shouldReturn` Right
+      [JSONBeginObject, JSONObjectKey "a", JSONNumber 1, JSONEndObject]
+
+  it "leaves arrays unchanged on delete" $ do
+    runDeleteTest "keys" "[1,2]"
+    `shouldReturn` Right [JSONBeginArray, JSONNumber 1, JSONNumber 2, JSONEndArray]
+
+-------------------------------------------------------------------------------
+-- values rewrite (objects only)
+-------------------------------------------------------------------------------
+
+valuesRewriteSpec :: Spec
+valuesRewriteSpec = describe "values rewrite" $ do
+  it "adds to every object value" $ do
+    runOverTest "values" (add 1) "{\"a\":1,\"b\":2}"
+    `shouldReturn` Right
+      [ JSONBeginObject,
+        JSONObjectKey "a",
+        JSONNumber 2,
+        JSONObjectKey "b",
+        JSONNumber 3,
+        JSONEndObject
+      ]
+
+  it "leaves arrays unchanged" $ do
+    runOverTest "values" (add 1) "[1,2,3]"
+    `shouldReturn` Right
+      [JSONBeginArray, JSONNumber 1, JSONNumber 2, JSONNumber 3, JSONEndArray]
+
+  it "rewrites values focused by a composed prism" $ do
+    runOverTest "values . _Number" (add 1) "{\"a\":1,\"b\":\"x\"}"
+    `shouldReturn` Right
+      [ JSONBeginObject,
+        JSONObjectKey "a",
+        JSONNumber 2,
+        JSONObjectKey "b",
+        JSONString "x",
+        JSONEndObject
+      ]
+
+  it "sets every object value" $ do
+    runSetTest "values" "0" "{\"a\":1,\"b\":2}"
+    `shouldReturn` Right
+      [ JSONBeginObject,
+        JSONObjectKey "a",
+        JSONNumber 0,
+        JSONObjectKey "b",
+        JSONNumber 0,
+        JSONEndObject
+      ]
+
+  it "removes every member" $ do
+    runDeleteTest "values" "{\"a\":1,\"b\":2}"
+    `shouldReturn` Right [JSONBeginObject, JSONEndObject]
+
+  it "leaves arrays unchanged on delete" $ do
+    runDeleteTest "values" "[1,2]"
+    `shouldReturn` Right [JSONBeginArray, JSONNumber 1, JSONNumber 2, JSONEndArray]
+
+-------------------------------------------------------------------------------
+-- ix rewrite (arrays only)
+-------------------------------------------------------------------------------
+
+ixRewriteSpec :: Spec
+ixRewriteSpec = describe "ix rewrite" $ do
+  it "adds to the indexed element" $ do
+    runOverTest "ix 1" (add 10) "[1,2,3]"
+    `shouldReturn` Right
+      [JSONBeginArray, JSONNumber 1, JSONNumber 12, JSONNumber 3, JSONEndArray]
+
+  it "leaves objects unchanged" $ do
+    runOverTest "ix 0" (add 1) "{\"a\":1}"
+    `shouldReturn` Right
+      [JSONBeginObject, JSONObjectKey "a", JSONNumber 1, JSONEndObject]
+
+  it "leaves objects unchanged on delete" $ do
+    runDeleteTest "ix 0" "{\"a\":1}"
+    `shouldReturn` Right
+      [JSONBeginObject, JSONObjectKey "a", JSONNumber 1, JSONEndObject]
+
 chunkedRewriteSpec :: Spec
 chunkedRewriteSpec = describe "chunked input" $ do
   it "rewrites agree with whole-input runs under every split" $ do
@@ -450,12 +598,17 @@ overChunkCases :: [(Text, Transformation, Text)]
 overChunkCases =
   [ ("#users.each.#age", add 1, "{\"users\":[{\"age\":1},{\"age\":2}]}"),
     ("each", add 1, "[1,2,3]"),
-    ("each . _String", concatString "!", "[1,\"a\",\"b\"]")
+    ("each . _String", concatString "!", "[1,\"a\",\"b\"]"),
+    ("keys", concatString "!", "{\"a\":1,\"b\":2}"),
+    ("values", add 1, "{\"a\":1,\"b\":2}"),
+    ("ix 1", add 1, "[1,2,3]")
   ]
 
 deleteChunkCases :: [(Text, Text)]
 deleteChunkCases =
   [ ("#users.each.#name", "{\"users\":[{\"name\":\"a\",\"age\":1},{\"age\":2}]}"),
     ("each", "[1,2,3]"),
-    ("#a", "{\"a\":{\"b\":[1,2]},\"c\":3}")
+    ("#a", "{\"a\":{\"b\":[1,2]},\"c\":3}"),
+    ("keys", "{\"a\":1,\"b\":2}"),
+    ("values", "{\"a\":1,\"b\":2}")
   ]

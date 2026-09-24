@@ -20,6 +20,9 @@ spec = describe "HQ.Runner.Fold" $ do
   eachArraySpec
   eachObjectSpec
   eachCompositionSpec
+  keysSpec
+  valuesSpec
+  ixSpec
   fieldSpec
   idSpec
   previewSpec
@@ -147,6 +150,103 @@ previewSpec = describe "preview" $ do
 
   it "stops reading input after the first match" $ do
     runQueryPreviewTest "each" "[1, 2,,]" `shouldReturn` Right [JSONNumber 1]
+
+--------------------------------------------------------------------------------
+-- keys
+--------------------------------------------------------------------------------
+
+keysSpec :: Spec
+keysSpec = describe "keys" $ do
+  it "yields object keys as strings" $ do
+    runQueryTest "keys" "{\"a\":1,\"b\":2}"
+    `shouldReturn` Right [JSONString "a", JSONString "b"]
+
+  it "yields nothing for arrays" $ do
+    runQueryTest "keys" "[10,20,30]" `shouldReturn` Right []
+
+  it "yields nothing for empty containers" $ do
+    runQueryTest "keys" "{}" `shouldReturn` Right []
+    runQueryTest "keys" "[]" `shouldReturn` Right []
+
+  it "yields nothing for scalars" $ do
+    runQueryTest "keys" "42" `shouldReturn` Right []
+    runQueryTest "keys" "\"x\"" `shouldReturn` Right []
+
+  it "composes with prisms" $ do
+    runQueryTest "keys . _String" "{\"a\":1}" `shouldReturn` Right [JSONString "a"]
+    runQueryTest "keys . _Number" "{\"a\":1}" `shouldReturn` Right []
+
+  it "composes after a field" $ do
+    runQueryTest "#obj . keys" "{\"obj\":{\"a\":1}}"
+    `shouldReturn` Right [JSONString "a"]
+
+  it "previews the first key" $ do
+    runQueryPreviewTest "keys" "{\"a\":1,\"b\":2}"
+    `shouldReturn` Right [JSONString "a"]
+
+  it "previews nothing for arrays" $ do
+    runQueryPreviewTest "keys" "[10,20]" `shouldReturn` Right []
+
+--------------------------------------------------------------------------------
+-- values (objects only)
+--------------------------------------------------------------------------------
+
+valuesSpec :: Spec
+valuesSpec = describe "values" $ do
+  it "yields object values" $ do
+    runQueryTest "values" "{\"a\":1,\"b\":2}"
+    `shouldReturn` Right [JSONNumber 1, JSONNumber 2]
+
+  it "yields nothing for arrays" $ do
+    runQueryTest "values" "[1,2,3]" `shouldReturn` Right []
+
+  it "yields nothing for empty objects" $ do
+    runQueryTest "values" "{}" `shouldReturn` Right []
+
+  it "yields nothing for scalars" $ do
+    runQueryTest "values" "42" `shouldReturn` Right []
+
+  it "yields nested containers whole" $ do
+    runQueryTest "values" "{\"a\":{\"b\":1}}"
+    `shouldReturn` Right
+      [ JSONBeginObject,
+        JSONObjectKey "b",
+        JSONNumber 1,
+        JSONEndObject
+      ]
+
+  it "composes with a field" $ do
+    runQueryTest "values . #x" "{\"a\":{\"x\":1},\"b\":{\"x\":2}}"
+    `shouldReturn` Right [JSONNumber 1, JSONNumber 2]
+
+  it "returns empty when the field is missing in all values" $ do
+    runQueryTest "values . #x" "{\"a\":1}" `shouldReturn` Right []
+
+  it "previews the first value" $ do
+    runQueryPreviewTest "values" "{\"a\":1,\"b\":2}"
+    `shouldReturn` Right [JSONNumber 1]
+
+  it "previews nothing for arrays" $ do
+    runQueryPreviewTest "values" "[1,2]" `shouldReturn` Right []
+
+--------------------------------------------------------------------------------
+-- ix
+--------------------------------------------------------------------------------
+
+ixSpec :: Spec
+ixSpec = describe "ix" $ do
+  it "yields the element at the index" $ do
+    runQueryTest "ix 0" "[7,8]" `shouldReturn` Right [JSONNumber 7]
+    runQueryTest "ix 1" "[7,8]" `shouldReturn` Right [JSONNumber 8]
+
+  it "yields nothing when out of bounds" $ do
+    runQueryTest "ix 5" "[1,2]" `shouldReturn` Right []
+
+  it "yields nothing for objects" $ do
+    runQueryTest "ix 0" "{\"a\":1}" `shouldReturn` Right []
+
+  it "yields nothing for scalars" $ do
+    runQueryTest "ix 0" "42" `shouldReturn` Right []
 
 --------------------------------------------------------------------------------
 -- field
@@ -300,7 +400,13 @@ foldChunkCases =
     ("#missing", "{\"a\":1}"),
     ("ix 2", "[1,2,3,4]"),
     ("each . each", "[[1,2],[3,4]]"),
-    ("#a.#b", "{\"a\":{\"b\":[1,{\"c\":2}]}}")
+    ("#a.#b", "{\"a\":{\"b\":[1,{\"c\":2}]}}"),
+    ("keys", "{\"a\":1,\"b\":2}"),
+    ("keys", "[10,20,30]"),
+    ("keys . _String", "{\"a\":1}"),
+    ("values", "{\"a\":1,\"b\":2}"),
+    ("values . #x", "{\"a\":{\"x\":1},\"b\":2}"),
+    ("ix 0", "{\"a\":1}")
   ]
 
 malformedChunkCases :: [(Text, Text)]
@@ -308,5 +414,7 @@ malformedChunkCases =
   [ ("#b", "{\"a\":1,\"b\":tru}"),
     ("#a", "{\"a\":1,\"b\":tru}"),
     ("each", "[1,,2]"),
-    ("#a", "{\"a\":01}")
+    ("#a", "{\"a\":01}"),
+    ("keys", "[1,,2]"),
+    ("values", "{\"a\":tru}")
   ]

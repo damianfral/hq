@@ -64,6 +64,34 @@ parserSpec = describe "parseQuery" $ do
       let composed = Preview $ compose id (field "foo")
       parseQuery "preview id.#foo" `shouldBe` Right composed
 
+  describe "keys/values/ix optics" $ do
+    it "parses keys standalone" $ do
+      parseQuery "fold keys" `shouldBe` Right (Fold keys)
+
+    it "parses values standalone" $ do
+      parseQuery "fold values" `shouldBe` Right (Fold values)
+
+    it "parses keys in composition" $ do
+      parseQuery "preview #obj.keys"
+        `shouldBe` Right (Preview (compose (field "obj") keys))
+
+    it "parses keys with a prism" $ do
+      parseQuery "preview keys._String"
+        `shouldBe` Right (Preview (compose keys _String))
+
+    it "parses values in composition" $ do
+      parseQuery "fold values.#x"
+        `shouldBe` Right (Fold (compose values (field "x")))
+
+    it "parses ix with an index" $ do
+      parseQuery "fold ix 10" `shouldBe` Right (Fold (ix 10))
+
+    it "parses over with keys" $ do
+      parseQuery "over keys trim" `shouldBe` Right (Over keys trim)
+
+    it "parses delete with values" $ do
+      parseQuery "delete values" `shouldBe` Right (Delete values)
+
   describe "whitespace handling" $ do
     it "handles extra whitespace around the query" $ do
       parseQuery "  preview #foo  " `shouldBe` Right (Preview (field "foo"))

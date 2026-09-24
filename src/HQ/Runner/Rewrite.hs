@@ -4,7 +4,7 @@
 module HQ.Runner.Rewrite where
 
 import Control.Monad.Error.Class (MonadError (throwError))
-import Data.Aeson (Value)
+import Data.Aeson (Value (..))
 import Data.Fix (Fix (..))
 import Data.Functor.Of (Of ((:>)))
 import HQ.JSON.Encoder (ChunkStream, EncodeCtx, EncoderConfig)
@@ -24,6 +24,10 @@ import qualified Streaming.Prelude as S
 -- (@delete@) or rewritten by a transformation (@over@, including @set@,
 -- which is @over@ with a constant).
 data Rewriter = RewriteDelete | RewriteTransform Transformation
+  deriving (Show, Eq)
+
+-- | What rewriting through @keys@ does to a single object key.
+data KeyAction = DropKey | KeepKey | RenameKey Text
   deriving (Show, Eq)
 
 -- | Remove every value the optic focuses on from the document, passing
@@ -58,6 +62,8 @@ runRewrite rewriter (Optic optic) config = run optic
       Compose left right -> navigate left (composeStep right suffix) input ctxs
       Field name -> rewriteField name suffix input ctxs
       Each -> rewriteEach suffix input ctxs
+      Keys -> rewriteKeys suffix input ctxs
+      Values -> rewriteValues suffix input ctxs
       PrismString -> rewritePrism isString suffix input ctxs
       PrismNumber -> rewritePrism isNumber suffix input ctxs
       PrismBool -> rewritePrism isBool suffix input ctxs
@@ -102,6 +108,8 @@ runRewrite rewriter (Optic optic) config = run optic
       Id -> True
       Field _ -> False
       Each -> False
+      Keys -> False
+      Values -> False
       Ix _ -> False
       Prism1 -> False
       Prism2 -> False
@@ -231,6 +239,83 @@ runRewrite rewriter (Optic optic) config = run optic
             Just (JSONObjectKey key, rest) ->
               rewriteMember suffix key rest allMembers ctx
             Just _ -> throwError "invalid JSON object"
+
+    -- \| The @values@ traversal: rewrite every object member value.
+    -- Arrays and scalars pass through unchanged (unlike 'rewriteEach').
+    rewriteValues :: Fix OpticF -> KRewrite
+    rewriteValues suffix input ctxs = do
+      result <- lift (pullCursor input)
+      case result of
+        Nothing -> pure (ctxs, input)
+        Just (JSONBeginObject, rest) -> do
+          ctxs' <- emitChunk config JSONBeginObject ctxs
+          allMembers rest ctxs'
+        Just (event, rest) -> takeValueChunks config (pushCursor event rest) ctxs
+      where
+        allMembers :: Cursor -> [EncodeCtx] -> ChunkStream (ExceptT Text IO) ([EncodeCtx], Cursor)
+        allMembers stream ctx = do
+          result <- lift (pullCursor stream)
+          case result of
+            Nothing -> throwError "unexpected end of input while reading object"
+            Just (JSONEndObject, rest) -> do
+              ctx' <- emitChunk config JSONEndObject ctx
+              pure (ctx', rest)
+            Just (JSONObjectKey key, rest) ->
+              rewriteMember suffix key rest allMembers ctx
+            Just _ -> throwError "invalid JSON object"
+
+    -- \| The @keys@ traversal: rewrite object keys, leaving values alone.
+    -- Arrays and scalars pass through unchanged (@keys@ is objects-only).
+    rewriteKeys :: Fix OpticF -> KRewrite
+    rewriteKeys suffix input ctxs = do
+      result <- lift (pullCursor input)
+      case result of
+        Nothing -> pure (ctxs, input)
+        Just (JSONBeginObject, rest) -> do
+          ctxs' <- emitChunk config JSONBeginObject ctxs
+          allKeys rest ctxs'
+        Just (event, rest) -> takeValueChunks config (pushCursor event rest) ctxs
+      where
+        allKeys :: Cursor -> [EncodeCtx] -> ChunkStream (ExceptT Text IO) ([EncodeCtx], Cursor)
+        allKeys stream ctx = do
+          result <- lift (pullCursor stream)
+          case result of
+            Nothing -> throwError "unexpected end of input while reading object"
+            Just (JSONEndObject, rest) -> do
+              ctx' <- emitChunk config JSONEndObject ctx
+              pure (ctx', rest)
+            Just (JSONObjectKey key, rest) -> do
+              action <- lift (rewriteKeyText suffix rewriter key)
+              case action of
+                DropKey -> do
+                  after <- lift (skipValueE rest)
+                  allKeys after ctx
+                KeepKey -> do
+                  ctx' <- emitChunk config (JSONObjectKey key) ctx
+                  (ctx'', after) <- takeValueChunks config rest ctx'
+                  allKeys after ctx''
+                RenameKey newKey -> do
+                  ctx' <- emitChunk config (JSONObjectKey newKey) ctx
+                  (ctx'', after) <- takeValueChunks config rest ctx'
+                  allKeys after ctx''
+            Just _ -> throwError "invalid JSON object"
+
+    -- \| Apply the remainder of a @keys@ optic plus the enclosing
+    -- 'Rewriter' to one object key. Keys are scalar strings, so the
+    -- suffix either focuses the key as a whole (checked with
+    -- 'landing', e.g. @Id@ or @_String@) or it matches nothing and
+    -- the key is kept.
+    rewriteKeyText :: Fix OpticF -> Rewriter -> Text -> ExceptT Text IO KeyAction
+    rewriteKeyText suffix rw key = case rw of
+      RewriteDelete
+        | landing suffix (JSONString key) -> pure DropKey
+        | otherwise -> pure KeepKey
+      RewriteTransform t
+        | landing suffix (JSONString key) -> case runTransformation t (String key) of
+            Left err -> throwError err
+            Right (String next) -> pure (if next == key then KeepKey else RenameKey next)
+            Right _ -> throwError "key transformation must yield a string"
+        | otherwise -> pure KeepKey
 
     -- \| Rewrite one object member. The key survives unless a @delete@
     -- lands on the member value as a whole; the walk then continues
