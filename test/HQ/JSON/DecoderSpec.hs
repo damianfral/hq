@@ -8,6 +8,7 @@ import Data.Scientific (fromFloatDigits)
 import qualified Data.Text as T
 import HQ.JSON.Decoder
 import HQ.JSON.Event
+import HQ.JSON.Skip
 import Relude hiding (Compose, id)
 import Streaming (Of (..), Stream)
 import qualified Streaming.Prelude as S

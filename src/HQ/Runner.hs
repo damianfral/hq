@@ -25,8 +25,6 @@ import HQ.JSON.Decoder
     finishValue,
     initialDecoder,
     pullEvent,
-    skipContainerText,
-    skipMemberValueText,
   )
 import qualified HQ.JSON.Decoder as Decoder
 import HQ.JSON.Encoder
@@ -43,6 +41,7 @@ import HQ.JSON.Encoder
     formatEvent,
   )
 import HQ.JSON.Event
+import HQ.JSON.Skip (skipContainerText, skipMemberValueText)
 import HQ.Optic (Optic (..), OpticF (..))
 import HQ.Query (Query (..))
 import HQ.Transformation (Transformation (..), TransformationF (..), runTransformation)
