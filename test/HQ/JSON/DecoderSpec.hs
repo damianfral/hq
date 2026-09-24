@@ -28,6 +28,7 @@ spec = describe "HQ.JSON.Decoder" $ do
   adversarialSpec
   pullEventSpec
   skipTextSpec
+  skipContainerTextSpec
 
 --------------------------------------------------------------------------------
 -- Helpers
@@ -1176,7 +1177,7 @@ runSkipValue :: [Text] -> IO (Either Text (Text, [Text]))
 runSkipValue chunks = runExceptT $ case chunks of
   [] -> throwError ("empty chunk list" :: Text)
   c : cs -> do
-    (remText, rest) <- skipValueText c (S.each cs)
+    (remText, rest) <- skipValueText [] c (S.each cs)
     remaining <- S.toList_ rest
     pure (remText, remaining)
 
@@ -1185,7 +1186,7 @@ runSkipMember :: [Text] -> IO (Either Text (Text, [Text]))
 runSkipMember chunks = runExceptT $ case chunks of
   [] -> throwError ("empty chunk list" :: Text)
   c : cs -> do
-    (remText, rest) <- skipMemberValueText c (S.each cs)
+    (remText, rest) <- skipMemberValueText [ContextObject] c (S.each cs)
     remaining <- S.toList_ rest
     pure (remText, remaining)
 
@@ -1288,6 +1289,45 @@ memberMalformed =
     "{\"a\" 1}",
     "{\"a\":nul}"
   ]
+
+-- | Pull every remaining event through pullEvent.
+pullRemaining :: Decoder -> Stream (Of Text) (ExceptT Text IO) () -> ExceptT Text IO [JSONEvent]
+pullRemaining decoder text = do
+  pulled <- pullEvent decoder text
+  case pulled of
+    PulledEnd -> pure []
+    PulledEvent event decoder' rest -> (event :) <$> pullRemaining decoder' rest
+
+skipContainerTextSpec :: Spec
+skipContainerTextSpec = describe "skipContainerText" $ do
+  it "skips pulled containers and continues decoding after every split" $ do
+    forM_ containerValues $ \value ->
+      let full = "[" <> value <> ",99]"
+       in forM_ (splits full) $ \chunks -> do
+            result <- runExceptT $ do
+              let textStream :: Stream (Of Text) (ExceptT Text IO) ()
+                  textStream = S.each chunks
+              openArray <- pullEvent initialDecoder textStream
+              case openArray of
+                PulledEvent JSONBeginArray decoder1 text1 -> do
+                  openMember <- pullEvent decoder1 text1
+                  case openMember of
+                    PulledEvent open decoder2 text2 -> do
+                      (decoder3, text3) <- skipContainerText open decoder2 text2
+                      pullRemaining decoder3 text3
+                    _ -> throwError ("expected a member opener" :: Text)
+                _ -> throwError ("expected an array opener" :: Text)
+            let reference = drop (1 + length (runStreaming [value])) (runStreaming [full])
+            result `shouldBe` Right reference
+  where
+    containerValues :: [Text]
+    containerValues =
+      [ "[1,2]",
+        "{\"a\":1}",
+        "[1,{\"a\":[2]}]",
+        "[[[]]]",
+        "{\"a\":[1,{\"b\":2}]}"
+      ]
 
 -- | Values without leading/trailing whitespace: skipping must consume
 -- everything. (Padded, empty and blank inputs are covered by the

@@ -872,19 +872,41 @@ nextSkipChar input text = case T.uncons (T.dropWhile isWhitespace input) of
       Right (chunk, rest) -> nextSkipChar chunk rest
 
 -- | Skip exactly one JSON value starting at the head of the text
--- (leading whitespace is allowed). Returns the unconsumed remainder
--- and the rest of the stream.
-skipValueText :: Text -> StreamIO Text () -> ExceptT Text IO (Text, StreamIO Text ())
-skipValueText = skipExpect 0 [] ExpectValue
+-- (leading whitespace is allowed). The stack is the enclosing
+-- context, used for error categories and for detecting completion:
+-- the skip ends when the stack is back at its entry depth. Returns
+-- the unconsumed remainder and the rest of the stream.
+skipValueText :: [Context] -> Text -> StreamIO Text () -> ExceptT Text IO (Text, StreamIO Text ())
+skipValueText stack = skipExpect (length stack) stack ExpectValue
 
 -- | Skip an object member value: the text starts where the key ended,
 -- so a colon is required first (mirroring 'ParserStateObjectColon').
-skipMemberValueText :: Text -> StreamIO Text () -> ExceptT Text IO (Text, StreamIO Text ())
-skipMemberValueText input text = do
+skipMemberValueText :: [Context] -> Text -> StreamIO Text () -> ExceptT Text IO (Text, StreamIO Text ())
+skipMemberValueText stack input text = do
   (c, rest, text') <- nextSkipChar input text
   case c of
-    ':' -> skipExpect 1 [ContextObject] ExpectValue rest text'
+    ':' -> skipExpect (length stack) stack ExpectValue rest text'
     _ -> throwError (show ExpectedColon)
+
+-- | Skip the rest of the container whose opening event was just
+-- emitted (decoder positioned after it). Pops the container and
+-- advances past the value, like 'emitContainerEnd' followed by
+-- 'finishValue', but validates without materializing anything.
+skipContainerText ::
+  JSONEvent -> Decoder -> StreamIO Text () -> ExceptT Text IO (Decoder, StreamIO Text ())
+skipContainerText open decoder text = case open of
+  JSONBeginArray -> skipRest ExpectValue
+  JSONBeginObject -> skipRest ExpectKey
+  _ -> pure (decoder, text)
+  where
+    -- The opener is already consumed, so the skip ends when the stack
+    -- pops back below its entry depth.
+    skipRest expect = do
+      let base = length (decoderStack decoder) - 1
+      (remainder, rest) <- skipExpect base (decoderStack decoder) expect (decoderInput decoder) text
+      case decoderStack decoder of
+        _ : ctxs -> pure (finishValue decoder {decoderInput = remainder, decoderStack = ctxs}, rest)
+        [] -> pure (finishValue decoder {decoderInput = remainder}, rest)
 
 -- | Structural skip loop. A value completing when the stack is back at
 -- its entry depth ends the skip and returns the remainder.
