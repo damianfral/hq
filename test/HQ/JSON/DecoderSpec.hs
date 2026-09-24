@@ -3,16 +3,13 @@
 
 module HQ.JSON.DecoderSpec (spec) where
 
-import Control.Monad.Error.Class (throwError)
 import Data.Scientific (fromFloatDigits)
-import qualified Data.Text as T
 import HQ.JSON.Decoder
 import HQ.JSON.Event
-import HQ.JSON.Skip
 import Relude hiding (Compose, id)
 import Streaming (Of (..), Stream)
 import qualified Streaming.Prelude as S
-import Test.HQ (decodeStreaming)
+import Test.HQ (decodeShown, decodeStreaming, drainCollect, malformedPullCorpus, runStreaming, splits, validPullCorpus)
 import Test.Syd
 
 spec :: Spec
@@ -28,35 +25,10 @@ spec = describe "HQ.JSON.Decoder" $ do
   streamingSpec
   adversarialSpec
   pullEventSpec
-  skipTextSpec
-  skipContainerTextSpec
 
 --------------------------------------------------------------------------------
 -- Helpers
 --------------------------------------------------------------------------------
-
--- | Drain events from a decoder result by repeatedly calling step,
--- then finalize with finish.  Tries finish first to avoid infinite
--- loops when step returns NeedInput on an empty-input decoder.
-drainCollect :: DecoderResult -> Either ParseError [JSONEvent]
-drainCollect (Emit event next) = case step next of
-  Left err -> Left err
-  Right result -> fmap (event :) (drainCollect result)
-drainCollect (Done _) = Right []
-drainCollect (NeedInput next)
-  -- There is still unconsumed input; step it rather than calling finish
-  -- (finish discards decoderInput, which would lose surrogate pairs,
-  -- keywords, and numbers that span across the last feed boundary).
-  | not (T.null (decoderInput next)) = case step next of
-      Left err -> Left err
-      Right result -> drainCollect result
-  | otherwise = case finish next of
-      Right (Emit event next') -> case step next' of
-        Left err' -> Left err'
-        Right result' -> fmap (event :) (drainCollect result')
-      Right (Done _) -> Right []
-      Right (NeedInput _) -> Left UnexpectedEnd
-      Left err -> Left err
 
 -- | Decode input that is guaranteed to be complete (all at once).
 decodeComplete :: Text -> Either ParseError [JSONEvent]
@@ -77,12 +49,6 @@ decodeIncremental input = go initialDecoder (toString input)
       Right (Emit event nextDecoder) -> fmap (event :) (go nextDecoder cs)
       Right (NeedInput nextDecoder) -> go nextDecoder cs
       Right (Done nextDecoder) -> go nextDecoder cs
-
--- | Helper to run a streaming decode and check the result.
-runStreaming :: [Text] -> [JSONEvent]
-runStreaming chunks = case decodeStreaming chunks of
-  Left _err -> []
-  Right events -> events
 
 --------------------------------------------------------------------------------
 -- Scalar values
@@ -1074,28 +1040,6 @@ pullAllChunks chunks = runExceptT (collect initialDecoder stream)
         PulledEnd -> pure []
         PulledEvent event decoder' rest -> (event :) <$> collect decoder' rest
 
--- | Chunkings under which an input is decoded: whole, every two-way
--- split, and one-character chunks for short inputs.
-splits :: Text -> [[Text]]
-splits input
-  | T.null input = [[input]]
-  | otherwise =
-      [input]
-        : [[T.take n input, T.drop n input] | n <- [1 .. T.length input - 1]]
-          ++ [[one c | c <- toString input] | T.length input <= 24]
-
--- | Streaming decode with errors shown, for comparison with pullEvent.
-decodeShown :: [Text] -> Either Text [JSONEvent]
-decodeShown chunks = case decodeStreaming chunks of
-  Left err -> Left (show err)
-  Right events -> Right events
-
--- | Map a decoded event list to the skip-result shape: errors pass
--- through, successes mean exact consumption.
-firstShown :: Either Text [JSONEvent] -> Either Text (Text, [Text])
-firstShown (Left err) = Left err
-firstShown (Right _) = Right (mempty, [])
-
 pullEventSpec :: Spec
 pullEventSpec = describe "pullEvent" $ do
   it "agrees with streaming decode on valid inputs under every split" $ do
@@ -1109,229 +1053,3 @@ pullEventSpec = describe "pullEvent" $ do
       forM_ (splits input) $ \chunks -> do
         pulled <- pullAllChunks chunks
         pulled `shouldBe` decodeShown chunks
-
---------------------------------------------------------------------------------
--- Shared corpus
---------------------------------------------------------------------------------
-
-validPullCorpus :: [Text]
-validPullCorpus =
-  [ "42",
-    "-42",
-    "0",
-    "3.14",
-    "-3.14",
-    "0.15",
-    "1e10",
-    "1E10",
-    "1e-2",
-    "1e+2",
-    "1.5e2",
-    "-1.5e-6",
-    "-1e5",
-    "null",
-    "true",
-    "false",
-    "\"\"",
-    "\"hello\"",
-    "\"a\\\"b\\\\c\\/\\b\\f\\n\\r\\t\"",
-    "\"\\u00e9\"",
-    "\"\\ud83d\\ude00\"",
-    "[]",
-    "[1,2,3]",
-    "[1,\"a\",true,null]",
-    "{}",
-    "{\"a\":1,\"b\":[2,3]}",
-    " {\"a\" : [1, 2] } ",
-    "",
-    "   "
-  ]
-
-malformedPullCorpus :: [Text]
-malformedPullCorpus =
-  [ "\"abc",
-    "{\"a\":1",
-    "[1,2",
-    "12a",
-    "\"\\x\"",
-    "\"\\u00z1\"",
-    "\"\\ud83d\"",
-    "\"\\ud83dX\"",
-    "01",
-    "1e",
-    "1e+",
-    "{\"a\" 1}",
-    "[1,,2]",
-    "[1 2]",
-    "{,}",
-    "nul",
-    "-",
-    "--1"
-  ]
-
---------------------------------------------------------------------------------
--- skipValueText / skipMemberValueText
---------------------------------------------------------------------------------
-
--- | Skip one value over chunks; collect remainder text and chunks.
-runSkipValue :: [Text] -> IO (Either Text (Text, [Text]))
-runSkipValue chunks = runExceptT $ case chunks of
-  [] -> throwError ("empty chunk list" :: Text)
-  c : cs -> do
-    (remText, rest) <- skipValueText [] c (S.each cs)
-    remaining <- S.toList_ rest
-    pure (remText, remaining)
-
--- | Skip an object member value over chunks starting after the key.
-runSkipMember :: [Text] -> IO (Either Text (Text, [Text]))
-runSkipMember chunks = runExceptT $ case chunks of
-  [] -> throwError ("empty chunk list" :: Text)
-  c : cs -> do
-    (remText, rest) <- skipMemberValueText [ContextObject] c (S.each cs)
-    remaining <- S.toList_ rest
-    pure (remText, remaining)
-
--- | Drain a hand-positioned mid-object decoder: after skipping member
--- @a@, the rest must decode to the remaining members.
-drainAfterSkippedMember :: Text -> Either ParseError [JSONEvent]
-drainAfterSkippedMember remainder =
-  let decoder =
-        Decoder
-          { decoderInput = remainder,
-            decoderStack = [ContextObject],
-            decoderState = ParserStateObjectComma
-          }
-   in case step decoder of
-        Left err -> Left err
-        Right result -> drainCollect result
-
-skipTextSpec :: Spec
-skipTextSpec = describe "skipValueText" $ do
-  it "consumes single values exactly under every split" $ do
-    forM_ exactPullCorpus $ \input ->
-      forM_ (splits input) $ \chunks -> do
-        skipped <- runSkipValue chunks
-        case skipped of
-          Left err -> expectationFailure $ "skip failed: " <> toString err
-          Right (remHead, remChunks) ->
-            (remHead <> T.concat remChunks) `shouldBe` mempty
-
-  it "leaves trailing whitespace after skipped values" $ do
-    forM_ (splits " {\"a\" : [1, 2] } ") $ \chunks -> do
-      skipped <- runSkipValue chunks
-      case skipped of
-        Left err -> expectationFailure $ "skip failed: " <> toString err
-        Right (remHead, remChunks) ->
-          (remHead <> T.concat remChunks) `shouldBe` " "
-
-  it "reports the same errors as streaming decode under every split" $ do
-    forM_ malformedPullCorpus $ \input ->
-      forM_ (splits input) $ \chunks -> do
-        skipped <- runSkipValue chunks
-        skipped `shouldBe` firstShown (decodeShown chunks)
-
-  it "stops after complete values with trailing garbage" $ do
-    -- A complete value followed by garbage decodes to an error, but
-    -- skipping consumes exactly the value and returns the rest: the
-    -- continuation, not the skipper, reports the trailing input.
-    forM_ [("\"a\":1", ":1"), ("[1] trailing", " trailing"), ("{\"a\":1} x", " x")] $ \(input, trailing) ->
-      forM_ (splits input) $ \chunks -> do
-        skipped <- runSkipValue chunks
-        case skipped of
-          Left err -> expectationFailure $ "skip failed: " <> toString err
-          Right (remHead, remChunks) ->
-            (remHead <> T.concat remChunks) `shouldBe` trailing
-
-  it "skips member values and continues decoding after every split" $ do
-    forM_ memberValues $ \value ->
-      let full = "{\"a\":" <> value <> ",\"b\":2}"
-          keyLength = T.length "{\"a\""
-          consumedLength = keyLength + 1 + T.length value
-          fullRemainder = T.drop consumedLength full
-       in forM_ [keyLength .. T.length full] $ \n -> do
-            let memberChunks = [T.drop keyLength (T.take n full), T.drop n full]
-            skipped <- runSkipMember memberChunks
-            case skipped of
-              Left err -> expectationFailure $ "skip failed: " <> toString err
-              Right (remHead, remChunks) -> do
-                let remainder = remHead <> T.concat remChunks
-                remainder `shouldBe` fullRemainder
-                drainAfterSkippedMember remainder
-                  `shouldBe` Right [JSONObjectKey "b", JSONNumber 2, JSONEndObject]
-
-  it "reports member value errors like streaming decode" $ do
-    forM_ memberMalformed $ \full ->
-      let prefixLength = T.length "{\"a\""
-       in forM_ [prefixLength .. T.length full] $ \n -> do
-            let chunks = [T.take n full, T.drop n full]
-                memberChunks = [T.drop prefixLength (T.take n full), T.drop n full]
-            skipped <- runSkipMember memberChunks
-            skipped `shouldBe` firstShown (decodeShown chunks)
-
-memberValues :: [Text]
-memberValues =
-  [ "1",
-    "\"x\"",
-    "true",
-    "null",
-    "[1,2]",
-    "{\"x\":1}",
-    "1.5e2",
-    "-1e5",
-    "\"a\\\"b\"",
-    "\"\\ud83d\\ude00\""
-  ]
-
-memberMalformed :: [Text]
-memberMalformed =
-  [ "{\"a\":01}",
-    "{\"a\":\"\\x\"}",
-    "{\"a\":1e}",
-    "{\"a\" 1}",
-    "{\"a\":nul}"
-  ]
-
--- | Pull every remaining event through pullEvent.
-pullRemaining :: Decoder -> Stream (Of Text) (ExceptT Text IO) () -> ExceptT Text IO [JSONEvent]
-pullRemaining decoder text = do
-  pulled <- pullEvent decoder text
-  case pulled of
-    PulledEnd -> pure []
-    PulledEvent event decoder' rest -> (event :) <$> pullRemaining decoder' rest
-
-skipContainerTextSpec :: Spec
-skipContainerTextSpec = describe "skipContainerText" $ do
-  it "skips pulled containers and continues decoding after every split" $ do
-    forM_ containerValues $ \value ->
-      let full = "[" <> value <> ",99]"
-       in forM_ (splits full) $ \chunks -> do
-            result <- runExceptT $ do
-              let textStream :: Stream (Of Text) (ExceptT Text IO) ()
-                  textStream = S.each chunks
-              openArray <- pullEvent initialDecoder textStream
-              case openArray of
-                PulledEvent JSONBeginArray decoder1 text1 -> do
-                  openMember <- pullEvent decoder1 text1
-                  case openMember of
-                    PulledEvent open decoder2 text2 -> do
-                      (decoder3, text3) <- skipContainerText open decoder2 text2
-                      pullRemaining decoder3 text3
-                    _ -> throwError ("expected a member opener" :: Text)
-                _ -> throwError ("expected an array opener" :: Text)
-            let reference = drop (1 + length (runStreaming [value])) (runStreaming [full])
-            result `shouldBe` Right reference
-  where
-    containerValues :: [Text]
-    containerValues =
-      [ "[1,2]",
-        "{\"a\":1}",
-        "[1,{\"a\":[2]}]",
-        "[[[]]]",
-        "{\"a\":[1,{\"b\":2}]}"
-      ]
-
--- | Values without leading/trailing whitespace: skipping must consume
--- everything. (Padded, empty and blank inputs are covered by the
--- neighbouring tests.)
-exactPullCorpus :: [Text]
-exactPullCorpus = filter (`notElem` ["", "   ", " {\"a\" : [1, 2] } "]) validPullCorpus

@@ -1,3 +1,4 @@
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE StrictData #-}
 {-# LANGUAGE NoImplicitPrelude #-}
@@ -26,6 +27,40 @@ data JSONEvent
   | JSONNumber Scientific
   | JSONString Text
   deriving (Eq, Show)
+
+--------------------------------------------------------------------------------
+-- Event classifiers
+--------------------------------------------------------------------------------
+
+isString :: JSONEvent -> Bool
+isString = \case
+  JSONString _ -> True
+  _ -> False
+
+isNumber :: JSONEvent -> Bool
+isNumber = \case
+  JSONNumber _ -> True
+  _ -> False
+
+isBool :: JSONEvent -> Bool
+isBool = \case
+  JSONBool _ -> True
+  _ -> False
+
+isNull :: JSONEvent -> Bool
+isNull = \case
+  JSONNull -> True
+  _ -> False
+
+isArray :: JSONEvent -> Bool
+isArray = \case
+  JSONBeginArray -> True
+  _ -> False
+
+isObject :: JSONEvent -> Bool
+isObject = \case
+  JSONBeginObject -> True
+  _ -> False
 
 -- | Parse a JSON value from a sequence of events.
 --
