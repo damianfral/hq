@@ -67,36 +67,15 @@ pullCursor (Cursor [] decoder text) = do
 pushCursor :: JSONEvent -> Cursor -> Cursor
 pushCursor event (Cursor buffered decoder text) = Cursor (event : buffered) decoder text
 
--- | Drive the decoder one event for bulk takes: no 'Pulled'/'Maybe'
--- wrappers, just the event with the advanced position.
-pullStep :: [JSONEvent] -> Decoder -> StreamIO Text () -> ExceptT Text IO (JSONEvent, [JSONEvent], Decoder, StreamIO Text ())
-pullStep (event : buffered) decoder text = pure (event, buffered, decoder, text)
-pullStep [] decoder text = case Decoder.step decoder of
-  Left err -> throwError (show err)
-  Right (Emit event decoder') -> pure (event, [], decoder', text)
-  Right (NeedInput decoder') -> pullMore decoder' text
-  Right (Done _) -> throwError "unexpected end of JSON input"
-  where
-    pullMore dec txt = do
-      result <- S.next txt
-      case result of
-        Left () -> finishTake dec
-        Right (chunk, rest) -> case Decoder.feed chunk dec of
-          Left err -> throwError (show err)
-          Right (Emit event dec') -> pure (event, [], dec', rest)
-          Right (NeedInput dec') -> pullMore dec' rest
-          Right (Done _) -> throwError "unexpected end of JSON input"
-    -- Mirror 'drainFinish': a value completed exactly at end of input
-    -- still yields its final event; anything else ends the take the
-    -- same way the event-stream takes did.
-    finishTake dec = case finish dec of
-      Left UnexpectedEnd
-        | decoderState dec == ParserStateValue && null (decoderStack dec) ->
-            throwError "unexpected end of JSON input"
-      Left err -> throwError (show err)
-      Right (Done _) -> throwError "unexpected end of JSON input"
-      Right (NeedInput _) -> throwError (show UnexpectedEnd)
-      Right (Emit event dec') -> pure (event, [], dec', pure ())
+-- | Pull a single event for bulk takes. Used once per taken value
+-- (not per event), so the intermediate tuple is negligible.
+pullOne :: [JSONEvent] -> Decoder -> StreamIO Text () -> ExceptT Text IO (JSONEvent, [JSONEvent], Decoder, StreamIO Text ())
+pullOne (event : buffered) decoder text = pure (event, buffered, decoder, text)
+pullOne [] decoder text = do
+  pulled <- pullEvent decoder text
+  case pulled of
+    PulledEnd -> throwError "unexpected end of JSON input"
+    PulledEvent event decoder' rest -> pure (event, [], decoder', rest)
 
 -- | Interpret an optic against the JSON value at the cursor.
 --
@@ -649,7 +628,7 @@ safePrefixLen bs = total - partialTail
 -- early (e.g. @S.take 1@) pulls only what it needs.
 takeValue :: K
 takeValue (Cursor buffered decoder text) = do
-  (event, buffered', decoder', text') <- lift (pullStep buffered decoder text)
+  (event, buffered', decoder', text') <- lift (pullOne buffered decoder text)
   S.yield event
   case event of
     JSONBeginArray -> takeContainerFrom JSONEndArray buffered' decoder' text'
@@ -686,24 +665,50 @@ takeContainer closing (Cursor buffered decoder text) =
   takeContainerFrom closing buffered decoder text
 
 -- | Take a container body event by event, driving the decoder
--- directly: no 'Pulled'/'Maybe' wrappers on the hot path.
+-- directly with no tuples or wrappers on the hot path: the event,
+-- buffer, decoder and text flow as explicit arguments.
 takeContainerFrom :: JSONEvent -> [JSONEvent] -> Decoder -> StreamIO Text () -> ValueStreamF Cursor
 takeContainerFrom closing = go
   where
     go :: [JSONEvent] -> Decoder -> StreamIO Text () -> ValueStreamF Cursor
-    go buf dec txt = do
-      (event, buf', dec', txt') <- lift (pullStep buf dec txt)
+    go buf dec txt = case buf of
+      event : rest -> emit event rest dec txt
+      [] -> case Decoder.step dec of
+        Left err -> throwError (show err)
+        Right (Emit event dec') -> emit event [] dec' txt
+        Right (NeedInput dec') -> pullMore dec' txt
+        Right (Done _) -> throwError "unexpected end of JSON input"
+    emit event buf dec txt = do
       S.yield event
       if event == closing
-        then pure (Cursor buf' dec' txt')
+        then pure (Cursor buf dec txt)
         else case event of
-          JSONBeginArray -> do
-            Cursor nestedBuf nestedDec nestedTxt <- takeContainerFrom JSONEndArray buf' dec' txt'
-            takeContainerFrom closing nestedBuf nestedDec nestedTxt
-          JSONBeginObject -> do
-            Cursor nestedBuf nestedDec nestedTxt <- takeContainerFrom JSONEndObject buf' dec' txt'
-            takeContainerFrom closing nestedBuf nestedDec nestedTxt
-          _ -> go buf' dec' txt'
+          JSONBeginArray -> nested JSONEndArray buf dec txt
+          JSONBeginObject -> nested JSONEndObject buf dec txt
+          _ -> go buf dec txt
+    nested end buf dec txt = do
+      Cursor buf' dec' txt' <- takeContainerFrom end buf dec txt
+      takeContainerFrom closing buf' dec' txt'
+    pullMore dec txt = do
+      result <- lift (S.next txt)
+      case result of
+        Left () -> finishTake dec
+        Right (chunk, rest) -> case Decoder.feed chunk dec of
+          Left err -> throwError (show err)
+          Right (Emit event dec') -> emit event [] dec' rest
+          Right (NeedInput dec') -> pullMore dec' rest
+          Right (Done _) -> throwError "unexpected end of JSON input"
+    -- Mirror 'drainFinish': a value completed exactly at end of input
+    -- still yields its final event; anything else ends the take the
+    -- same way the event-stream takes did.
+    finishTake dec = case finish dec of
+      Left UnexpectedEnd
+        | decoderState dec == ParserStateValue && null (decoderStack dec) ->
+            throwError "unexpected end of JSON input"
+      Left err -> throwError (show err)
+      Right (Done _) -> throwError "unexpected end of JSON input"
+      Right (NeedInput _) -> throwError (show UnexpectedEnd)
+      Right (Emit event dec') -> emit event [] dec' (pure ())
 
 -- | Consume one complete value without yielding its events.
 --
