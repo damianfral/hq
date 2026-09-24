@@ -532,7 +532,7 @@ type Runner = RunnerF ValueStream
 runRunner :: Runner -> Query -> Handle -> ExceptT Text IO ValueStream
 runRunner (Runner runner) query handle = runReaderT runner env
   where
-    env = RunnerEnv query $ streamHandle 65536 handle
+    env = RunnerEnv query $ streamHandle 256 handle
 
 -- | Run a query, encoding the selected values to stdout with pretty
 -- formatting and default value options.
@@ -562,6 +562,10 @@ runRunnerIOWith runner query encConfig handle = do
 -- | Read strict 'ByteString' chunks from a handle.
 -- The input is never loaded into memory as a whole. Each chunk is pulled
 -- only when the downstream parser needs more data.
+--
+-- NOTE: the 256-byte size is deliberate. Larger input chunks allocate
+-- slightly less overall but run slower per byte (measured): the
+-- decoder works better on small, cache-resident texts.
 streamHandle :: Int -> Handle -> StreamIO ByteString ()
 streamHandle size handle = do
   chunk <- liftIO $ BS.hGetSome handle size
