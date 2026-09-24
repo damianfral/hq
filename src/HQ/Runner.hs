@@ -8,6 +8,7 @@
 module HQ.Runner where
 
 import Control.Monad.Error.Class (MonadError (throwError))
+import Data.Aeson (Value)
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
 import Data.Fix (Fix (..))
@@ -28,12 +29,24 @@ import HQ.JSON.Decoder
     skipMemberValueText,
   )
 import qualified HQ.JSON.Decoder as Decoder
-import HQ.JSON.Encoder (EncodeStyle (..), EncoderConfig (EncoderConfig), Join (..), Raw (..), ValueOptions (..), encode)
+import HQ.JSON.Encoder
+  ( BSStream,
+    ChunkStream,
+    EncodeCtx,
+    EncodeStyle (..),
+    EncoderConfig (EncoderConfig),
+    Join (..),
+    Raw (..),
+    ValueOptions (..),
+    encode,
+    encodeChunks,
+    formatEvent,
+  )
 import HQ.JSON.Event
 import HQ.Optic (Optic (..), OpticF (..))
 import HQ.Query (Query (..))
-import HQ.Transformation (Transformation, runTransformation)
-import Relude hiding (Compose)
+import HQ.Transformation (Transformation (..), TransformationF (..), runTransformation)
+import Relude hiding (Compose, Const)
 import qualified Streaming.Prelude as S
 import System.IO (hSetBinaryMode)
 
@@ -50,6 +63,11 @@ data Cursor = Cursor ![JSONEvent] !Decoder (StreamIO Text ())
 -- | Interpret an optic against the JSON value at the cursor,
 -- yielding the taken events and returning the advanced cursor.
 type K = Cursor -> ValueStreamF Cursor
+
+-- | Splice output: chunk stream returning advanced encoder contexts
+-- and cursor. Passthrough regions transcribe text straight to chunks
+-- without an intermediate event stream.
+type KSplice = Cursor -> [EncodeCtx] -> ChunkStream (ExceptT Text IO) ([EncodeCtx], Cursor)
 
 -- | Pull one event for navigation. Buffered events come first;
 -- otherwise the decoder drives forward. Returns 'Nothing' at clean
@@ -289,12 +307,12 @@ data Splicer = SpliceDelete | SpliceTransform Transformation
 
 -- | Remove every value the optic focuses on from the document, passing
 -- the rest of the document through unchanged (lens @delete@/@omit@).
-runDelete :: Optic -> K
+runDelete :: Optic -> EncoderConfig -> KSplice
 runDelete = runSplice SpliceDelete
 
 -- | Apply a transformation to every value the optic focuses on, rewriting
 -- the document in place (lens @over@).
-runOver :: Optic -> Transformation -> K
+runOver :: Optic -> Transformation -> EncoderConfig -> KSplice
 runOver optic transformation = runSplice (SpliceTransform transformation) optic
 
 -- | Rewrite the document at the cursor by splicing every value that the
@@ -305,44 +323,58 @@ runOver optic transformation = runSplice (SpliceTransform transformation) optic
 -- document, replacing or omitting the focused values in place.  All
 -- other events pass through unchanged, so the output is the input with
 -- only the targeted values modified.
-runSplice :: Splicer -> Optic -> K
-runSplice splicer (Optic optic) = run optic
+runSplice :: Splicer -> Optic -> EncoderConfig -> KSplice
+runSplice splicer (Optic optic) config = run optic
   where
-    run :: Fix OpticF -> K
-    run step input = case unFix step of
-      Id -> spliceValue splicer input
-      _ -> navigate step (Fix Id) input
+    run :: Fix OpticF -> KSplice
+    run step input ctxs = case unFix step of
+      Id -> spliceValue splicer input ctxs
+      _ -> navigate step (Fix Id) input ctxs
 
-    navigate :: Fix OpticF -> Fix OpticF -> K
-    navigate step suffix input = case unFix step of
-      Id -> run suffix input
-      Compose left right -> navigate left (composeStep right suffix) input
-      Field name -> rewriteField name suffix input
-      Each -> rewriteEach suffix input
-      PrismString -> rewritePrism isString suffix input
-      PrismNumber -> rewritePrism isNumber suffix input
-      PrismBool -> rewritePrism isBool suffix input
-      PrismNull -> rewritePrism isNull suffix input
-      PrismArray -> rewritePrism isArray suffix input
-      PrismObject -> rewritePrism isObject suffix input
-      PrismJust -> rewriteJust suffix input
-      Prism1 -> rewriteIndex 0 suffix input
-      Prism2 -> rewriteIndex 1 suffix input
-      Ix i -> rewriteIndex i suffix input
+    navigate :: Fix OpticF -> Fix OpticF -> KSplice
+    navigate step suffix input ctxs = case unFix step of
+      Id -> run suffix input ctxs
+      Compose left right -> navigate left (composeStep right suffix) input ctxs
+      Field name -> rewriteField name suffix input ctxs
+      Each -> rewriteEach suffix input ctxs
+      PrismString -> rewritePrism isString suffix input ctxs
+      PrismNumber -> rewritePrism isNumber suffix input ctxs
+      PrismBool -> rewritePrism isBool suffix input ctxs
+      PrismNull -> rewritePrism isNull suffix input ctxs
+      PrismArray -> rewritePrism isArray suffix input ctxs
+      PrismObject -> rewritePrism isObject suffix input ctxs
+      PrismJust -> rewriteJust suffix input ctxs
+      Prism1 -> rewriteIndex 0 suffix input ctxs
+      Prism2 -> rewriteIndex 1 suffix input ctxs
+      Ix i -> rewriteIndex i suffix input ctxs
 
     composeStep :: Fix OpticF -> Fix OpticF -> Fix OpticF
     composeStep (Fix Id) rest = rest
     composeStep step rest = Fix (Compose step rest)
 
-    spliceValue :: Splicer -> K
-    spliceValue SpliceDelete input = skipValue input
-    spliceValue (SpliceTransform t) input = do
+    spliceValue :: Splicer -> KSplice
+    spliceValue SpliceDelete input ctxs = do
+      after <- lift (skipValueE input)
+      pure (ctxs, after)
+    -- A constant replacement never reads the focused value: skip it
+    -- at the text level instead of decoding it.
+    spliceValue (SpliceTransform (Transformation (Fix (Const value)))) input ctxs = do
+      after <- lift (skipValueE input)
+      emitValueChunks value ctxs after
+    spliceValue (SpliceTransform t) input ctxs = do
       events :> rest <- lift (S.toList (takeValue input))
       case eventsToValue events >>= runTransformation t of
         Left err -> throwError err
-        Right value -> do
-          S.each (valueToEvents value)
-          pure rest
+        Right value -> emitValueChunks value ctxs rest
+
+    -- \| Emit a transformed value's events as chunks.
+    emitValueChunks :: Value -> [EncodeCtx] -> Cursor -> ChunkStream (ExceptT Text IO) ([EncodeCtx], Cursor)
+    emitValueChunks value ctxs cursor = go ctxs (valueToEvents value)
+      where
+        go cs [] = pure (cs, cursor)
+        go cs (event : events) = do
+          cs' <- emitChunk config event cs
+          go cs' events
 
     landing :: Fix OpticF -> JSONEvent -> Bool
     landing (Fix opticF) event = case opticF of
@@ -363,137 +395,148 @@ runSplice splicer (Optic optic) = run optic
 
     -- \| Prism: value whose first event satisfies the predicate goes
     -- through the suffix; everything else passes through unchanged.
-    rewritePrism :: (JSONEvent -> Bool) -> Fix OpticF -> K
-    rewritePrism predicate suffix input = do
+    rewritePrism :: (JSONEvent -> Bool) -> Fix OpticF -> KSplice
+    rewritePrism predicate suffix input ctxs = do
       result <- lift (pullCursor input)
       case result of
-        Nothing -> pure input
+        Nothing -> pure (ctxs, input)
         Just (event, rest)
-          | predicate event -> run suffix (pushCursor event rest)
-          | otherwise -> takeValue (pushCursor event rest)
+          | predicate event -> run suffix (pushCursor event rest) ctxs
+          | otherwise -> takeValueChunks config (pushCursor event rest) ctxs
 
     -- \| Prism on non-null: null passes through, anything else goes
     -- through the suffix.
-    rewriteJust :: Fix OpticF -> K
-    rewriteJust suffix input = do
+    rewriteJust :: Fix OpticF -> KSplice
+    rewriteJust suffix input ctxs = do
       result <- lift (pullCursor input)
       case result of
-        Nothing -> pure input
-        Just (JSONNull, rest) -> S.yield JSONNull >> pure rest
-        Just (event, rest) -> run suffix (pushCursor event rest)
+        Nothing -> pure (ctxs, input)
+        Just (JSONNull, rest) -> do
+          ctxs' <- emitChunk config JSONNull ctxs
+          pure (ctxs', rest)
+        Just (event, rest) -> run suffix (pushCursor event rest) ctxs
 
     -- \| Array index: splice the element at @index@, pass through the
     -- rest of the array. Non-arrays pass through unchanged.
-    rewriteIndex :: Int -> Fix OpticF -> K
-    rewriteIndex index suffix input = do
+    rewriteIndex :: Int -> Fix OpticF -> KSplice
+    rewriteIndex index suffix input ctxs = do
       result <- lift (pullCursor input)
       case result of
-        Nothing -> pure input
+        Nothing -> pure (ctxs, input)
         Just (JSONBeginArray, rest) -> do
-          S.yield JSONBeginArray
-          go index rest
-        Just (event, rest) -> takeValue (pushCursor event rest)
+          ctxs' <- emitChunk config JSONBeginArray ctxs
+          go index rest ctxs'
+        Just (event, rest) -> takeValueChunks config (pushCursor event rest) ctxs
       where
-        go n stream = do
+        go n stream ctx = do
           result <- lift (pullCursor stream)
           case result of
             Nothing -> throwError "unexpected end of input while reading array"
-            Just (JSONEndArray, rest) -> S.yield JSONEndArray >> pure rest
+            Just (JSONEndArray, rest) -> do
+              ctx' <- emitChunk config JSONEndArray ctx
+              pure (ctx', rest)
             Just (event, rest)
               | n == 0 -> do
-                  after <- run suffix (pushCursor event rest)
-                  go (-1) after
+                  (ctx', after) <- run suffix (pushCursor event rest) ctx
+                  go (-1) after ctx'
               | otherwise -> do
-                  after <- takeValue (pushCursor event rest)
-                  go (n - 1) after
+                  (ctx', after) <- takeValueChunks config (pushCursor event rest) ctx
+                  go (n - 1) after ctx'
 
     -- \| Object field: splice the member named @name@ (dropping the key
     -- too under @delete@ when the suffix lands on the value), pass
     -- every other member through unchanged.
-    rewriteField :: Text -> Fix OpticF -> K
-    rewriteField name suffix input = do
+    rewriteField :: Text -> Fix OpticF -> KSplice
+    rewriteField name suffix input ctxs = do
       result <- lift (pullCursor input)
       case result of
-        Nothing -> pure input
+        Nothing -> pure (ctxs, input)
         Just (JSONBeginObject, rest) -> do
-          S.yield JSONBeginObject
-          pairs rest
-        Just (event, rest) -> takeValue (pushCursor event rest)
+          ctxs' <- emitChunk config JSONBeginObject ctxs
+          pairs rest ctxs'
+        Just (event, rest) -> takeValueChunks config (pushCursor event rest) ctxs
       where
-        pairs :: Cursor -> ValueStreamF Cursor
-        pairs stream = do
+        pairs :: Cursor -> [EncodeCtx] -> ChunkStream (ExceptT Text IO) ([EncodeCtx], Cursor)
+        pairs stream ctx = do
           result <- lift (pullCursor stream)
           case result of
             Nothing -> throwError "unexpected end of input while reading object"
-            Just (JSONEndObject, rest) -> S.yield JSONEndObject >> pure rest
+            Just (JSONEndObject, rest) -> do
+              ctx' <- emitChunk config JSONEndObject ctx
+              pure (ctx', rest)
             Just (JSONObjectKey key, rest)
-              | key == name -> spliceMember suffix key rest pairs
+              | key == name -> spliceMember suffix key rest pairs ctx
               | otherwise -> do
-                  S.yield (JSONObjectKey key)
-                  after <- takeValue rest
-                  pairs after
+                  ctx' <- emitChunk config (JSONObjectKey key) ctx
+                  (ctx'', after) <- takeValueChunks config rest ctx'
+                  pairs after ctx''
             Just _ -> throwError "invalid JSON object"
 
     -- \| The @each@ traversal: splice every array element, or every
     -- object member value. Non-containers pass through.
-    rewriteEach :: Fix OpticF -> K
-    rewriteEach suffix input = do
+    rewriteEach :: Fix OpticF -> KSplice
+    rewriteEach suffix input ctxs = do
       result <- lift (pullCursor input)
       case result of
-        Nothing -> pure input
+        Nothing -> pure (ctxs, input)
         Just (JSONBeginArray, rest) -> do
-          S.yield JSONBeginArray
-          allElements rest
+          ctxs' <- emitChunk config JSONBeginArray ctxs
+          allElements rest ctxs'
         Just (JSONBeginObject, rest) -> do
-          S.yield JSONBeginObject
-          allMembers rest
-        Just (event, rest) -> takeValue (pushCursor event rest)
+          ctxs' <- emitChunk config JSONBeginObject ctxs
+          allMembers rest ctxs'
+        Just (event, rest) -> takeValueChunks config (pushCursor event rest) ctxs
       where
-        allElements :: Cursor -> ValueStreamF Cursor
-        allElements stream = do
+        allElements :: Cursor -> [EncodeCtx] -> ChunkStream (ExceptT Text IO) ([EncodeCtx], Cursor)
+        allElements stream ctx = do
           result <- lift (pullCursor stream)
           case result of
             Nothing -> throwError "unexpected end of input while reading array"
-            Just (JSONEndArray, rest) -> S.yield JSONEndArray >> pure rest
+            Just (JSONEndArray, rest) -> do
+              ctx' <- emitChunk config JSONEndArray ctx
+              pure (ctx', rest)
             Just (event, rest) -> do
-              after <- run suffix (pushCursor event rest)
-              allElements after
+              (ctx', after) <- run suffix (pushCursor event rest) ctx
+              allElements after ctx'
 
-        allMembers :: Cursor -> ValueStreamF Cursor
-        allMembers stream = do
+        allMembers :: Cursor -> [EncodeCtx] -> ChunkStream (ExceptT Text IO) ([EncodeCtx], Cursor)
+        allMembers stream ctx = do
           result <- lift (pullCursor stream)
           case result of
             Nothing -> throwError "unexpected end of input while reading object"
-            Just (JSONEndObject, rest) -> S.yield JSONEndObject >> pure rest
+            Just (JSONEndObject, rest) -> do
+              ctx' <- emitChunk config JSONEndObject ctx
+              pure (ctx', rest)
             Just (JSONObjectKey key, rest) ->
-              spliceMember suffix key rest allMembers
+              spliceMember suffix key rest allMembers ctx
             Just _ -> throwError "invalid JSON object"
 
     -- \| Splice one object member. The key survives unless a @delete@
     -- lands on the member value as a whole; the walk then continues
     -- with @continue@.
-    spliceMember :: Fix OpticF -> Text -> Cursor -> K -> ValueStreamF Cursor
-    spliceMember suffix key stream continue = do
+    spliceMember :: Fix OpticF -> Text -> Cursor -> KSplice -> [EncodeCtx] -> ChunkStream (ExceptT Text IO) ([EncodeCtx], Cursor)
+    spliceMember suffix key stream continue ctxs = do
       result <- lift (pullCursor stream)
       case result of
         Nothing -> throwError "unexpected end of input after object key"
         Just (event, rest) -> case splicer of
           SpliceDelete
             | landing suffix event -> do
-                after <- skipValue (pushCursor event rest)
-                continue after
+                after <- lift (skipValueE (pushCursor event rest))
+                continue after ctxs
             | otherwise -> do
-                S.yield (JSONObjectKey key)
-                after <- run suffix (pushCursor event rest)
-                continue after
+                ctx' <- emitChunk config (JSONObjectKey key) ctxs
+                (ctx'', after) <- run suffix (pushCursor event rest) ctx'
+                continue after ctx''
           SpliceTransform _ -> do
-            S.yield (JSONObjectKey key)
-            after <- run suffix (pushCursor event rest)
-            continue after
+            ctx' <- emitChunk config (JSONObjectKey key) ctxs
+            (ctx'', after) <- run suffix (pushCursor event rest) ctx'
+            continue after ctx''
 
 data RunnerEnv = RunnerEnv
   { runnerEnvQuery :: Query,
-    runnerEnvInput :: StreamIO ByteString ()
+    runnerEnvInput :: StreamIO ByteString (),
+    runnerEnvConfig :: EncoderConfig
   }
 
 newtype RunnerF a = Runner {unRunner :: ReaderT RunnerEnv (ExceptT Text IO) a}
@@ -506,12 +549,12 @@ newtype RunnerF a = Runner {unRunner :: ReaderT RunnerEnv (ExceptT Text IO) a}
       MonadError Text
     )
 
-type Runner = RunnerF ValueStream
+type Runner = RunnerF (BSStream (ExceptT Text IO) ())
 
-runRunner :: Runner -> Query -> Handle -> ExceptT Text IO ValueStream
-runRunner (Runner runner) query handle = runReaderT runner env
+runRunner :: Runner -> Query -> EncoderConfig -> Handle -> ExceptT Text IO (BSStream (ExceptT Text IO) ())
+runRunner (Runner runner) query config handle = runReaderT runner env
   where
-    env = RunnerEnv query $ streamHandle 256 handle
+    env = RunnerEnv query (streamHandle 256 handle) config
 
 -- | Run a query, encoding the selected values to stdout with pretty
 -- formatting and default value options.
@@ -530,8 +573,8 @@ runRunnerIOWith runner query encConfig handle = do
   hSetBuffering stdout $ BlockBuffering Nothing
   hSetBinaryMode stdout True
   r <- runExceptT $ do
-    streamIO <- runRunner runner query handle
-    S.mapM_ write $ encode encConfig 65536 streamIO
+    byteStream <- runRunner runner query encConfig handle
+    S.mapM_ write byteStream
   case r of
     Left e -> hPutStrLn stderr e >> exitFailure
     Right v -> pure v
@@ -552,19 +595,19 @@ streamHandle size handle = do
     then pure ()
     else S.yield chunk >> streamHandle size handle
 
--- | Execute a query against a JSON value.
-executeQuery :: Query -> K
-executeQuery (Preview optic) val = runPreview optic val
-executeQuery (Fold optic) val = runFold optic val
-executeQuery (Over optic transformation) val = runOver optic transformation val
-executeQuery (Delete optic) val = runDelete optic val
-
 jsonRunner :: Runner
 jsonRunner = do
   query <- asks runnerEnvQuery
   input <- asks runnerEnvInput
+  config <- asks runnerEnvConfig
   let cursor = Cursor [] initialDecoder (decodeUtf8Stream input)
-  pure (void (executeQuery query cursor))
+  case query of
+    Preview optic -> pure (void (encode config 65536 (takeFirstValue (runFold optic cursor))))
+    Fold optic -> pure (void (encode config 65536 (runFold optic cursor)))
+    Over optic transformation ->
+      pure (void (encodeChunks 65536 (runSplice (SpliceTransform transformation) optic config cursor [])))
+    Delete optic ->
+      pure (void (encodeChunks 65536 (runSplice SpliceDelete optic config cursor [])))
 
 decodeUtf8Stream :: StreamIO ByteString () -> StreamIO Text ()
 decodeUtf8Stream = go mempty
@@ -710,13 +753,81 @@ takeContainerFrom closing = go
       Right (NeedInput _) -> throwError (show UnexpectedEnd)
       Right (Emit event dec') -> emit event [] dec' (pure ())
 
+-- | Format one event and yield its chunk, returning advanced contexts.
+emitChunk :: EncoderConfig -> JSONEvent -> [EncodeCtx] -> ChunkStream (ExceptT Text IO) [EncodeCtx]
+emitChunk config event ctxs = do
+  let (chunk, ctxs') = formatEvent config ctxs event
+  S.yield chunk
+  pure ctxs'
+
+-- | Take one complete value, transcribing it straight to chunks.
+takeValueChunks :: EncoderConfig -> Cursor -> [EncodeCtx] -> ChunkStream (ExceptT Text IO) ([EncodeCtx], Cursor)
+takeValueChunks config (Cursor buffered decoder text) ctxs = do
+  (event, buffered', decoder', text') <- lift (pullOne buffered decoder text)
+  ctxs' <- emitChunk config event ctxs
+  case event of
+    JSONBeginArray -> takeContainerChunks config JSONEndArray buffered' decoder' text' ctxs'
+    JSONBeginObject -> takeContainerChunks config JSONEndObject buffered' decoder' text' ctxs'
+    JSONEndArray -> throwError "unexpected end of array"
+    JSONEndObject -> throwError "unexpected end of object"
+    JSONObjectKey _ -> throwError "unexpected object key"
+    _ -> pure (ctxs', Cursor buffered' decoder' text')
+
+-- | Take a container body, transcribing text straight to chunks: the
+-- decode and format steps fuse per event with no intermediate event
+-- stream.
+takeContainerChunks :: EncoderConfig -> JSONEvent -> [JSONEvent] -> Decoder -> StreamIO Text () -> [EncodeCtx] -> ChunkStream (ExceptT Text IO) ([EncodeCtx], Cursor)
+takeContainerChunks config closing = go
+  where
+    go buf dec txt ctx = case buf of
+      event : rest -> emit event rest dec txt ctx
+      [] -> case Decoder.step dec of
+        Left err -> throwError (show err)
+        Right (Emit event dec') -> emit event [] dec' txt ctx
+        Right (NeedInput dec') -> pullMore dec' txt ctx
+        Right (Done _) -> throwError "unexpected end of JSON input"
+    emit event buf dec txt ctx = do
+      ctx' <- emitChunk config event ctx
+      if event == closing
+        then pure (ctx', Cursor buf dec txt)
+        else case event of
+          JSONBeginArray -> nested JSONEndArray buf dec txt ctx'
+          JSONBeginObject -> nested JSONEndObject buf dec txt ctx'
+          _ -> go buf dec txt ctx'
+    nested end buf dec txt ctx = do
+      (ctx', Cursor buf' dec' txt') <- takeContainerChunks config end buf dec txt ctx
+      takeContainerChunks config closing buf' dec' txt' ctx'
+    pullMore dec txt ctx = do
+      result <- lift (S.next txt)
+      case result of
+        Left () -> finishTake dec ctx
+        Right (chunk, rest) -> case Decoder.feed chunk dec of
+          Left err -> throwError (show err)
+          Right (Emit event dec') -> emit event [] dec' rest ctx
+          Right (NeedInput dec') -> pullMore dec' rest ctx
+          Right (Done _) -> throwError "unexpected end of JSON input"
+    -- Mirror 'drainFinish', emitting the final event as a chunk.
+    finishTake dec ctx = case finish dec of
+      Left UnexpectedEnd
+        | decoderState dec == ParserStateValue && null (decoderStack dec) ->
+            throwError "unexpected end of JSON input"
+      Left err -> throwError (show err)
+      Right (Done _) -> throwError "unexpected end of JSON input"
+      Right (NeedInput _) -> throwError (show UnexpectedEnd)
+      Right (Emit event dec') -> emit event [] dec' (pure ()) ctx
+
 -- | Consume one complete value without yielding its events.
 --
 -- The value's first event is pulled to dispatch on, then containers
 -- are skipped at the text level ('skipContainerText') without
 -- decoding their contents.
 skipValue :: Cursor -> ValueStreamF Cursor
-skipValue input = lift $ do
+skipValue = lift . skipValueE
+
+-- | 'skipValue' in 'ExceptT': shared by the event-stream and
+-- chunk-stream pipelines.
+skipValueE :: Cursor -> ExceptT Text IO Cursor
+skipValueE input = do
   result <- pullCursor input
   case result of
     Nothing -> throwError "unexpected end of JSON input"
@@ -736,8 +847,12 @@ skipValue input = lift $ do
 -- | Skip an object member value starting right after its key: the
 -- colon and value are consumed at the text level.
 skipMemberValue :: Cursor -> ValueStreamF Cursor
-skipMemberValue (Cursor buffered decoder text)
-  | null buffered = lift $ do
+skipMemberValue = lift . skipMemberValueE
+
+-- | 'skipMemberValue' in 'ExceptT': shared by both pipelines.
+skipMemberValueE :: Cursor -> ExceptT Text IO Cursor
+skipMemberValueE (Cursor buffered decoder text)
+  | null buffered = do
       (remainder, rest) <- skipMemberValueText (decoderStack decoder) (decoderInput decoder) text
       pure (Cursor [] (finishValue decoder {decoderInput = remainder}) rest)
-  | otherwise = skipValue (Cursor buffered decoder text)
+  | otherwise = skipValueE (Cursor buffered decoder text)

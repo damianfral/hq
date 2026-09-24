@@ -13,6 +13,7 @@ module HQ.JSON.Encoder
     formatEvent,
     Chunk,
     ChunkStream,
+    BSStream,
     EncodeCtx (..),
     Raw (..),
     Join (..),

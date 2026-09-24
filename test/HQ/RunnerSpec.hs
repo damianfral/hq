@@ -3,14 +3,16 @@
 
 module HQ.RunnerSpec (spec) where
 
+import Control.Monad.Error.Class (throwError)
 import Data.Aeson (Value (..))
 import qualified Data.Text as T
 import HQ.JSON.Decoder (initialDecoder)
+import HQ.JSON.Encoder (EncodeStyle (..), EncoderConfig (..), Join (..), Raw (..), ValueOptions (..), encodeChunks)
 import HQ.JSON.Event (JSONEvent (..), eventsToValue)
 import HQ.JSON.Parser (parseValueEvents)
 import HQ.Optic (Optic)
 import HQ.Optic.Parser (parseOptic)
-import HQ.Runner (Cursor (..), ValueStreamF, runDelete, runFold, runOver, runPreview)
+import HQ.Runner (Cursor (..), KSplice, runDelete, runFold, runOver, runPreview)
 import HQ.Transformation (Transformation, add, combine, concatString, constValue, equal, not, or, replace, trim)
 import Relude hiding (Compose, id, many, not, or, some, subtract, toStrict)
 import Streaming (Of (..), Stream)
@@ -68,24 +70,40 @@ runPreviewChunks optic chunks = runExceptT $ do
   let cursor = Cursor [] initialDecoder textStream
   S.toList_ (runPreview optic cursor)
 
--- | Run a document-rewriting query (set/delete) and collect the
--- rewritten document's events.
+-- | Encoder config for rewrite tests: pretty output, matching the
+-- production default.
+testConfig :: EncoderConfig
+testConfig = EncoderConfig (Pretty 2) (ValueOptions NoRaw NoJoin)
+
+-- | Run a document-rewriting query (set/delete), reparse its output
+-- bytes back to events, and collect them. Reparsing through the
+-- independent pure parser keeps every existing event expectation
+-- valid while the splice pipeline emits chunks.
 runRewriteTest ::
-  (Cursor -> ValueStreamF Cursor) ->
+  KSplice ->
   Text ->
   IO (Either Text [JSONEvent])
 runRewriteTest run input = runRewriteChunks run [input]
 
 -- | Run a document-rewriting query against chunked JSON text.
 runRewriteChunks ::
-  (Cursor -> ValueStreamF Cursor) ->
+  KSplice ->
   [Text] ->
   IO (Either Text [JSONEvent])
 runRewriteChunks run chunks = runExceptT $ do
   let textStream :: Stream (Of Text) (ExceptT Text IO) ()
       textStream = S.each chunks
   let cursor = Cursor [] initialDecoder textStream
-  S.toList_ (run cursor)
+  (outChunks :> _) <- S.toList (run cursor [])
+  (byteChunks :> _) <- S.toList (encodeChunks 65536 (S.each outChunks))
+  let text = decodeUtf8 (mconcat byteChunks)
+  -- No output bytes means no values (e.g. deleting the whole
+  -- document): nothing to reparse.
+  if T.null (T.strip text)
+    then pure []
+    else case parseValueEvents text of
+      Left err -> throwError err
+      Right events -> pure events
 
 -- | Chunkings: whole input, every two-way split, and one-character
 -- chunks for short inputs.
@@ -108,7 +126,7 @@ runSetTest opticStr valueStr jsonInput =
     Left err -> pure (Left (show err))
     Right optic -> case parseValueEvents valueStr >>= eventsToValue of
       Left err -> pure (Left err)
-      Right value -> runRewriteTest (runOver optic (constValue value)) jsonInput
+      Right value -> runRewriteTest (runOver optic (constValue value) testConfig) jsonInput
 
 -- | Parse an optic string and run @delete@ against JSON input,
 -- collecting the rewritten document's events.
@@ -116,7 +134,7 @@ runDeleteTest :: Text -> Text -> IO (Either Text [JSONEvent])
 runDeleteTest opticStr jsonInput =
   case parseOptic opticStr of
     Left err -> pure (Left (show err))
-    Right optic -> runRewriteTest (runDelete optic) jsonInput
+    Right optic -> runRewriteTest (runDelete optic testConfig) jsonInput
 
 -- | Parse an optic string and a transformation, run @over@ against JSON
 -- input, and collect the rewritten document's events.
@@ -124,7 +142,7 @@ runOverTest :: Text -> Transformation -> Text -> IO (Either Text [JSONEvent])
 runOverTest opticStr transformation jsonInput =
   case parseOptic opticStr of
     Left err -> pure (Left (show err))
-    Right optic -> runRewriteTest (runOver optic transformation) jsonInput
+    Right optic -> runRewriteTest (runOver optic transformation testConfig) jsonInput
 
 --------------------------------------------------------------------------------
 -- preview
@@ -684,7 +702,7 @@ chunkedSpec = describe "chunked input" $ do
         Left err -> expectationFailure $ "bad optic: " <> show err
         Right optic ->
           forM_ (chunkSplits doc) $ \chunks -> do
-            actual <- runRewriteChunks (runOver optic transformation) chunks
+            actual <- runRewriteChunks (runOver optic transformation testConfig) chunks
             actual `shouldBe` expected
 
   it "deletes agree with whole-input runs under every split" $ do
@@ -694,7 +712,7 @@ chunkedSpec = describe "chunked input" $ do
         Right optic -> do
           expected <- runDeleteTest opticStr doc
           forM_ (chunkSplits doc) $ \chunks -> do
-            actual <- runRewriteChunks (runDelete optic) chunks
+            actual <- runRewriteChunks (runDelete optic testConfig) chunks
             actual `shouldBe` expected
 
   it "preview never touches invalid tails under any split" $ do
