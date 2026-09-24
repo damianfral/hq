@@ -49,7 +49,7 @@ executables:
     ghc-options:
       - -rtsopts
       - -threaded
-      - -with-rtsopts=-N
+      - -with-rtsopts=-qg
       - -O2
     dependencies:
       - base
