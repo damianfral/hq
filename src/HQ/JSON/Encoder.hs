@@ -246,6 +246,9 @@ colonSeparator :: EncodeStyle -> Chunk
 colonSeparator Compact = Chunk (char7 ':') 1
 colonSeparator (Pretty _) = Chunk (string7 ": ") 2
 
+-- | An output fragment with its size. The size is a flush heuristic
+-- (character count, not exact bytes for non-ASCII), so chunk
+-- boundaries may shift with content; output bytes are unaffected.
 data Chunk = Chunk {chunkBuilder :: !Builder, chunkSize :: !Int}
 
 instance Semigroup Chunk where
@@ -277,7 +280,7 @@ encodeString text =
 -- escaping.  Used for raw top-level string output (like @jq -r@).
 encodeRawString :: Text -> Chunk
 encodeRawString text =
-  Chunk (stringUtf8 (toString text)) (utf8Length text)
+  Chunk (stringUtf8 (toString text)) (Text.length text)
 
 encodeStringBody :: Text -> Chunk
 encodeStringBody text = let Chunk b s = go text in Chunk b s
@@ -286,7 +289,9 @@ encodeStringBody text = let Chunk b s = go text in Chunk b s
       | Text.null t = mempty
       | otherwise =
           let (safe, rest) = Text.span isSafe t
-              safeChunk = Chunk (encodeUtf8Builder safe) (utf8Length safe)
+              -- Estimated size (chars, not bytes): exact enough to drive
+              -- flush decisions, and free, unlike a byte-counting pass.
+              safeChunk = Chunk (encodeUtf8Builder safe) (Text.length safe)
            in case Text.uncons rest of
                 Nothing -> safeChunk
                 Just (c, rest') ->
@@ -331,9 +336,6 @@ utf8CharSize c
   | otherwise = 4
   where
     n = fromEnum c
-
-utf8Length :: Text -> Int
-utf8Length = Text.foldl' (\size c -> size + utf8CharSize c) 0
 
 type JSONStream m r = Stream (Of JSONEvent) m r
 
