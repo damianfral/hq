@@ -56,6 +56,11 @@ skipValue = lift . skipValueE
 
 -- | 'skipValue' in 'ExceptT': shared by the event-stream and
 -- chunk-stream pipelines.
+--
+-- Text-level skipping is only valid when the container body is still
+-- ahead in the text, i.e. the buffer holds at most the peeked opening
+-- event. Replayed cursors buffer whole values whose text is already
+-- consumed; those are drained event by event instead.
 skipValueE :: Cursor -> ExceptT Text IO Cursor
 skipValueE input = do
   result <- pullCursor input
@@ -64,8 +69,12 @@ skipValueE input = do
     Just (event, Cursor buffered decoder text) -> skipEvent event buffered decoder text
   where
     skipEvent event buffered decoder text = case event of
-      JSONBeginArray -> skipOpened event decoder text buffered
-      JSONBeginObject -> skipOpened event decoder text buffered
+      JSONBeginArray
+        | null buffered -> skipOpened event decoder text buffered
+        | otherwise -> drainNested JSONEndArray (Cursor buffered decoder text)
+      JSONBeginObject
+        | null buffered -> skipOpened event decoder text buffered
+        | otherwise -> drainNested JSONEndObject (Cursor buffered decoder text)
       JSONEndArray -> throwError "unexpected end of array"
       JSONEndObject -> throwError "unexpected end of object"
       JSONObjectKey _ -> throwError "unexpected object key"
@@ -73,6 +82,35 @@ skipValueE input = do
     skipOpened event decoder text buffered = do
       (decoder', rest) <- skipContainerText event decoder text
       pure (Cursor buffered decoder' rest)
+    -- \| Consume one value event by event, without touching the text.
+    drainValue :: Cursor -> ExceptT Text IO Cursor
+    drainValue stream = do
+      result <- pullCursor stream
+      case result of
+        Nothing -> throwError "unexpected end of JSON input"
+        Just (JSONBeginArray, rest) -> drainNested JSONEndArray rest
+        Just (JSONBeginObject, rest) -> drainNested JSONEndObject rest
+        Just (JSONEndArray, _) -> throwError "unexpected end of array"
+        Just (JSONEndObject, _) -> throwError "unexpected end of object"
+        Just (JSONObjectKey _, _) -> throwError "unexpected object key"
+        Just (_, rest) -> pure rest
+    -- \| Consume a container body event by event up to its closing event.
+    drainNested :: JSONEvent -> Cursor -> ExceptT Text IO Cursor
+    drainNested closing stream = do
+      result <- pullCursor stream
+      case result of
+        Nothing -> throwError "unexpected end of JSON input"
+        Just (event, rest)
+          | event == closing -> pure rest
+          | otherwise -> case event of
+              JSONObjectKey _
+                | closing == JSONEndObject -> do
+                    after <- drainValue rest
+                    drainNested closing after
+                | otherwise -> throwError "unexpected object key"
+              _ -> do
+                after <- drainValue (pushCursor event rest)
+                drainNested closing after
 
 -- | Skip an object member value starting right after its key: the
 -- colon and value are consumed at the text level.

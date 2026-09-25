@@ -10,7 +10,7 @@ import HQ.Query
 import HQ.Transformation (add, combine, equal, or, trim)
 import HQ.Transformation.AST (TransformationTypeError (..))
 import HQ.Transformation.TransformationType (ValueType (..))
-import Relude hiding (Compose, id, or)
+import Relude hiding (Compose, filter, id, or)
 import Test.Syd
 
 spec :: Spec
@@ -78,6 +78,42 @@ spec = describe "HQ.Query" $ do
       let q = Over each (combine (equal (Number 1)) trim)
       typecheckQuery q `shouldBe` Right q
 
+    it "accepts fold with a filter" $ do
+      let q = Fold (filter (field "a") (equal (Number 1)))
+      typecheckQuery q `shouldBe` Right q
+
+    it "accepts preview with a filter" $ do
+      let q = Preview (filter (field "a") (equal (Number 1)))
+      typecheckQuery q `shouldBe` Right q
+
+    it "rejects a filter with a non-boolean predicate" $ do
+      let bad = filter (field "a") (add 1)
+      case typecheckQuery (Fold bad) of
+        Left (InvalidTransformationType err) ->
+          err `shouldBe` InvalidFilter (add 1) ValueNumber
+        Left err ->
+          expectationFailure $ "wrong error: " <> show err
+        Right _ -> expectationFailure "expected a type error"
+
+    it "rejects a filter with an ill-formed predicate" $ do
+      let bad = combine (add 1) (equal (Number 3))
+      case typecheckQuery (Fold (filter (field "a") bad)) of
+        Left (InvalidTransformationType err) ->
+          err `shouldBe` InvalidCombine bad ValueBool ValueNumber
+        Left err ->
+          expectationFailure $ "wrong error: " <> show err
+        Right _ -> expectationFailure "expected a type error"
+
+    it "rejects a nested filter with a bad predicate" $ do
+      let inner = filter (field "b") (add 2)
+          bad = filter (compose each inner) (equal (Number 1))
+      case typecheckQuery (Fold bad) of
+        Left (InvalidTransformationType err) ->
+          err `shouldBe` InvalidFilter (add 2) ValueNumber
+        Left err ->
+          expectationFailure $ "wrong error: " <> show err
+        Right _ -> expectationFailure "expected a type error"
+
   describe "renderTypeError" $ do
     it "renders an optic mismatch" $ do
       let err = InvalidOpticType OpticPrism OpticTraversal
@@ -95,3 +131,8 @@ spec = describe "HQ.Query" $ do
           err = InvalidTransformationType (InvalidOr bad ValueNumber)
       renderTypeError err
         `shouldBe` "transformation mismatch in +1 or == 2: both sides of or must produce booleans, but a branch produces number"
+
+    it "renders a non-boolean filter predicate" $ do
+      let err = InvalidTransformationType (InvalidFilter (add 1) ValueNumber)
+      renderTypeError err
+        `shouldBe` "filter transformation +1 must produce a boolean, but produces number"

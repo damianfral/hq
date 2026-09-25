@@ -7,7 +7,8 @@ module HQ.Optic.Parser where
 
 import HQ.JSON.Parser (Parser)
 import HQ.Optic
-import Relude hiding (Compose, id, many, some)
+import HQ.Transformation.Parser (atomParser, transformationParser)
+import Relude hiding (Compose, filter, id, many, some)
 import Text.Megaparsec
 import Text.Megaparsec.Char
 import Text.Megaparsec.Char.Lexer (decimal)
@@ -24,7 +25,7 @@ opticParser = do
 
 opticAtomParser :: Parser Optic
 opticAtomParser =
-  fieldParser <|> eachParser <|> keysParser <|> valuesParser <|> idParser <|> prismParser <|> ixParser
+  fieldParser <|> eachParser <|> keysParser <|> valuesParser <|> filterParser <|> idParser <|> prismParser <|> ixParser
 
 fieldParser :: Parser Optic
 fieldParser = char '#' >> field <$> identifier
@@ -41,6 +42,21 @@ keysParser = symbol "keys" $> keys
 valuesParser :: Parser Optic
 valuesParser = symbol "values" $> values
 
+-- | @filter OPTIC TRANSFORMATION@: either a single group wrapping
+-- both sides, or two bare single atoms, e.g. @filter (#age == 30)@,
+-- @filter (each . #age == 30)@ or @filter #public not@. A @.@ after a
+-- bare optic starts an outer composition (@filter #a ... . #b@), so
+-- dotted optics need the group form.
+filterParser :: Parser Optic
+filterParser = symbol "filter" >> (grouped <|> bare)
+  where
+    grouped = do
+      (o, t) <- paren ((,) <$> opticParser <*> transformationParser)
+      pure (filter o t)
+    bare = filter <$> opticAtomParser <*> transArg
+    transArg = atomParser
+    paren p = lexeme (char '(') *> p <* lexeme (char ')')
+
 idParser :: Parser Optic
 idParser = symbol "id" $> id
 
@@ -48,7 +64,7 @@ prismParser :: Parser Optic
 prismParser = char '_' *> prismNameParser
 
 ixParser :: Parser Optic
-ixParser = symbol "ix" >> ix <$> decimal
+ixParser = symbol "ix" >> ix <$> lexeme decimal
 
 prismNameParser :: Parser Optic
 prismNameParser =

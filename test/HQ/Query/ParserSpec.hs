@@ -8,7 +8,7 @@ import HQ.Optic
 import HQ.Query (Query (..))
 import HQ.Query.Parser (parseQuery)
 import HQ.Transformation (add, combine, concatString, constValue, equal, trim)
-import Relude hiding (Compose, id)
+import Relude hiding (Compose, filter, id)
 import Test.Syd
 
 spec :: Spec
@@ -85,6 +85,20 @@ parserSpec = describe "parseQuery" $ do
 
     it "parses ix with an index" $ do
       parseQuery "fold ix 10" `shouldBe` Right (Fold (ix 10))
+
+    it "parses filter with single words" $ do
+      parseQuery "fold filter #age == 30"
+        `shouldBe` Right (Fold (filter (field "age") (equal (Number 30))))
+
+    it "parses filter with parens" $ do
+      let inner = filter (compose each (field "age")) (equal (Number 30))
+          expected = Fold (compose (field "users") inner)
+      parseQuery "fold #users.filter (each . #age == 30)" `shouldBe` Right expected
+
+    it "parses filter mid-path with a trailing transformation" $ do
+      let inner = filter (field "age") (equal (Number 30))
+          expected = Over (compose each inner) (add 1)
+      parseQuery "over each.filter #age == 30 +1" `shouldBe` Right expected
 
     it "parses over with keys" $ do
       parseQuery "over keys trim" `shouldBe` Right (Over keys trim)

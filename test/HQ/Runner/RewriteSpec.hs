@@ -28,6 +28,7 @@ spec = describe "HQ.Runner.Rewrite" $ do
   keysRewriteSpec
   valuesRewriteSpec
   ixRewriteSpec
+  filterRewriteSpec
   chunkedRewriteSpec
 
 -- | Encoder config for rewrite tests: pretty output, matching the
@@ -572,6 +573,83 @@ ixRewriteSpec = describe "ix rewrite" $ do
     `shouldReturn` Right
       [JSONBeginObject, JSONObjectKey "a", JSONNumber 1, JSONEndObject]
 
+-------------------------------------------------------------------------------
+-- filter rewrite
+-------------------------------------------------------------------------------
+
+filterRewriteSpec :: Spec
+filterRewriteSpec = describe "filter rewrite" $ do
+  it "replaces kept values" $ do
+    runOverTest "each . filter #age == 30" (constValue (Number 0)) "[{\"age\":30},{\"age\":20}]"
+    `shouldReturn` Right
+      [JSONBeginArray, JSONNumber 0, JSONBeginObject, JSONObjectKey "age", JSONNumber 20, JSONEndObject, JSONEndArray]
+
+  it "rewrites through a filter into kept values" $ do
+    runOverTest "each . filter #age == 30 . #score" (add 100) "[{\"age\":30,\"score\":1},{\"age\":20,\"score\":2}]"
+    `shouldReturn` Right
+      [ JSONBeginArray,
+        JSONBeginObject,
+        JSONObjectKey "age",
+        JSONNumber 30,
+        JSONObjectKey "score",
+        JSONNumber 101,
+        JSONEndObject,
+        JSONBeginObject,
+        JSONObjectKey "age",
+        JSONNumber 20,
+        JSONObjectKey "score",
+        JSONNumber 2,
+        JSONEndObject,
+        JSONEndArray
+      ]
+
+  it "sets kept values" $ do
+    runSetTest "each . filter #age == 30" "0" "[{\"age\":30},{\"age\":20}]"
+    `shouldReturn` Right
+      [JSONBeginArray, JSONNumber 0, JSONBeginObject, JSONObjectKey "age", JSONNumber 20, JSONEndObject, JSONEndArray]
+
+  it "removes kept elements" $ do
+    runDeleteTest "each . filter #age == 30" "[{\"age\":30},{\"age\":20}]"
+    `shouldReturn` Right
+      [JSONBeginArray, JSONBeginObject, JSONObjectKey "age", JSONNumber 20, JSONEndObject, JSONEndArray]
+
+  it "removes kept members but keeps the container" $ do
+    runDeleteTest "#users . each . filter #age == 30" "{\"users\":[{\"age\":30},{\"age\":20}],\"b\":2}"
+    `shouldReturn` Right
+      [ JSONBeginObject,
+        JSONObjectKey "users",
+        JSONBeginArray,
+        JSONBeginObject,
+        JSONObjectKey "age",
+        JSONNumber 20,
+        JSONEndObject,
+        JSONEndArray,
+        JSONObjectKey "b",
+        JSONNumber 2,
+        JSONEndObject
+      ]
+
+  it "removes the whole member when the gate keeps it" $ do
+    runDeleteTest "#users . filter (each == 1)" "{\"users\":[1],\"b\":2}"
+    `shouldReturn` Right
+      [JSONBeginObject, JSONObjectKey "b", JSONNumber 2, JSONEndObject]
+
+  it "removes the whole document when the gate keeps it" $ do
+    runDeleteTest "filter #age == 30" "{\"age\":30}" `shouldReturn` Right []
+
+  it "leaves the document unchanged when the gate drops it" $ do
+    runDeleteTest "filter #age == 30" "{\"age\":20}"
+    `shouldReturn` Right
+      [JSONBeginObject, JSONObjectKey "age", JSONNumber 20, JSONEndObject]
+
+  it "fails when the predicate does not fit" $ do
+    runOverTest "each . filter #a +1" (constValue (Number 0)) "[{\"a\":\"x\"}]"
+    `shouldReturn` Left "expected a number"
+
+  it "fails when the predicate is not boolean" $ do
+    runOverTest "each . filter #a +1" (constValue (Number 0)) "[{\"a\":1}]"
+    `shouldReturn` Left "filter transformation must produce a boolean"
+
 chunkedRewriteSpec :: Spec
 chunkedRewriteSpec = describe "chunked input" $ do
   it "rewrites agree with whole-input runs under every split" $ do
@@ -601,7 +679,8 @@ overChunkCases =
     ("each . _String", concatString "!", "[1,\"a\",\"b\"]"),
     ("keys", concatString "!", "{\"a\":1,\"b\":2}"),
     ("values", add 1, "{\"a\":1,\"b\":2}"),
-    ("ix 1", add 1, "[1,2,3]")
+    ("ix 1", add 1, "[1,2,3]"),
+    ("each . filter #age == 30", constValue (Number 0), "[{\"age\":30},{\"age\":20}]")
   ]
 
 deleteChunkCases :: [(Text, Text)]
@@ -610,5 +689,6 @@ deleteChunkCases =
     ("each", "[1,2,3]"),
     ("#a", "{\"a\":{\"b\":[1,2]},\"c\":3}"),
     ("keys", "{\"a\":1,\"b\":2}"),
-    ("values", "{\"a\":1,\"b\":2}")
+    ("values", "{\"a\":1,\"b\":2}"),
+    ("each . filter #age == 30", "[{\"age\":30},{\"age\":20}]")
   ]

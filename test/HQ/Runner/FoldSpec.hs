@@ -4,11 +4,12 @@
 module HQ.Runner.FoldSpec (spec) where
 
 import HQ.JSON.Decoder (initialDecoder)
-import HQ.JSON.Event (JSONEvent (..))
+import HQ.JSON.Event (JSONEvent (..), valueToEvents)
+import HQ.JSON.Parser (parseValue)
 import HQ.Optic (Optic)
 import HQ.Optic.Parser (parseOptic)
 import HQ.Runner.Cursor (Cursor (..))
-import HQ.Runner.Fold (runFold, runPreview)
+import HQ.Runner.Fold (focusMany, runFold, runPreview)
 import Relude hiding (Compose, id, many, not, or, some, subtract, toStrict)
 import Streaming (Of (..), Stream)
 import qualified Streaming.Prelude as S
@@ -23,6 +24,8 @@ spec = describe "HQ.Runner.Fold" $ do
   keysSpec
   valuesSpec
   ixSpec
+  filterSpec
+  differentialSpec
   fieldSpec
   idSpec
   previewSpec
@@ -249,6 +252,108 @@ ixSpec = describe "ix" $ do
     runQueryTest "ix 0" "42" `shouldReturn` Right []
 
 --------------------------------------------------------------------------------
+-- filter
+--------------------------------------------------------------------------------
+
+filterSpec :: Spec
+filterSpec = describe "filter" $ do
+  it "keeps array elements when the test holds" $ do
+    runQueryTest "each . filter #age == 30" "[{\"age\":30},{\"age\":20}]"
+    `shouldReturn` Right [JSONBeginObject, JSONObjectKey "age", JSONNumber 30, JSONEndObject]
+
+  it "keeps the whole value on any match" $ do
+    runQueryTest "filter each == 1" "[1,2,1]"
+    `shouldReturn` Right [JSONBeginArray, JSONNumber 1, JSONNumber 2, JSONNumber 1, JSONEndArray]
+
+  it "drops values when nothing matches" $ do
+    runQueryTest "each . filter #age == 30" "[{\"age\":20}]" `shouldReturn` Right []
+
+  it "drops values with a missing focus" $ do
+    runQueryTest "filter #age == 30" "{\"b\":1}" `shouldReturn` Right []
+
+  it "filters scalars" $ do
+    runQueryTest "filter id == 1" "1" `shouldReturn` Right [JSONNumber 1]
+    runQueryTest "filter id == 1" "2" `shouldReturn` Right []
+
+  it "composes after a filter" $ do
+    runQueryTest "each . filter #age == 30 . #name" "[{\"age\":30,\"name\":\"a\"},{\"age\":20,\"name\":\"b\"}]"
+    `shouldReturn` Right [JSONString "a"]
+
+  it "keeps nested filtered values" $ do
+    runQueryTest "filter (filter #a == 1 == {\"a\":1})" "{\"a\":1}"
+    `shouldReturn` Right [JSONBeginObject, JSONObjectKey "a", JSONNumber 1, JSONEndObject]
+
+  it "fails when the predicate does not fit" $ do
+    runQueryTest "each . filter #a +1" "[{\"a\":\"x\"}]" `shouldReturn` Left "expected a number"
+
+  it "fails when the predicate is not boolean" $ do
+    runQueryTest "each . filter #a +1" "[{\"a\":1}]" `shouldReturn` Left "filter transformation must produce a boolean"
+
+  it "previews the first kept value" $ do
+    runQueryPreviewTest "each . filter #age == 30" "[{\"age\":20},{\"age\":30}]"
+    `shouldReturn` Right [JSONBeginObject, JSONObjectKey "age", JSONNumber 30, JSONEndObject]
+
+  it "skips replayed containers looking for later members" $ do
+    runQueryTest "filter #a == 1 . #zzz" "{\"a\":1,\"big\":[1,2,3]}" `shouldReturn` Right []
+
+--------------------------------------------------------------------------------
+-- pure vs streaming folds
+--------------------------------------------------------------------------------
+
+-- | The pure navigator ('focusMany') must agree with the streaming
+-- fold as multisets: object member order differs (document order vs
+-- key map order), and duplicate keys would collapse, so inputs have
+-- unique keys and events compare order-insensitively.
+differentialSpec :: Spec
+differentialSpec = describe "pure vs streaming folds" $ do
+  it "focusMany agrees with runFold as multisets" $ do
+    forM_ differentialOptics $ \opticStr ->
+      forM_ differentialDocs $ \doc ->
+        case (parseOptic opticStr, parseValue doc) of
+          (Right optic, Right value) -> do
+            actual <- runFoldTest optic doc
+            let expected = concatMap valueToEvents <$> focusMany optic value
+            (sortOn (show :: JSONEvent -> String) <$> actual)
+              `shouldBe` (sortOn (show :: JSONEvent -> String) <$> expected)
+          (Left err, _) -> expectationFailure $ "bad optic: " <> show err
+          (_, Left err) -> expectationFailure $ "bad doc: " <> show err
+
+differentialOptics :: [Text]
+differentialOptics =
+  [ "id",
+    "each",
+    "keys",
+    "values",
+    "#a",
+    "#missing",
+    "ix 0",
+    "ix 2",
+    "_String",
+    "_Number",
+    "_Just",
+    "_Null",
+    "each . #x",
+    "#a . each",
+    "filter #a == 1",
+    "filter (each . #x == 2)",
+    "each . filter #b == 2"
+  ]
+
+differentialDocs :: [Text]
+differentialDocs =
+  [ "42",
+    "\"hi\"",
+    "true",
+    "null",
+    "[]",
+    "[1,\"a\",true]",
+    "{}",
+    "{\"a\":1,\"b\":[2,3]}",
+    "{\"a\":{\"x\":1},\"b\":2}",
+    "[[1,2],[3]]"
+  ]
+
+--------------------------------------------------------------------------------
 -- field
 --------------------------------------------------------------------------------
 
@@ -406,7 +511,10 @@ foldChunkCases =
     ("keys . _String", "{\"a\":1}"),
     ("values", "{\"a\":1,\"b\":2}"),
     ("values . #x", "{\"a\":{\"x\":1},\"b\":2}"),
-    ("ix 0", "{\"a\":1}")
+    ("ix 0", "{\"a\":1}"),
+    ("each . filter #age == 30", "[{\"age\":30},{\"age\":20}]"),
+    ("filter each == 1", "[1,2,1]"),
+    ("each . filter #age == 30 . #name", "[{\"age\":30,\"name\":\"a\"}]")
   ]
 
 malformedChunkCases :: [(Text, Text)]
@@ -416,5 +524,6 @@ malformedChunkCases =
     ("each", "[1,,2]"),
     ("#a", "{\"a\":01}"),
     ("keys", "[1,,2]"),
-    ("values", "{\"a\":tru}")
+    ("values", "{\"a\":tru}"),
+    ("filter #a == 1", "{\"a\":1,\"b\":tru}")
   ]

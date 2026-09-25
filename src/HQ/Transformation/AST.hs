@@ -27,6 +27,10 @@ data TransformationTypeError
     -- produce a boolean, so the disjunction is ill-typed. The offending
     -- 'Or' is kept so callers can report it to the user.
     InvalidOr Transformation ValueType
+  | -- | @InvalidFilter transformation out@: a @filter@ predicate does not
+    -- produce a boolean. The offending transformation is kept so callers
+    -- can report it to the user.
+    InvalidFilter Transformation ValueType
   deriving (Eq, Show)
 
 -- | Build the type-annotated AST of a transformation, failing when the steps

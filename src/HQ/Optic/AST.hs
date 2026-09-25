@@ -30,4 +30,7 @@ buildOpticAST (Optic optic) = OpticAST $ foldFix algebra optic
     -- '_Just' is matching-only (its identity 'review' is not a section
     -- on 'Null'), so it is an affine traversal rather than a prism.
     algebra o@PrismJust = OpticAffineTraversal :< o
+    -- 'Filter' keeps its input zero or one times; the annotation of its
+    -- sub-optic is irrelevant to its own cardinality.
+    algebra o@(Filter _ _) = OpticAffineTraversal :< o
     algebra p = OpticPrism :< p

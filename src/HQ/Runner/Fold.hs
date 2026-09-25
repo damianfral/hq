@@ -4,13 +4,20 @@
 module HQ.Runner.Fold where
 
 import Control.Monad.Error.Class (MonadError (throwError))
+import Data.Aeson (Value (..))
+import qualified Data.Aeson.Key as Key
+import qualified Data.Aeson.KeyMap as KeyMap
 import Data.Fix (Fix (..))
+import qualified Data.Vector as Vector
 import HQ.JSON.Decoder (initialDecoder)
 import HQ.JSON.Event
 import HQ.Optic (Optic (..), OpticF (..))
 import HQ.Runner.Cursor (Cursor (..), K, ValueStreamF, pullCursor, pushCursor, skipMemberValue, skipValue)
 import HQ.Runner.Take (takeFirstValue, takeValue)
+import HQ.Transformation (Transformation, runTransformation)
 import Relude hiding (Compose, id, many, some, state)
+import Streaming (Of (..))
+import qualified Streaming.Prelude as S
 
 -- | Interpret an optic against the JSON value at the cursor.
 --
@@ -26,6 +33,7 @@ runFold (Optic optic) = run optic takeValue
       Each -> runEach k input
       Keys -> runKeys k input
       Values -> runValues k input
+      Filter o t -> runFilter o t k input
       Compose left right -> run left (run right k) input
       PrismString -> runScalar isString k input
       PrismNumber -> runScalar isNumber k input
@@ -152,6 +160,30 @@ runFold (Optic optic) = run optic takeValue
             Just _ -> throwError "invalid JSON object"
 
     ----------------------------------------------------------------
+    -- Filter: keep the value when the predicate holds of the
+    -- sub-optic's focus (existential over the focused values)
+    ----------------------------------------------------------------
+
+    runFilter :: Fix OpticF -> Transformation -> K -> K
+    runFilter o t k input = do
+      result <- lift (pullCursor input)
+      case result of
+        Nothing -> pure input
+        Just (event, rest0) -> do
+          events :> rest <- lift (S.toList (takeValue (pushCursor event rest0)))
+          keep <- case eventsToValue events of
+            Left err -> throwError err
+            Right v -> case evalFilterGate o t v of
+              Left err -> throwError err
+              Right b -> pure b
+          if keep
+            then k (Cursor events (cursorDecoder rest) (cursorText rest))
+            else pure rest
+      where
+        cursorDecoder (Cursor _ dec _) = dec
+        cursorText (Cursor _ _ txt) = txt
+
+    ----------------------------------------------------------------
     -- Scalar prisms
     ----------------------------------------------------------------
 
@@ -213,6 +245,125 @@ runFold (Optic optic) = run optic takeValue
         Just (event, rest) -> do
           afterValue <- skipValue (pushCursor event rest)
           skipRestOfArray afterValue
+
+--------------------------------------------------------------------------------
+-- Pure navigation: the same optic semantics over in-memory values.
+--
+-- Navigation here is total: absent members, out-of-bounds indices and
+-- prism mismatches focus on nothing (mirroring the streaming runners'
+-- skip behavior). Only @filter@ predicates are partial, and their
+-- failures propagate.
+--------------------------------------------------------------------------------
+
+-- | Focus an optic on an in-memory value, collecting every focused
+-- value. Used to evaluate @filter@ gates without re-driving the
+-- streaming decoder.
+focusMany :: Optic -> Value -> Either Text [Value]
+focusMany (Optic optic) = focusFix optic
+  where
+    focusFix :: Fix OpticF -> Value -> Either Text [Value]
+    focusFix (Fix f) v = case f of
+      Field name -> pure (lookupField name v)
+      Each -> pure (eachValues v)
+      Keys -> pure (keyValues v)
+      Values -> pure (valuesValues v)
+      Id -> pure [v]
+      Compose l r -> do
+        ls <- focusFix l v
+        concat <$> traverse (focusFix r) ls
+      PrismString -> pure (matchString v)
+      PrismNumber -> pure (matchNumber v)
+      PrismBool -> pure (matchBool v)
+      PrismNull -> pure (matchNull v)
+      PrismArray -> pure (matchArray v)
+      PrismObject -> pure (matchObject v)
+      PrismJust -> pure (matchJust v)
+      Ix i -> pure (matchIndex i v)
+      Filter o t -> do
+        keep <- evalFilterGate o t v
+        pure [v | keep]
+
+-- | Evaluate a @filter@ gate on an in-memory value: true when the
+-- transformation maps some focused sub-value to true.
+evalFilterGate :: Fix OpticF -> Transformation -> Value -> Either Text Bool
+evalFilterGate o t v = focusMany (Optic o) v >>= anyMatch t
+  where
+    anyMatch :: Transformation -> [Value] -> Either Text Bool
+    anyMatch _ [] = pure False
+    anyMatch t' (w : ws) = do
+      b <- testValue t' w
+      if b then pure True else anyMatch t' ws
+    testValue :: Transformation -> Value -> Either Text Bool
+    testValue t' w = case runTransformation t' w of
+      Left err -> Left err
+      Right (Bool b) -> pure b
+      Right _ -> Left "filter transformation must produce a boolean"
+
+-- | Object member lookup: missing members and non-objects focus on
+-- nothing.
+lookupField :: Text -> Value -> [Value]
+lookupField name v = case v of
+  Object o -> maybeToList (KeyMap.lookup (Key.fromText name) o)
+  _ -> []
+
+-- | Array elements plus object member values.
+eachValues :: Value -> [Value]
+eachValues v = case v of
+  Array a -> Vector.toList a
+  Object o -> KeyMap.elems o
+  _ -> []
+
+-- | Object keys as strings; arrays focus on nothing.
+keyValues :: Value -> [Value]
+keyValues v = case v of
+  Object o -> map (String . Key.toText) (KeyMap.keys o)
+  _ -> []
+
+-- | Object member values only; arrays focus on nothing.
+valuesValues :: Value -> [Value]
+valuesValues v = case v of
+  Object o -> KeyMap.elems o
+  _ -> []
+
+matchString :: Value -> [Value]
+matchString v = case v of
+  String _ -> [v]
+  _ -> []
+
+matchNumber :: Value -> [Value]
+matchNumber v = case v of
+  Number _ -> [v]
+  _ -> []
+
+matchBool :: Value -> [Value]
+matchBool v = case v of
+  Bool _ -> [v]
+  _ -> []
+
+matchNull :: Value -> [Value]
+matchNull v = case v of
+  Null -> [v]
+  _ -> []
+
+matchArray :: Value -> [Value]
+matchArray v = case v of
+  Array _ -> [v]
+  _ -> []
+
+matchObject :: Value -> [Value]
+matchObject v = case v of
+  Object _ -> [v]
+  _ -> []
+
+matchJust :: Value -> [Value]
+matchJust v = case v of
+  Null -> []
+  _ -> [v]
+
+matchIndex :: Int -> Value -> [Value]
+matchIndex i v = case v of
+  Array a -> maybeToList (a Vector.!? i)
+  _ -> []
 
 -- | Execute an optic, emitting at most one value: the first one it
 -- selects.

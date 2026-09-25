@@ -11,6 +11,7 @@ import HQ.JSON.Encoder (ChunkStream, EncodeCtx, EncoderConfig)
 import HQ.JSON.Event
 import HQ.Optic (Optic (..), OpticF (..))
 import HQ.Runner.Cursor (Cursor (..), KRewrite, pullCursor, pushCursor, skipValueE)
+import HQ.Runner.Fold (evalFilterGate)
 import HQ.Runner.Take (emitChunk, takeValue, takeValueChunks)
 import HQ.Transformation (Transformation (..), TransformationF (..), runTransformation)
 import Relude hiding (Compose, Const)
@@ -72,10 +73,37 @@ runRewrite rewriter (Optic optic) config = run optic
       PrismObject -> rewritePrism isObject suffix input ctxs
       PrismJust -> rewriteJust suffix input ctxs
       Ix i -> rewriteIndex i suffix input ctxs
+      Filter o t -> rewriteFilter o t suffix input ctxs
 
     composeStep :: Fix OpticF -> Fix OpticF -> Fix OpticF
     composeStep (Fix Id) rest = rest
     composeStep step rest = Fix (Compose step rest)
+
+    -- \| Materialize one value and test a @filter@ gate, returning
+    -- whether it is kept, its first event, a cursor replaying it, and
+    -- the cursor after it.
+    gateTake ::
+      Fix OpticF ->
+      Transformation ->
+      Cursor ->
+      ExceptT Text IO (Bool, JSONEvent, Cursor, Cursor)
+    gateTake o t cur = do
+      (events :> afterValue) <- S.toList (takeValue cur)
+      v <- hoistEither $ eventsToValue events
+      keep <- hoistEither $ evalFilterGate o t v
+      case events of
+        [] -> throwError "unexpected empty value"
+        (firstEv : _) ->
+          let Cursor _ dec txt = afterValue
+           in pure (keep, firstEv, Cursor events dec txt, afterValue)
+
+    -- \| Split a member-value suffix with a leading @filter@ step into
+    -- its gate and remainder, so a kept value deleted as a whole drops
+    -- its key too.
+    stripFilterGate :: Fix OpticF -> Maybe (Fix OpticF, Transformation, Fix OpticF)
+    stripFilterGate (Fix (Compose (Fix (Filter o t)) rest')) = Just (o, t, rest')
+    stripFilterGate (Fix (Filter o t)) = Just (o, t, Fix Id)
+    stripFilterGate _ = Nothing
 
     rewriteValue :: Rewriter -> KRewrite
     rewriteValue RewriteDelete input ctxs = do
@@ -116,6 +144,7 @@ runRewrite rewriter (Optic optic) config = run optic
       PrismArray -> isArray event
       PrismObject -> isObject event
       PrismJust -> not (isNull event)
+      Filter _ _ -> False
       Compose l r -> landing l event && landing r event
 
     -- \| Prism: value whose first event satisfies the predicate goes
@@ -260,6 +289,20 @@ runRewrite rewriter (Optic optic) config = run optic
               rewriteMember suffix key rest allMembers ctx
             Just _ -> throwError "invalid JSON object"
 
+    -- \| The @filter@ optic: gate the focused value as a whole, running
+    -- the suffix on kept values and passing dropped values through
+    -- unchanged.
+    rewriteFilter :: Fix OpticF -> Transformation -> Fix OpticF -> KRewrite
+    rewriteFilter o t suffix input ctxs = do
+      result <- lift (pullCursor input)
+      case result of
+        Nothing -> pure (ctxs, input)
+        Just (event, rest) -> do
+          (keep, _, valCursor, _) <- lift (gateTake o t (pushCursor event rest))
+          if keep
+            then run suffix valCursor ctxs
+            else takeValueChunks config valCursor ctxs
+
     -- \| The @keys@ traversal: rewrite object keys, leaving values alone.
     -- Arrays and scalars pass through unchanged (@keys@ is objects-only).
     rewriteKeys :: Fix OpticF -> KRewrite
@@ -315,22 +358,38 @@ runRewrite rewriter (Optic optic) config = run optic
 
     -- \| Rewrite one object member. The key survives unless a @delete@
     -- lands on the member value as a whole; the walk then continues
-    -- with @continue@.
+    -- with @continue@. A leading @filter@ step gates the value first:
+    -- dropped members pass through, and kept members deleted as a whole
+    -- lose their key too.
     rewriteMember :: Fix OpticF -> Text -> Cursor -> KRewrite -> [EncodeCtx] -> ChunkStream (ExceptT Text IO) ([EncodeCtx], Cursor)
     rewriteMember suffix key stream continue ctxs = do
       result <- lift (pullCursor stream)
       case result of
         Nothing -> throwError "unexpected end of input after object key"
-        Just (event, rest) -> case rewriter of
-          RewriteDelete
-            | landing suffix event -> do
-                after <- lift (skipValueE (pushCursor event rest))
-                continue after ctxs
-            | otherwise -> do
+        Just (event, rest) -> case stripFilterGate suffix of
+          Just (o, t, rest') -> do
+            (keep, firstEv, valCursor, afterValue) <- lift (gateTake o t (pushCursor event rest))
+            if not keep
+              then do
                 ctx' <- emitChunk config (JSONObjectKey key) ctxs
-                (ctx'', after) <- run suffix (pushCursor event rest) ctx'
+                (ctx'', after) <- takeValueChunks config valCursor ctx'
                 continue after ctx''
-          RewriteTransform _ -> do
-            ctx' <- emitChunk config (JSONObjectKey key) ctxs
-            (ctx'', after) <- run suffix (pushCursor event rest) ctx'
-            continue after ctx''
+              else case (rewriter, landing rest' firstEv) of
+                (RewriteDelete, True) -> continue afterValue ctxs
+                _ -> do
+                  ctx' <- emitChunk config (JSONObjectKey key) ctxs
+                  (ctx'', after) <- run rest' valCursor ctx'
+                  continue after ctx''
+          Nothing -> case rewriter of
+            RewriteDelete
+              | landing suffix event -> do
+                  after <- lift (skipValueE (pushCursor event rest))
+                  continue after ctxs
+              | otherwise -> do
+                  ctx' <- emitChunk config (JSONObjectKey key) ctxs
+                  (ctx'', after) <- run suffix (pushCursor event rest) ctx'
+                  continue after ctx''
+            RewriteTransform _ -> do
+              ctx' <- emitChunk config (JSONObjectKey key) ctxs
+              (ctx'', after) <- run suffix (pushCursor event rest) ctx'
+              continue after ctx''

@@ -6,9 +6,9 @@
 module HQ.Optic where
 
 import Data.Fix
-import GHC.Show (appPrec)
-import Relude hiding (Compose, id, many, some)
-import Prelude (Show (showsPrec), showParen, showString)
+import GHC.Show (Show (showsPrec), appPrec, showParen, showString, shows)
+import HQ.Transformation (Transformation (..), TransformationF (..))
+import Relude hiding (Compose, Const, filter, id, many, some)
 
 -- | Base functor for optic paths over JSON values.
 --
@@ -17,11 +17,15 @@ import Prelude (Show (showsPrec), showParen, showString)
 -- single-or-no-target optics (affine traversals); 'Id' is single-target
 -- (lens); 'Each', 'Keys' and 'Values' are multi-target optics
 -- (traversals); the remaining '_String'-style constructors are prisms.
+-- 'Filter' keeps its input when a predicate holds (affine).
 --
 -- 'Null' plays the role of 'Nothing': '_Null' is the lawful prism for
 -- the null case, while '_Just' matches any non-null value. '_Just' is
 -- matching-only (its identity 'review' is not a section on 'Null'),
 -- hence classified affine rather than prism.
+--
+-- Note: 'OpticF' deliberately has no 'Ord' instance ('Filter' embeds a
+-- 'Transformation', which is not ordered).
 data OpticF a
   = -- | Focus on a named field of a JSON object. Fails on non-objects.
     Field Text
@@ -61,7 +65,13 @@ data OpticF a
     -- only; objects and scalars focus on nothing). Out-of-bounds and
     -- negative indices focus on nothing.
     Ix Int
-  deriving (Eq, Ord, Show, Functor)
+  | -- | Keep the focused value when the transformation holds of the
+    -- sub-optic's focus: @filter o p@ focuses its input if @p@ maps
+    -- some value focused by @o@ to true, and focuses nothing otherwise.
+    -- Focusing is existential ('any'): one passing sub-value keeps the
+    -- whole input. Affine traversal (zero or one of its input).
+    Filter a Transformation
+  deriving (Eq, Show, Functor)
 
 -- | An optic path over JSON values.
 newtype Optic = Optic {unOptic :: Fix OpticF}
@@ -82,6 +92,8 @@ instance Eq Optic where
   Optic (Fix Keys) == Optic (Fix Keys) = True
   Optic (Fix Values) == Optic (Fix Values) = True
   Optic (Fix (Ix a)) == Optic (Fix (Ix b)) = a == b
+  Optic (Fix (Filter o1 t1)) == Optic (Fix (Filter o2 t2)) =
+    Optic o1 == Optic o2 && t1 == t2
   _ == _ = False
 
 instance Show Optic where
@@ -107,6 +119,30 @@ instance Show Optic where
   showsPrec _ (Optic (Fix PrismObject)) = showString "_Object"
   showsPrec _ (Optic (Fix PrismJust)) = showString "_Just"
   showsPrec _ (Optic (Fix (Ix i))) = showString $ "ix " <> show i
+  showsPrec d (Optic (Fix (Filter o t))) =
+    showParen (d > filterPrec)
+      $ showString "filter "
+      . showsArgs o t
+    where
+      filterPrec = appPrec
+      -- Single atoms stay bare (@filter #age == 30@); anything longer
+      -- goes in one paren group (@filter (each . #age == 30)@).
+      showsArgs oo tt
+        | isAtomOptic oo && isAtomTrans tt =
+            showsPrec (filterPrec + 1) (Optic oo)
+              . showString " "
+              . showsPrec (filterPrec + 1) tt
+        | otherwise =
+            showString "("
+              . shows (Optic oo)
+              . showString " "
+              . shows tt
+              . showString ")"
+      isAtomOptic (Fix (Compose _ _)) = False
+      isAtomOptic _ = True
+      isAtomTrans (Transformation (Fix (Combine _ _))) = False
+      isAtomTrans (Transformation (Fix (Or _ _))) = False
+      isAtomTrans _ = True
 
 -- | Focus on a named field of a JSON object (affine traversal).
 field :: Text -> Optic
@@ -176,3 +212,13 @@ _Just = Optic (Fix PrismJust)
 -- only; objects and scalars focus on nothing).
 ix :: Int -> Optic
 ix = Optic . Fix . Ix
+
+-- | Keep the focused value when the transformation holds of the
+-- sub-optic's focus (@filter o p@ focuses its input when @p@ maps some
+-- value focused by @o@ to true). For example,
+-- @each . filter #age == 30@ focuses the array elements having an
+-- @age@ field equal to 30, while @filter (each . #age == 30)@ keeps
+-- whole documents containing such a value. Single atoms stay bare;
+-- anything longer goes in one paren group.
+filter :: Optic -> Transformation -> Optic
+filter o t = Optic (Fix (Filter (unOptic o) t))
