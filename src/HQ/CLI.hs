@@ -7,6 +7,7 @@
 module HQ.CLI (CLIOptions (..), optParserInfo, runCLI) where
 
 import Data.Aeson (Value)
+import Data.Text.IO (hPutStrLn)
 import Data.Version (showVersion)
 import HQ.JSON.Encoder (Join (..), Raw (..))
 import qualified HQ.JSON.Encoder as Enc
@@ -20,7 +21,7 @@ import HQ.Transformation.Parser (parseTransformation)
 import Options.Applicative
 import Paths_hq (version)
 import Relude
-import System.IO hiding (hSetBuffering)
+import System.IO hiding (hPutStrLn, hSetBuffering)
 import Text.Megaparsec (errorBundlePretty)
 
 data NullInput = NoNullInput | NullInput deriving (Show, Eq)
@@ -98,8 +99,11 @@ readInput (Just path) = do
 runCLI :: IO ()
 runCLI = do
   CLIOptions {..} <- execParser optParserInfo
+  query <- case typecheckQuery optQuery of
+    Left err -> hPutStrLn stderr (renderTypeError err) >> exitFailure
+    Right q -> pure q
   handle <- case optNullInput of
     NullInput -> pure stdin
     NoNullInput -> readInput optFile
   let cfg = Enc.EncoderConfig optCompact $ Enc.ValueOptions optRaw optJoin
-  runRunnerIOWith jsonRunner optQuery cfg handle
+  runRunnerIOWith jsonRunner query cfg handle

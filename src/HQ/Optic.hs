@@ -13,9 +13,15 @@ import Prelude (Show (showsPrec), showParen, showString)
 -- | Base functor for optic paths over JSON values.
 --
 -- Optics are structured as a tree of constructors that describe
--- how to focus into a JSON value. 'Field' and 'Id' are single-target
--- optics (lenses/affine traversals); 'Each', 'Keys' and 'Values' are
--- multi-target optics (traversals).
+-- how to focus into a JSON value. 'Field', 'Ix' and '_Just' are
+-- single-or-no-target optics (affine traversals); 'Id' is single-target
+-- (lens); 'Each', 'Keys' and 'Values' are multi-target optics
+-- (traversals); the remaining '_String'-style constructors are prisms.
+--
+-- 'Null' plays the role of 'Nothing': '_Null' is the lawful prism for
+-- the null case, while '_Just' matches any non-null value. '_Just' is
+-- matching-only (its identity 'review' is not a section on 'Null'),
+-- hence classified affine rather than prism.
 data OpticF a
   = -- | Focus on a named field of a JSON object. Fails on non-objects.
     Field Text
@@ -48,7 +54,8 @@ data OpticF a
     PrismArray
   | -- | Prism: focus on a JSON Object value. Fails on non-objects.
     PrismObject
-  | -- | Prism: focus on any non-null JSON value. Fails on null.
+  | -- | Focus on any non-null JSON value. Fails on null.
+    -- Matching-only (affine traversal, not a lawful prism).
     PrismJust
   | -- | Focus on the element at the given index of a JSON array (arrays
     -- only; objects and scalars focus on nothing). Out-of-bounds and
@@ -144,7 +151,9 @@ _Number = Optic (Fix PrismNumber)
 _Bool :: Optic
 _Bool = Optic (Fix PrismBool)
 
--- | Prism: focus on a JSON null value.
+-- | Prism: focus on a JSON null value. This is the lawful prism for
+-- the null ('Nothing') case; see the '_Just' affine traversal for
+-- the non-null case.
 _Null :: Optic
 _Null = Optic (Fix PrismNull)
 
@@ -156,7 +165,10 @@ _Array = Optic (Fix PrismArray)
 _Object :: Optic
 _Object = Optic (Fix PrismObject)
 
--- | Prism: focus on any non-null JSON value.
+-- | Focus on any non-null JSON value (the 'Just' case; see 'PrismNull'
+-- for the null case). Matching-only: usable for folding and rewriting,
+-- but classified as an affine traversal rather than a prism because its
+-- identity 'review' is not a section on 'Null'.
 _Just :: Optic
 _Just = Optic (Fix PrismJust)
 

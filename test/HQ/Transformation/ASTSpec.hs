@@ -48,12 +48,29 @@ spec = describe "HQ.Transformation.AST" $ do
         `shouldBe` Right (TransformationType ValueNumber ValueNumber)
 
     it "composes a boolean check inside a chain" $ do
+      -- 'equal' accepts any input value, so the composition's input is Any.
       rootType (combine not (equal (Number 1)))
-        `shouldBe` Right (TransformationType ValueNumber ValueBool)
+        `shouldBe` Right (TransformationType ValueAny ValueBool)
 
     it "types or as boolean" $ do
       rootType (or (equal (Number 1)) (equal (Number 2)))
-        `shouldBe` Right (TransformationType ValueNumber ValueBool)
+        `shouldBe` Right (TransformationType ValueAny ValueBool)
+
+    it "accepts equal after a step of any type" $ do
+      rootType (combine (equal (Number 1)) trim)
+        `shouldBe` Right (TransformationType ValueString ValueBool)
+
+    it "rejects or with a non-boolean left branch" $ do
+      let bad = or (add 1) (equal (Number 2))
+      case buildTransformationAST bad of
+        Left err -> err `shouldBe` InvalidOr bad ValueNumber
+        Right _ -> expectationFailure "expected an InvalidOr"
+
+    it "rejects or with a non-boolean right branch" $ do
+      let bad = or (equal (Number 1)) (add 2)
+      case buildTransformationAST bad of
+        Left err -> err `shouldBe` InvalidOr bad ValueNumber
+        Right _ -> expectationFailure "expected an InvalidOr"
 
     it "rejects a composition whose seam does not match" $ do
       let expected =
@@ -78,4 +95,5 @@ spec = describe "HQ.Transformation.AST" $ do
     it "reports the failing composition in DSL syntax" $ do
       case buildTransformationAST (combine (add 1) (equal (Number 3))) of
         Left (InvalidCombine t _ _) -> show t `shouldBe` ("+1 . == 3" :: String)
+        Left err -> expectationFailure $ "wrong error: " <> show err
         Right _ -> expectationFailure "expected an InvalidCombine"

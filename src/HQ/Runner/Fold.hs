@@ -215,10 +215,12 @@ runFold (Optic optic) = run optic takeValue
           skipRestOfArray afterValue
 
 -- | Execute an optic, emitting at most one value: the first one it
--- selects (lens @preview@ semantics).
+-- selects.
 --
 -- The fold is short-circuited: once the first value has been emitted,
--- no further input is read from the source.
+-- no further input is read from the source. This is library-level
+-- first-match semantics over any optic; the @preview@ CLI command
+-- narrows its input to at-most-one optics via 'typecheckQuery'.
 runPreview :: Optic -> K
 runPreview optic input = do
   takeFirstValue (runFold optic input)

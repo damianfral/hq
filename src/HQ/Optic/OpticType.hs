@@ -35,3 +35,17 @@ instance Semigroup OpticType where
   OpticAffineTraversal <> OpticAffineTraversal = OpticAffineTraversal
 
 instance Monoid OpticType where mempty = OpticLens
+
+-- | Subsumption: can an optic of type @actual@ be used where @required@
+-- is expected?
+--
+-- Every optic folds, so a 'OpticTraversal' accepts anything. An
+-- at-most-one requirement ('OpticPrism', 'OpticAffineTraversal')
+-- accepts everything except full traversals; in particular @preview@
+-- rejects traversals and takes the first match only of what it
+-- accepts. 'OpticLens' accepts only lenses.
+canUseAs :: OpticType -> OpticType -> Bool
+canUseAs OpticTraversal _ = True
+canUseAs OpticPrism actual = actual /= OpticTraversal
+canUseAs OpticAffineTraversal actual = actual /= OpticTraversal
+canUseAs OpticLens actual = actual == OpticLens

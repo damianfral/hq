@@ -23,6 +23,10 @@ data TransformationTypeError
     -- step of a 'Combine' does not match the input type of the left step.
     -- The offending 'Combine' is kept so callers can report it to the user.
     InvalidCombine Transformation ValueType ValueType
+  | -- | @InvalidOr transformation out@: a branch of an 'Or' does not
+    -- produce a boolean, so the disjunction is ill-typed. The offending
+    -- 'Or' is kept so callers can report it to the user.
+    InvalidOr Transformation ValueType
   deriving (Eq, Show)
 
 -- | Build the type-annotated AST of a transformation, failing when the steps
@@ -42,13 +46,21 @@ buildTransformationAST (Transformation transformation) =
     algebra (ConcatArray xs) = pure $ TransformationType ValueArray ValueArray :< ConcatArray xs
     algebra Trim = pure $ TransformationType ValueString ValueString :< Trim
     algebra (Replace a b) = pure $ TransformationType ValueString ValueString :< Replace a b
-    algebra (Equal v) = pure $ TransformationType (valueType v) ValueBool :< Equal v
+    algebra (Equal v) = pure $ TransformationType ValueAny ValueBool :< Equal v
     algebra (Const v) = pure $ TransformationType ValueAny (valueType v) :< Const v
     algebra Not = pure $ TransformationType ValueBool ValueBool :< Not
     algebra (Or left right) = do
       l <- left
       r <- right
-      pure $ TransformationType (transformationInput (view _extract l)) ValueBool :< Or l r
+      let lt = view _extract l
+          rt = view _extract r
+      case (transformationOutput lt, transformationOutput rt) of
+        (ValueBool, ValueBool) ->
+          pure $ TransformationType (transformationInput (view _extract l)) ValueBool :< Or l r
+        (ValueBool, other) ->
+          Left $ InvalidOr (subTransformation (Or l r)) other
+        (other, _) ->
+          Left $ InvalidOr (subTransformation (Or l r)) other
     algebra (Combine left right) = do
       l <- left
       r <- right

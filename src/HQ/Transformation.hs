@@ -15,11 +15,10 @@ import Data.Aeson.Text (encodeToLazyText)
 import qualified Data.Bool (not)
 import Data.Fix
 import Data.Scientific (Scientific)
-import Data.Text (unpack)
-import qualified Data.Text (replace, strip)
+import Data.Text (strip, unpack)
+import qualified Data.Text as T
 import Data.Text.Lazy (toStrict)
 import Data.Vector (Vector)
-import qualified Data.Vector as Vector
 import GHC.Show (ShowS, appPrec)
 import Relude hiding (Const, many, not, or, some, subtract, toStrict)
 import Prelude (Show (showsPrec), showParen, showString)
@@ -193,9 +192,9 @@ runTransformation (Transformation transformation) = run transformation
       Subtract n -> withNumber (Number . (+ negate n)) value
       Divide n -> withNumber (Number . (/ n)) value
       ConcatString suffix -> withString (String . (<> suffix)) value
-      ConcatArray elements -> withArray (Array . (<> Vector.fromList elements)) value
-      Trim -> withString (String . Data.Text.strip) value
-      Replace needle replacement -> withString (String . Data.Text.replace needle replacement) value
+      ConcatArray elements -> withArray (Array . (<> fromList elements)) value
+      Trim -> withString (String . strip) value
+      Replace needle replacement -> withString (String . T.replace needle replacement) value
       Equal literal -> pure (Bool (value == literal))
       Const v -> pure v
       Not -> withBool (Bool . Data.Bool.not) value

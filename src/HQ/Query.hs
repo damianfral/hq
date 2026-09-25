@@ -1,3 +1,4 @@
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE StrictData #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 
@@ -6,9 +7,10 @@ module HQ.Query where
 import Control.Comonad.Cofree (Cofree ((:<)))
 import HQ.Optic
 import HQ.Optic.AST
-import HQ.Optic.OpticType (OpticType (..))
+import HQ.Optic.OpticType (OpticType (..), canUseAs)
 import HQ.Transformation
 import HQ.Transformation.AST
+import HQ.Transformation.TransformationType (ValueType (..))
 import Relude hiding (Compose, many, not, or, some, subtract)
 
 --------------------------------------------------------------------------------
@@ -41,11 +43,49 @@ data TypeError
   | InvalidTransformationType TransformationTypeError
   deriving (Eq, Show)
 
+-- | Render a 'TypeError' for the CLI.
+renderTypeError :: TypeError -> Text
+renderTypeError (InvalidOpticType expected actual) =
+  "optic mismatch: this query needs "
+    <> opticTypeName expected
+    <> " but the optic is "
+    <> opticTypeName actual
+renderTypeError (InvalidTransformationType (InvalidCombine t out inn)) =
+  "transformation mismatch in "
+    <> show t
+    <> ": produces "
+    <> valueTypeName out
+    <> " but the next step expects "
+    <> valueTypeName inn
+renderTypeError (InvalidTransformationType (InvalidOr t out)) =
+  "transformation mismatch in "
+    <> show t
+    <> ": both sides of or must produce booleans, but a branch produces "
+    <> valueTypeName out
+
+-- | Human-readable cardinality names.
+opticTypeName :: OpticType -> Text
+opticTypeName OpticLens = "a lens (exactly one target)"
+opticTypeName OpticPrism = "a prism (at most one target)"
+opticTypeName OpticAffineTraversal = "an affine traversal (at most one target)"
+opticTypeName OpticTraversal = "a traversal"
+
+-- | Human-readable JSON value type names.
+valueTypeName :: ValueType -> Text
+valueTypeName ValueObject = "object"
+valueTypeName ValueArray = "array"
+valueTypeName ValueString = "string"
+valueTypeName ValueNumber = "number"
+valueTypeName ValueBool = "boolean"
+valueTypeName ValueNull = "null"
+valueTypeName ValueAny = "any value"
+
+-- | Check a query before running it: the optic must be usable where the
+-- query command expects it ('canUseAs'), and an 'Over' transformation
+-- must compose cleanly ('buildTransformationAST').
 typecheckQuery :: Query -> Either TypeError Query
 typecheckQuery q =
-  if expected == current
-    then checkTransformation q
-    else Left err
+  if canUseAs expected current then checkTransformation q else Left err
   where
     err = InvalidOpticType expected current
     expected = queryOpticType q

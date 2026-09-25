@@ -17,7 +17,7 @@ newtype OpticAST = OpticAST {unOpticAST :: Cofree OpticF OpticType}
 buildOpticAST :: Optic -> OpticAST
 buildOpticAST (Optic optic) = OpticAST $ foldFix algebra optic
   where
-    algebra o@(Field _) = OpticLens :< o
+    algebra o@(Field _) = OpticAffineTraversal :< o
     algebra o@Each = OpticTraversal :< o
     algebra o@Keys = OpticTraversal :< o
     algebra o@Values = OpticTraversal :< o
@@ -26,4 +26,8 @@ buildOpticAST (Optic optic) = OpticAST $ foldFix algebra optic
       let l = view _extract left
           r = view _extract right
       l <> r :< o
+    algebra o@(Ix _) = OpticAffineTraversal :< o
+    -- '_Just' is matching-only (its identity 'review' is not a section
+    -- on 'Null'), so it is an affine traversal rather than a prism.
+    algebra o@PrismJust = OpticAffineTraversal :< o
     algebra p = OpticPrism :< p
