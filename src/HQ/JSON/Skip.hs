@@ -10,12 +10,12 @@ import Data.Char (digitToInt, isDigit, isHexDigit)
 import qualified Data.Text as T
 import HQ.JSON.Decoder
   ( Context (..),
+    DecodeError (..),
     Decoder (..),
     KeywordState (..),
     NumberPhase,
     NumberState (..),
     NumberStep (..),
-    ParseError (..),
     ReversedString (..),
     StreamIO,
     advanceKeyword,
@@ -321,11 +321,11 @@ skipNumberText numState =
           | otherwise =
               let c = T.index inp pos
                in case advanceNumber p c of
-                    NumEnd
+                    NumberEnd
                       | isValidNumberFinal p -> pure (T.drop pos inp, txt)
                       | otherwise -> throwError (show (InvalidNumber (reversedStringToText (ReversedString r))))
-                    NumError -> throwError (show (InvalidNumber (reversedStringToText (ReversedString r) <> one c)))
-                    NumStep p' -> loop (c : r) p' (pos + 1)
+                    NumberError -> throwError (show (InvalidNumber (reversedStringToText (ReversedString r) <> one c)))
+                    NumberStep p' -> loop (c : r) p' (pos + 1)
 
 -- | Skip a keyword from its saved state. Mirrors 'stepKeyword',
 -- including its end-of-input rules: a complete keyword at

@@ -7,9 +7,8 @@ import Data.Scientific (fromFloatDigits)
 import HQ.JSON.Decoder
 import HQ.JSON.Event
 import Relude hiding (Compose, id)
-import Streaming (Of (..), Stream)
 import qualified Streaming.Prelude as S
-import Test.HQ (decodeShown, decodeStreaming, drainCollect, malformedPullCorpus, runStreaming, splits, validPullCorpus)
+import Test.HQ (decodeChunks, decodeShown, drainCollect, malformedPullCorpus, runStreaming, splits, validPullCorpus)
 import Test.Syd
 
 spec :: Spec
@@ -31,13 +30,13 @@ spec = describe "HQ.JSON.Decoder" $ do
 --------------------------------------------------------------------------------
 
 -- | Decode input that is guaranteed to be complete (all at once).
-decodeComplete :: Text -> Either ParseError [JSONEvent]
+decodeComplete :: Text -> Either DecodeError [JSONEvent]
 decodeComplete input = case feed input initialDecoder of
   Left err -> Left err
   Right result -> drainCollect result
 
 -- | Decode text incrementally, feeding one character at a time.
-decodeIncremental :: Text -> Either ParseError [JSONEvent]
+decodeIncremental :: Text -> Either DecodeError [JSONEvent]
 decodeIncremental input = go initialDecoder (toString input)
   where
     -- After all characters fed, drain remaining events and finalize
@@ -461,14 +460,14 @@ incrementalSpec = describe "incremental parsing" $ do
 
   it "parses number incrementally across chunk boundary" $ do
     -- Number split across chunks: "4" then "2"
-    case decodeStreaming ["4", "2"] of
+    case decodeChunks ["4", "2"] of
       Left err -> expectationFailure $ "Parse error: " <> show err
       Right events -> events `shouldBe` [JSONNumber 42]
 
   it "parses object across 3 chunks" $ do
     let expected =
           [JSONBeginObject, JSONObjectKey "a", JSONNumber 1, JSONEndObject]
-    case decodeStreaming ["{\"a\":", "1", "}"] of
+    case decodeChunks ["{\"a\":", "1", "}"] of
       Left err -> expectationFailure $ "Parse error: " <> show err
       Right events -> events `shouldBe` expected
 
@@ -585,14 +584,14 @@ streamingSpec = describe "streaming decode" $ do
           ]
     runStreaming ["[[1],", "[2]]"] `shouldBe` expected
 
-  it "reports error on invalid input" $ case decodeStreaming ["{invalid}"] of
+  it "reports error on invalid input" $ case decodeChunks ["{invalid}"] of
     Left (UnexpectedChar 'i') -> pure ()
     Left _ -> pure ()
     Right events ->
       expectationFailure $ "Expected parse error, got events: " <> show events
 
   it "reports error on invalid character from non-empty stream" $ do
-    case decodeStreaming ["{", "invalid}"] of
+    case decodeChunks ["{", "invalid}"] of
       Left _ -> pure ()
       Right events ->
         expectationFailure $ "Expected parse error, got events: " <> show events
@@ -646,14 +645,14 @@ streamingSpec = describe "streaming decode" $ do
     runStreaming ["\"\\", "n\""] `shouldBe` [JSONString "\n"]
 
   it "reports trailing input from non-empty stream" $ do
-    case decodeStreaming ["42", " ", "extra"] of
+    case decodeChunks ["42", " ", "extra"] of
       Left TrailingInput -> pure ()
       Left _ -> pure ()
       Right events ->
         expectationFailure $ "Expected TrailingInput, got: " <> show events
 
   it "reports error on empty chunk with trailing data"
-    $ case decodeStreaming ["42", "extra"] of
+    $ case decodeChunks ["42", "extra"] of
       Left TrailingInput -> pure ()
       Left _ -> pure ()
       Right events -> expectationFailure $ "Expected error, got events: " <> show events
@@ -804,47 +803,47 @@ adversarialSpec = describe "malformed input" $ do
   -- ---- Error propagation in streaming (the key continueWith bug) ----
   describe "error propagation" $ do
     it "propagates error from streaming invalid input"
-      $ case decodeStreaming ["{\"foo\": @}}"] of
+      $ case decodeChunks ["{\"foo\": @}}"] of
         Left (UnexpectedChar '@') -> pure ()
         Left _ -> pure ()
         Right events -> expectationFailure $ "Expected parse error, got: " <> show events
 
     it "propagates error after key in streaming" $ do
-      case decodeStreaming ["{\"a\":", "@}"] of
+      case decodeChunks ["{\"a\":", "@}"] of
         Left (UnexpectedChar '@') -> pure ()
         Left _ -> pure ()
         Right events ->
           expectationFailure $ "Expected parse error, got: " <> show events
 
     it "propagates error after colon in streaming" $ do
-      case decodeStreaming ["{\"a\":@", "}"] of
+      case decodeChunks ["{\"a\":@", "}"] of
         Left (UnexpectedChar '@') -> pure ()
         Left _ -> pure ()
         Right events ->
           expectationFailure $ "Expected parse error, got: " <> show events
 
     it "propagates error in deeply nested streaming" $ do
-      case decodeStreaming ["[[[", "@]]]"] of
+      case decodeChunks ["[[[", "@]]]"] of
         Left (UnexpectedChar '@') -> pure ()
         Left _ -> pure ()
         Right events ->
           expectationFailure $ "Expected parse error, got: " <> show events
 
     it "propagates error after array element in streaming" $ do
-      case decodeStreaming ["[1,", "@2]"] of
+      case decodeChunks ["[1,", "@2]"] of
         Left (UnexpectedChar '@') -> pure ()
         Left _ -> pure ()
         Right events ->
           expectationFailure $ "Expected parse error, got: " <> show events
 
     it "parses keyword true split across chunks" $ do
-      case decodeStreaming ["tru", "e"] of
+      case decodeChunks ["tru", "e"] of
         Right [JSONBool True] -> pure () -- "true" split across chunks is valid
         other ->
           expectationFailure $ "Expected [JSONBool True], got: " <> show other
 
     it "propagates string escape error at chunk boundary" $ do
-      case decodeStreaming ["\"\\", "z\""] of
+      case decodeChunks ["\"\\", "z\""] of
         Left (InvalidEscape 'z') -> pure ()
         Left _ -> pure ()
         Right events ->
@@ -954,13 +953,13 @@ adversarialSpec = describe "malformed input" $ do
       decodeComplete "null " `shouldBe` Right [JSONNull]
 
     it "invalid escape in string at chunk boundary"
-      $ case decodeStreaming ["\"\\", "x\""] of
+      $ case decodeChunks ["\"\\", "x\""] of
         Left (InvalidEscape 'x') -> pure ()
         other ->
           expectationFailure $ "Expected InvalidEscape, got: " <> show other
 
     it "incomplete high surrogate at EOF in streaming" $ do
-      case decodeStreaming ["\"\\uD834"] of
+      case decodeChunks ["\"\\uD834"] of
         Left InvalidSurrogatePair -> pure ()
         other ->
           expectationFailure
@@ -968,14 +967,14 @@ adversarialSpec = describe "malformed input" $ do
             <> show other
 
     it "high surrogate followed by non-low in streaming" $ do
-      case decodeStreaming ["\"\\uD834", "\\u0041\""] of
+      case decodeChunks ["\"\\uD834", "\\u0041\""] of
         Left InvalidSurrogatePair -> pure ()
         other ->
           expectationFailure
             $ "Expected InvalidSurrogatePair, got: "
             <> show other
 
-    it "number 1. at chunk boundary" $ case decodeStreaming ["1.", ""] of
+    it "number 1. at chunk boundary" $ case decodeChunks ["1.", ""] of
       Left (InvalidNumber _) -> pure ()
       Left UnexpectedEnd -> pure ()
       other ->
@@ -983,7 +982,7 @@ adversarialSpec = describe "malformed input" $ do
           $ "Expected InvalidNumber or UnexpectedEnd, got: "
           <> show other
 
-    it "number 1e at chunk boundary" $ case decodeStreaming ["1e", ""] of
+    it "number 1e at chunk boundary" $ case decodeChunks ["1e", ""] of
       Left (InvalidNumber _) -> pure ()
       Left UnexpectedEnd -> pure ()
       other ->
@@ -991,7 +990,7 @@ adversarialSpec = describe "malformed input" $ do
           $ "Expected InvalidNumber or UnexpectedEnd, got: "
           <> show other
 
-    it "number 1e+ at chunk boundary" $ case decodeStreaming ["1e+", ""] of
+    it "number 1e+ at chunk boundary" $ case decodeChunks ["1e+", ""] of
       Left (InvalidNumber _) -> pure ()
       Left UnexpectedEnd -> pure ()
       other ->
@@ -1019,7 +1018,7 @@ adversarialSpec = describe "malformed input" $ do
       runStreaming ["{\"a\":{\"b\":", "1", "}}"] `shouldBe` expected
 
     it "trailing input after root value in streaming" $ do
-      case decodeStreaming ["42", " extra"] of
+      case decodeChunks ["42", " extra"] of
         Left TrailingInput -> pure ()
         other ->
           expectationFailure $ "Expected TrailingInput, got: " <> show other
@@ -1032,13 +1031,13 @@ adversarialSpec = describe "malformed input" $ do
 pullAllChunks :: [Text] -> IO (Either Text [JSONEvent])
 pullAllChunks chunks = runExceptT (collect initialDecoder stream)
   where
-    stream :: Stream (Of Text) (ExceptT Text IO) ()
+    stream :: StreamIO Text ()
     stream = S.each chunks
     collect decoder text = do
       pulled <- pullEvent decoder text
       case pulled of
-        PulledEnd -> pure []
-        PulledEvent event decoder' rest -> (event :) <$> collect decoder' rest
+        EndOfInput -> pure []
+        NextEvent event decoder' rest -> (event :) <$> collect decoder' rest
 
 pullEventSpec :: Spec
 pullEventSpec = describe "pullEvent" $ do

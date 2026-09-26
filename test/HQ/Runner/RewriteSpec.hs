@@ -6,16 +6,16 @@ module HQ.Runner.RewriteSpec (spec) where
 import Control.Monad.Error.Class (throwError)
 import Data.Aeson (Value (..))
 import qualified Data.Text as T
-import HQ.JSON.Decoder (initialDecoder)
+import HQ.JSON.Decoder (StreamIO, initialDecoder)
 import HQ.JSON.Encoder (EncodeStyle (..), EncoderConfig (..), Join (..), Raw (..), ValueOptions (..), encodeChunks)
 import HQ.JSON.Event (JSONEvent (..), eventsToValue)
 import HQ.JSON.Parser (parseValueEvents)
 import HQ.Optic.Parser (parseOptic)
-import HQ.Runner.Cursor (Cursor (..), KRewrite)
+import HQ.Runner.Cursor (Cursor (..), RewriteContinuation)
 import HQ.Runner.Rewrite (runDelete, runOver)
 import HQ.Transformation (Transformation, add, combine, concatString, constValue, equal, not, or, replace, trim)
 import Relude hiding (Compose, id, many, not, or, some, subtract, toStrict)
-import Streaming (Of (..), Stream)
+import Streaming (Of (..))
 import qualified Streaming.Prelude as S
 import Test.HQ (chunkSplits)
 import Test.Syd
@@ -40,11 +40,11 @@ testConfig = EncoderConfig (Pretty 2) (ValueOptions NoRaw NoJoin)
 -- bytes back to events, and collect them. Reparsing through the
 -- independent pure parser keeps every existing event expectation
 -- valid while the rewrite pipeline emits chunks.
-runRewriteTest :: KRewrite -> Text -> IO (Either Text [JSONEvent])
+runRewriteTest :: RewriteContinuation -> Text -> IO (Either Text [JSONEvent])
 runRewriteTest run input = runRewriteChunks run [input]
 
 -- | Run a document-rewriting query against chunked JSON text.
-runRewriteChunks :: KRewrite -> [Text] -> IO (Either Text [JSONEvent])
+runRewriteChunks :: RewriteContinuation -> [Text] -> IO (Either Text [JSONEvent])
 runRewriteChunks run chunks = runExceptT $ do
   (outChunks :> _) <- S.toList (run cursor [])
   (byteChunks :> _) <- S.toList (encodeChunks 65536 (S.each outChunks))
@@ -57,7 +57,7 @@ runRewriteChunks run chunks = runExceptT $ do
       Left err -> throwError err
       Right events -> pure events
   where
-    textStream :: Stream (Of Text) (ExceptT Text IO) ()
+    textStream :: StreamIO Text ()
     textStream = S.each chunks
     cursor = Cursor [] initialDecoder textStream
 

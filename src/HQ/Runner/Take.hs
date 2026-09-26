@@ -4,11 +4,11 @@
 module HQ.Runner.Take where
 
 import Control.Monad.Error.Class (MonadError (throwError))
-import HQ.JSON.Decoder (Decoder (..), DecoderResult (..), ParseError (..), ParserState (..), Pulled (..), StreamIO, finish, pullEvent)
+import HQ.JSON.Decoder (DecodeError (..), Decoder (..), DecoderResult (..), DecoderState (..), Next (..), StreamIO, finish, pullEvent)
 import qualified HQ.JSON.Decoder as Decoder
 import HQ.JSON.Encoder (ChunkStream, EncodeCtx, EncoderConfig, formatEvent)
 import HQ.JSON.Event (JSONEvent (..))
-import HQ.Runner.Cursor (Cursor (..), K, ValueStream, ValueStreamF)
+import HQ.Runner.Cursor (Continuation, Cursor (..), EventStream)
 import Relude hiding (Compose, id, many, some, state)
 import qualified Streaming.Prelude as S
 
@@ -19,13 +19,13 @@ pullOne (event : buffered) decoder text = pure (event, buffered, decoder, text)
 pullOne [] decoder text = do
   pulled <- pullEvent decoder text
   case pulled of
-    PulledEnd -> throwError "unexpected end of JSON input"
-    PulledEvent event decoder' rest -> pure (event, [], decoder', rest)
+    EndOfInput -> throwError "unexpected end of JSON input"
+    NextEvent event decoder' rest -> pure (event, [], decoder', rest)
 
 -- | Stream the events of exactly one complete JSON value, returning the
 -- cursor positioned immediately after it. Lazy: a consumer that stops
 -- early (e.g. @S.take 1@) pulls only what it needs.
-takeValue :: K
+takeValue :: Continuation
 takeValue (Cursor buffered decoder text) = do
   (event, buffered', decoder', text') <- lift (pullOne buffered decoder text)
   S.yield event
@@ -37,7 +37,7 @@ takeValue (Cursor buffered decoder text) = do
     JSONObjectKey _ -> throwError "unexpected object key"
     _ -> pure (Cursor buffered' decoder' text')
 
-takeFirstValue :: ValueStreamF r -> ValueStream
+takeFirstValue :: EventStream r -> EventStream ()
 takeFirstValue = go (0 :: Int)
   where
     go depth stream = do
@@ -62,10 +62,10 @@ takeFirstValue = go (0 :: Int)
 -- | Take a container body event by event, driving the decoder
 -- directly with no tuples or wrappers on the hot path: the event,
 -- buffer, decoder and text flow as explicit arguments.
-takeContainerFrom :: JSONEvent -> [JSONEvent] -> Decoder -> StreamIO Text () -> ValueStreamF Cursor
+takeContainerFrom :: JSONEvent -> [JSONEvent] -> Decoder -> StreamIO Text () -> EventStream Cursor
 takeContainerFrom closing = go
   where
-    go :: [JSONEvent] -> Decoder -> StreamIO Text () -> ValueStreamF Cursor
+    go :: [JSONEvent] -> Decoder -> StreamIO Text () -> EventStream Cursor
     go buf dec txt = case buf of
       event : rest -> emit event rest dec txt
       [] -> case Decoder.step dec of
@@ -93,12 +93,12 @@ takeContainerFrom closing = go
           Right (Emit event dec') -> emit event [] dec' rest
           Right (NeedInput dec') -> pullMore dec' rest
           Right (Done _) -> throwError "unexpected end of JSON input"
-    -- Mirror 'drainFinish': a value completed exactly at end of input
+    -- Mirror 'drainAtEnd': a value completed exactly at end of input
     -- still yields its final event; anything else ends the take the
     -- same way the event-stream takes did.
     finishTake dec = case finish dec of
       Left UnexpectedEnd
-        | decoderState dec == ParserStateValue && null (decoderStack dec) ->
+        | decoderState dec == DecoderStateValue && null (decoderStack dec) ->
             throwError "unexpected end of JSON input"
       Left err -> throwError (show err)
       Right (Done _) -> throwError "unexpected end of JSON input"
@@ -158,10 +158,10 @@ takeContainerChunks config closing = go
           Right (Emit event dec') -> emit event [] dec' rest ctx
           Right (NeedInput dec') -> pullMore dec' rest ctx
           Right (Done _) -> throwError "unexpected end of JSON input"
-    -- Mirror 'drainFinish', emitting the final event as a chunk.
+    -- Mirror 'drainAtEnd', emitting the final event as a chunk.
     finishTake dec ctx = case finish dec of
       Left UnexpectedEnd
-        | decoderState dec == ParserStateValue && null (decoderStack dec) ->
+        | decoderState dec == DecoderStateValue && null (decoderStack dec) ->
             throwError "unexpected end of JSON input"
       Left err -> throwError (show err)
       Right (Done _) -> throwError "unexpected end of JSON input"

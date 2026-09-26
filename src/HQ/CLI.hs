@@ -24,7 +24,7 @@ import Relude
 import System.IO hiding (hPutStrLn, hSetBuffering)
 import Text.Megaparsec (errorBundlePretty)
 
-data NullInput = NoNullInput | NullInput deriving (Show, Eq)
+data NullInput = NoNullInput | UseNullInput deriving (Show, Eq)
 
 data CLIOptions = CLIOptions
   { optQuery :: Query,
@@ -64,7 +64,7 @@ optParser = do
   raw <- fromBool NoRaw Raw <$> switch rawMod
   compact <- fromBool (Enc.Pretty 2) Enc.Compact <$> switch compactMod
   join' <- fromBool NoJoin Join <$> switch joinMod
-  nullInput <- fromBool NoNullInput NullInput <$> switch nullMod
+  nullInput <- fromBool NoNullInput UseNullInput <$> switch nullMod
   query <- queryParser
   pure $ CLIOptions query file raw compact join' nullInput
   where
@@ -103,7 +103,7 @@ runCLI = do
     Left err -> hPutStrLn stderr (renderTypeError err) >> exitFailure
     Right q -> pure q
   handle <- case optNullInput of
-    NullInput -> pure stdin
+    UseNullInput -> pure stdin
     NoNullInput -> readInput optFile
   let cfg = Enc.EncoderConfig optCompact $ Enc.ValueOptions optRaw optJoin
   runRunnerIOWith jsonRunner query cfg handle

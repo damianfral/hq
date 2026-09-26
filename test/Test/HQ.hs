@@ -3,7 +3,7 @@
 
 -- | Shared helpers for the @hq@ test suite.
 module Test.HQ
-  ( decodeStreaming,
+  ( decodeChunks,
     runStreaming,
     drainCollect,
     splits,
@@ -15,15 +15,15 @@ module Test.HQ
 where
 
 import qualified Data.Text as T
-import HQ.JSON.Decoder (Decoder (..), DecoderResult (..), ParseError (..), decode, finish, step)
+import HQ.JSON.Decoder (DecodeError (..), Decoder (..), DecoderResult (..), decode, finish, step)
 import HQ.JSON.Event (JSONEvent)
 import Relude hiding (Compose, id)
 import Streaming (Of (..))
 import qualified Streaming.Prelude as S
 
 -- | Stream text chunks through the decode function.
-decodeStreaming :: [Text] -> Either ParseError [JSONEvent]
-decodeStreaming chunks = runIdentity $ do
+decodeChunks :: [Text] -> Either DecodeError [JSONEvent]
+decodeChunks chunks = runIdentity $ do
   result <- S.toList (decode (S.each chunks))
   case result of
     _ :> Left err -> pure (Left err)
@@ -31,14 +31,14 @@ decodeStreaming chunks = runIdentity $ do
 
 -- | Helper to run a streaming decode and check the result.
 runStreaming :: [Text] -> [JSONEvent]
-runStreaming chunks = case decodeStreaming chunks of
+runStreaming chunks = case decodeChunks chunks of
   Left _err -> []
   Right events -> events
 
 -- | Drain events from a decoder result by repeatedly calling step,
 -- then finalize with finish.  Tries finish first to avoid infinite
 -- loops when step returns NeedInput on an empty-input decoder.
-drainCollect :: DecoderResult -> Either ParseError [JSONEvent]
+drainCollect :: DecoderResult -> Either DecodeError [JSONEvent]
 drainCollect (Emit event next) = case step next of
   Left err -> Left err
   Right result -> fmap (event :) (drainCollect result)
@@ -70,7 +70,7 @@ splits input
 
 -- | Streaming decode with errors shown, for differential testing.
 decodeShown :: [Text] -> Either Text [JSONEvent]
-decodeShown chunks = case decodeStreaming chunks of
+decodeShown chunks = case decodeChunks chunks of
   Left err -> Left (show err)
   Right events -> Right events
 

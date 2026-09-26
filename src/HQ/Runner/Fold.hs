@@ -12,7 +12,7 @@ import qualified Data.Vector as Vector
 import HQ.JSON.Decoder (initialDecoder)
 import HQ.JSON.Event
 import HQ.Optic (Optic (..), OpticF (..), PrismKind, prismPredicate)
-import HQ.Runner.Cursor (Cursor (..), K, ValueStreamF, pullCursor, pushCursor, skipMemberValue, skipValue)
+import HQ.Runner.Cursor (Continuation, Cursor (..), EventStream, pullCursor, pushCursor, skipMemberValue, skipValue)
 import HQ.Runner.Take (takeFirstValue, takeValue)
 import HQ.Transformation (Transformation, runTransformation)
 import Relude hiding (Compose, id, many, some, state)
@@ -23,10 +23,10 @@ import qualified Streaming.Prelude as S
 --
 -- The continuation receives the cursor positioned immediately after
 -- the value currently being interpreted.
-runFold :: Optic -> K
+runFold :: Optic -> Continuation
 runFold (Optic optic) = run optic takeValue
   where
-    run :: Fix OpticF -> K -> K
+    run :: Fix OpticF -> Continuation -> Continuation
     run (Fix opticF) k input = case opticF of
       Id -> k input
       Field name -> runField name k input
@@ -39,7 +39,7 @@ runFold (Optic optic) = run optic takeValue
       PrismJust -> runJust k input
       Ix i -> runIndex i k input
 
-    runField :: Text -> K -> K
+    runField :: Text -> Continuation -> Continuation
     runField name k input = do
       result <- lift (pullCursor input)
       case result of
@@ -47,7 +47,7 @@ runFold (Optic optic) = run optic takeValue
         Just (JSONBeginObject, rest) -> findField name k rest
         Just (event, rest) -> skipValue (pushCursor event rest)
 
-    findField :: Text -> K -> K
+    findField :: Text -> Continuation -> Continuation
     findField name k = go
       where
         go input = do
@@ -65,7 +65,7 @@ runFold (Optic optic) = run optic takeValue
             Just _ -> throwError "invalid JSON object"
 
     -- \| Consume the rest of an object after a matched member value.
-    skipRestOfObject :: Cursor -> ValueStreamF Cursor
+    skipRestOfObject :: Cursor -> EventStream Cursor
     skipRestOfObject input = do
       result <- lift (pullCursor input)
       case result of
@@ -80,7 +80,7 @@ runFold (Optic optic) = run optic takeValue
     -- Each
     ----------------------------------------------------------------
 
-    runEach :: K -> K
+    runEach :: Continuation -> Continuation
     runEach k input = do
       result <- lift (pullCursor input)
       case result of
@@ -112,7 +112,7 @@ runFold (Optic optic) = run optic takeValue
     -- Keys: object keys as strings (objects only)
     ----------------------------------------------------------------
 
-    runKeys :: K -> K
+    runKeys :: Continuation -> Continuation
     runKeys k input = do
       result <- lift (pullCursor input)
       case result of
@@ -120,7 +120,7 @@ runFold (Optic optic) = run optic takeValue
         Just (JSONBeginObject, rest) -> keysObject rest
         Just (event, rest) -> skipValue (pushCursor event rest)
       where
-        keysObject :: Cursor -> ValueStreamF Cursor
+        keysObject :: Cursor -> EventStream Cursor
         keysObject stream = do
           result <- lift (pullCursor stream)
           case result of
@@ -136,7 +136,7 @@ runFold (Optic optic) = run optic takeValue
     -- Values: object member values only (arrays focus on nothing)
     ----------------------------------------------------------------
 
-    runValues :: K -> K
+    runValues :: Continuation -> Continuation
     runValues k input = do
       result <- lift (pullCursor input)
       case result of
@@ -159,7 +159,7 @@ runFold (Optic optic) = run optic takeValue
     -- sub-optic's focus (existential over the focused values)
     ----------------------------------------------------------------
 
-    runFilter :: Fix OpticF -> Transformation -> K -> K
+    runFilter :: Fix OpticF -> Transformation -> Continuation -> Continuation
     runFilter o t k input = do
       result <- lift (pullCursor input)
       case result of
@@ -182,7 +182,7 @@ runFold (Optic optic) = run optic takeValue
     -- Scalar prisms
     ----------------------------------------------------------------
 
-    runScalar :: (JSONEvent -> Bool) -> K -> K
+    runScalar :: (JSONEvent -> Bool) -> Continuation -> Continuation
     runScalar predicate k input = do
       result <- lift (pullCursor input)
       case result of
@@ -195,7 +195,7 @@ runFold (Optic optic) = run optic takeValue
     -- PrismJust
     ----------------------------------------------------------------
 
-    runJust :: K -> K
+    runJust :: Continuation -> Continuation
     runJust k input = do
       result <- lift (pullCursor input)
       case result of
@@ -207,7 +207,7 @@ runFold (Optic optic) = run optic takeValue
     -- Array index
     ----------------------------------------------------------------
 
-    runIndex :: Int -> K -> K
+    runIndex :: Int -> Continuation -> Continuation
     runIndex index k input = do
       result <- lift (pullCursor input)
       case result of
@@ -231,7 +231,7 @@ runFold (Optic optic) = run optic takeValue
                     findIndex (n - 1) afterValue
 
     -- \| Consume the rest of an array after a matched element.
-    skipRestOfArray :: Cursor -> ValueStreamF Cursor
+    skipRestOfArray :: Cursor -> EventStream Cursor
     skipRestOfArray input = do
       result <- lift (pullCursor input)
       case result of
@@ -340,7 +340,7 @@ matchIndex i v = case v of
 -- no further input is read from the source. This is library-level
 -- first-match semantics over any optic; the @preview@ CLI command
 -- narrows its input to at-most-one optics via 'typecheckQuery'.
-runPreview :: Optic -> K
+runPreview :: Optic -> Continuation
 runPreview optic input = do
   takeFirstValue (runFold optic input)
   pure input -- the after-cursor is meaningless for preview; nobody reads it

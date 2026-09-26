@@ -9,7 +9,7 @@ import HQ.JSON.Event (JSONEvent (..))
 import Relude hiding (Compose, id)
 import Streaming (Of (..))
 import qualified Streaming.Prelude as S
-import Test.HQ (decodeStreaming)
+import Test.HQ (decodeChunks)
 import Test.Syd
 
 spec :: Spec
@@ -364,7 +364,7 @@ encodePrettySpec = describe "pretty encode" $ do
               JSONEndArray
             ]
           encoded = encodeEventsWith prettyConfig events
-      case decodeStreaming [encoded] of
+      case decodeChunks [encoded] of
         Left err -> expectationFailure $ "Re-decode failed: " <> show err
         Right evts' -> evts' `shouldBe` events
 
@@ -401,7 +401,7 @@ encodePrettySpec = describe "pretty encode" $ do
               case result of
                 chunks :> _ -> pure $ decodeUtf8 $ mconcat chunks
         concatenated `shouldBe` expected
-        case decodeStreaming [concatenated] of
+        case decodeChunks [concatenated] of
           Left err -> expectationFailure $ "Re-decode failed at chunk size " <> show cSize <> ": " <> show err
           Right evts' -> evts' `shouldBe` events
 
@@ -520,7 +520,7 @@ valueOptionsSpec = describe "value output options" $ do
             ]
           encoded = encodeEventsWith encConfig events
           lines' = filter (not . T.null) (T.splitOn "\n" encoded)
-          decodedLines = map (fromRight [] . decodeStreaming . pure) lines'
+          decodedLines = map (fromRight [] . decodeChunks . pure) lines'
       mconcat decodedLines `shouldBe` events
 
   describe "raw string output" $ do
@@ -586,11 +586,11 @@ roundtripSpec = describe "roundtrip (encode . decode)" $ do
 -- same events as decoding the compact input, i.e. that pretty-printing
 -- only changes whitespace.
 prettyRoundtrip :: Text -> IO ()
-prettyRoundtrip input = case decodeStreaming [input] of
+prettyRoundtrip input = case decodeChunks [input] of
   Left err -> expectationFailure $ "Decode failed: " <> show err
   Right events -> do
     let encoded = encodeEventsWith encConfig events
-        redecoded = decodeStreaming [encoded]
+        redecoded = decodeChunks [encoded]
     case redecoded of
       Left err -> expectationFailure $ "Re-decode failed: " <> show err
       Right events' -> events `shouldBe` events'
@@ -599,11 +599,11 @@ prettyRoundtrip input = case decodeStreaming [input] of
 
 -- | Verify that encode . decode produces the same events (wrapped in Either).
 roundtrip :: Text -> IO ()
-roundtrip input = case decodeStreaming [input] of
+roundtrip input = case decodeChunks [input] of
   Left err -> expectationFailure $ "Decode failed: " <> show err
   Right events -> do
     let encoded = encodeEvents events
-        redecoded = decodeStreaming [encoded]
+        redecoded = decodeChunks [encoded]
     case redecoded of
       Left err -> expectationFailure $ "Re-decode failed: " <> show err
       Right events' -> events `shouldBe` events'

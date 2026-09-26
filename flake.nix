@@ -66,6 +66,9 @@
         hq = final.haskell.lib.justStaticExecutables (
           final.haskellPackages.hq.overrideAttrs (oldAttrs: {
             configureFlags = oldAttrs.configureFlags ++ ["--ghc-options=-O2"];
+            # jq on PATH for the HQ.JQParitySpec suite (native input only:
+            # it must not ship with the hq closure).
+            nativeBuildInputs = (oldAttrs.nativeBuildInputs or []) ++ [final.jq];
           })
         );
         haskellPackages = prev.haskellPackages.override (old: {
@@ -191,6 +194,8 @@
             nil
             ormolu
             statix
+            # jq on PATH for local `cabal test` (HQ.JQParitySpec suite).
+            pkgs.jq
           ];
           inherit (precommitCheck) shellHook;
         };

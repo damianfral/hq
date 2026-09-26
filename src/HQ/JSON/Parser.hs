@@ -36,7 +36,7 @@ parseValueEvents input = case parseValue input of
     Right events -> Right events
 
 -- | Decode a complete text as an event stream, run in 'Identity'.
-decodeValueEvents :: Text -> Either Decoder.ParseError [JSONEvent]
+decodeValueEvents :: Text -> Either Decoder.DecodeError [JSONEvent]
 decodeValueEvents input = runIdentity $ do
   result <- S.toList (Decoder.decode (S.yield input))
   pure $ case result of

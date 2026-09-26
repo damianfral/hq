@@ -5,15 +5,16 @@
 module HQ.Runner.Cursor where
 
 import Control.Monad.Error.Class (MonadError (throwError))
-import HQ.JSON.Decoder (Decoder (..), Pulled (..), StreamIO, finishValue, pullEvent)
+import HQ.JSON.Decoder (Decoder (..), Next (..), StreamIO, finishValue, pullEvent)
 import HQ.JSON.Encoder (ChunkStream, EncodeCtx)
 import HQ.JSON.Event (JSONEvent (..))
 import HQ.JSON.Skip (skipContainerText, skipMemberValueText)
 import Relude hiding (Compose, id, many, some, state)
+import Streaming (Of, Stream)
 
-type ValueStreamF = StreamIO JSONEvent
-
-type ValueStream = ValueStreamF ()
+-- | The house stream type: 'Stream' over 'ExceptT Text IO', capable of
+-- failing with a 'Text' error. See 'StreamIO'.
+type EventStream r = Stream (Of JSONEvent) (ExceptT Text IO) r
 
 -- | Input cursor: pushed-back events with the decoder and text
 -- positioned after them. Navigation peeks at events through
@@ -23,12 +24,12 @@ data Cursor = Cursor ![JSONEvent] !Decoder (StreamIO Text ())
 
 -- | Interpret an optic against the JSON value at the cursor,
 -- yielding the taken events and returning the advanced cursor.
-type K = Cursor -> ValueStreamF Cursor
+type Continuation = Cursor -> EventStream Cursor
 
 -- | Rewrite output: chunk stream returning advanced encoder contexts
 -- and cursor. Passthrough regions transcribe text straight to chunks
 -- without an intermediate event stream.
-type KRewrite = Cursor -> [EncodeCtx] -> ChunkStream (ExceptT Text IO) ([EncodeCtx], Cursor)
+type RewriteContinuation = Cursor -> [EncodeCtx] -> ChunkStream (ExceptT Text IO) ([EncodeCtx], Cursor)
 
 -- | Pull one event for navigation. Buffered events come first;
 -- otherwise the decoder drives forward. Returns 'Nothing' at clean
@@ -39,8 +40,8 @@ pullCursor (Cursor (event : buffered) decoder text) =
 pullCursor (Cursor [] decoder text) = do
   pulled <- pullEvent decoder text
   case pulled of
-    PulledEnd -> pure Nothing
-    PulledEvent event decoder' rest -> pure (Just (event, Cursor [] decoder' rest))
+    EndOfInput -> pure Nothing
+    NextEvent event decoder' rest -> pure (Just (event, Cursor [] decoder' rest))
 
 -- | Push an event back for the continuation to see.
 pushCursor :: JSONEvent -> Cursor -> Cursor
@@ -51,7 +52,7 @@ pushCursor event (Cursor buffered decoder text) = Cursor (event : buffered) deco
 -- The value's first event is pulled to dispatch on, then containers
 -- are skipped at the text level ('skipContainerText') without
 -- decoding their contents.
-skipValue :: Cursor -> ValueStreamF Cursor
+skipValue :: Cursor -> EventStream Cursor
 skipValue = lift . skipValueE
 
 -- | 'skipValue' in 'ExceptT': shared by the event-stream and
@@ -114,7 +115,7 @@ skipValueE input = do
 
 -- | Skip an object member value starting right after its key: the
 -- colon and value are consumed at the text level.
-skipMemberValue :: Cursor -> ValueStreamF Cursor
+skipMemberValue :: Cursor -> EventStream Cursor
 skipMemberValue = lift . skipMemberValueE
 
 -- | 'skipMemberValue' in 'ExceptT': shared by both pipelines.

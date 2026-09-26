@@ -3,7 +3,7 @@
 
 module HQ.Runner.FoldSpec (spec) where
 
-import HQ.JSON.Decoder (initialDecoder)
+import HQ.JSON.Decoder (StreamIO, initialDecoder)
 import HQ.JSON.Event (JSONEvent (..), valueToEvents)
 import HQ.JSON.Parser (parseValue)
 import HQ.Optic (Optic)
@@ -11,7 +11,6 @@ import HQ.Optic.Parser (parseOptic)
 import HQ.Runner.Cursor (Cursor (..))
 import HQ.Runner.Fold (focusMany, runFold, runPreview)
 import Relude hiding (Compose, id, many, not, or, some, subtract, toStrict)
-import Streaming (Of (..), Stream)
 import qualified Streaming.Prelude as S
 import Test.HQ (chunkSplits)
 import Test.Syd
@@ -39,7 +38,7 @@ spec = describe "HQ.Runner.Fold" $ do
 runFoldTest :: Optic -> Text -> IO (Either Text [JSONEvent])
 runFoldTest optic input = runExceptT $ S.toList_ $ runFold optic cursor
   where
-    textStream :: Stream (Of Text) (ExceptT Text IO) ()
+    textStream :: StreamIO Text ()
     textStream = S.yield input
     cursor = Cursor [] initialDecoder textStream
 
@@ -54,7 +53,7 @@ runQueryTest opticStr jsonInput = case parseOptic opticStr of
 runPreviewTest :: Optic -> Text -> IO (Either Text [JSONEvent])
 runPreviewTest optic input = runExceptT $ S.toList_ $ runPreview optic cursor
   where
-    textStream :: Stream (Of Text) (ExceptT Text IO) ()
+    textStream :: StreamIO Text ()
     textStream = S.yield input
     cursor = Cursor [] initialDecoder textStream
 
@@ -68,7 +67,7 @@ runQueryPreviewTest opticStr jsonInput = case parseOptic opticStr of
 runFoldChunks :: Optic -> [Text] -> IO (Either Text [JSONEvent])
 runFoldChunks optic chunks = runExceptT $ S.toList_ $ runFold optic cursor
   where
-    textStream :: Stream (Of Text) (ExceptT Text IO) ()
+    textStream :: StreamIO Text ()
     textStream = S.each chunks
     cursor = Cursor [] initialDecoder textStream
 
@@ -76,7 +75,7 @@ runFoldChunks optic chunks = runExceptT $ S.toList_ $ runFold optic cursor
 runPreviewChunks :: Optic -> [Text] -> IO (Either Text [JSONEvent])
 runPreviewChunks optic chunks = runExceptT $ S.toList_ $ runPreview optic cursor
   where
-    textStream :: Stream (Of Text) (ExceptT Text IO) ()
+    textStream :: StreamIO Text ()
     textStream = S.each chunks
     cursor = Cursor [] initialDecoder textStream
 

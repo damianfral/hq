@@ -10,7 +10,7 @@ import Data.Functor.Of (Of ((:>)))
 import HQ.JSON.Encoder (ChunkStream, EncodeCtx, EncoderConfig)
 import HQ.JSON.Event
 import HQ.Optic (Optic (..), OpticF (..), prismPredicate)
-import HQ.Runner.Cursor (Cursor (..), KRewrite, pullCursor, pushCursor, skipValueE)
+import HQ.Runner.Cursor (Cursor (..), RewriteContinuation, pullCursor, pushCursor, skipValueE)
 import HQ.Runner.Fold (evalFilterGate)
 import HQ.Runner.Take (emitChunk, takeValue, takeValueChunks)
 import HQ.Transformation (Transformation (..), TransformationF (..), runTransformation)
@@ -33,12 +33,12 @@ data KeyAction = DropKey | KeepKey | RenameKey Text
 
 -- | Remove every value the optic focuses on from the document, passing
 -- the rest of the document through unchanged (lens @delete@/@omit@).
-runDelete :: Optic -> EncoderConfig -> KRewrite
+runDelete :: Optic -> EncoderConfig -> RewriteContinuation
 runDelete = runRewrite RewriteDelete
 
 -- | Apply a transformation to every value the optic focuses on, rewriting
 -- the document in place (lens @over@).
-runOver :: Optic -> Transformation -> EncoderConfig -> KRewrite
+runOver :: Optic -> Transformation -> EncoderConfig -> RewriteContinuation
 runOver optic transformation = runRewrite (RewriteTransform transformation) optic
 
 -- | Rewrite the document at the cursor by rewriting every value that the
@@ -49,15 +49,15 @@ runOver optic transformation = runRewrite (RewriteTransform transformation) opti
 -- document, replacing or omitting the focused values in place.  All
 -- other events pass through unchanged, so the output is the input with
 -- only the targeted values modified.
-runRewrite :: Rewriter -> Optic -> EncoderConfig -> KRewrite
+runRewrite :: Rewriter -> Optic -> EncoderConfig -> RewriteContinuation
 runRewrite rewriter (Optic optic) config = run optic
   where
-    run :: Fix OpticF -> KRewrite
+    run :: Fix OpticF -> RewriteContinuation
     run step input ctxs = case unFix step of
       Id -> rewriteValue rewriter input ctxs
       _ -> navigate step (Fix Id) input ctxs
 
-    navigate :: Fix OpticF -> Fix OpticF -> KRewrite
+    navigate :: Fix OpticF -> Fix OpticF -> RewriteContinuation
     navigate step suffix input ctxs = case unFix step of
       Id -> run suffix input ctxs
       Compose left right -> navigate left (composeStep right suffix) input ctxs
@@ -100,7 +100,7 @@ runRewrite rewriter (Optic optic) config = run optic
     stripFilterGate (Fix (Filter o t)) = Just (o, t, Fix Id)
     stripFilterGate _ = Nothing
 
-    rewriteValue :: Rewriter -> KRewrite
+    rewriteValue :: Rewriter -> RewriteContinuation
     rewriteValue RewriteDelete input ctxs = do
       after <- lift (skipValueE input)
       pure (ctxs, after)
@@ -124,8 +124,8 @@ runRewrite rewriter (Optic optic) config = run optic
           cs' <- emitChunk config event cs
           go cs' events
 
-    landing :: Fix OpticF -> JSONEvent -> Bool
-    landing (Fix opticF) event = case opticF of
+    focusesWhole :: Fix OpticF -> JSONEvent -> Bool
+    focusesWhole (Fix opticF) event = case opticF of
       Id -> True
       Field _ -> False
       Each -> False
@@ -135,11 +135,11 @@ runRewrite rewriter (Optic optic) config = run optic
       Prism kind -> prismPredicate kind event
       PrismJust -> not (isNull event)
       Filter _ _ -> False
-      Compose l r -> landing l event && landing r event
+      Compose l r -> focusesWhole l event && focusesWhole r event
 
     -- \| Prism: value whose first event satisfies the predicate goes
     -- through the suffix; everything else passes through unchanged.
-    rewritePrism :: (JSONEvent -> Bool) -> Fix OpticF -> KRewrite
+    rewritePrism :: (JSONEvent -> Bool) -> Fix OpticF -> RewriteContinuation
     rewritePrism predicate suffix input ctxs = do
       result <- lift (pullCursor input)
       case result of
@@ -150,7 +150,7 @@ runRewrite rewriter (Optic optic) config = run optic
 
     -- \| Prism on non-null: null passes through, anything else goes
     -- through the suffix.
-    rewriteJust :: Fix OpticF -> KRewrite
+    rewriteJust :: Fix OpticF -> RewriteContinuation
     rewriteJust suffix input ctxs = do
       result <- lift (pullCursor input)
       case result of
@@ -162,7 +162,7 @@ runRewrite rewriter (Optic optic) config = run optic
 
     -- \| Array index: rewrite the element at @index@, pass through the
     -- rest of the array. Non-arrays pass through unchanged.
-    rewriteIndex :: Int -> Fix OpticF -> KRewrite
+    rewriteIndex :: Int -> Fix OpticF -> RewriteContinuation
     rewriteIndex index suffix input ctxs = do
       result <- lift (pullCursor input)
       case result of
@@ -190,7 +190,7 @@ runRewrite rewriter (Optic optic) config = run optic
     -- \| Object field: rewrite the member named @name@ (dropping the key
     -- too under @delete@ when the suffix lands on the value), pass
     -- every other member through unchanged.
-    rewriteField :: Text -> Fix OpticF -> KRewrite
+    rewriteField :: Text -> Fix OpticF -> RewriteContinuation
     rewriteField name suffix input ctxs = do
       result <- lift (pullCursor input)
       case result of
@@ -218,7 +218,7 @@ runRewrite rewriter (Optic optic) config = run optic
 
     -- \| The @each@ traversal: rewrite every array element, or every
     -- object member value. Non-containers pass through.
-    rewriteEach :: Fix OpticF -> KRewrite
+    rewriteEach :: Fix OpticF -> RewriteContinuation
     rewriteEach suffix input ctxs = do
       result <- lift (pullCursor input)
       case result of
@@ -257,7 +257,7 @@ runRewrite rewriter (Optic optic) config = run optic
 
     -- \| The @values@ traversal: rewrite every object member value.
     -- Arrays and scalars pass through unchanged (unlike 'rewriteEach').
-    rewriteValues :: Fix OpticF -> KRewrite
+    rewriteValues :: Fix OpticF -> RewriteContinuation
     rewriteValues suffix input ctxs = do
       result <- lift (pullCursor input)
       case result of
@@ -282,7 +282,7 @@ runRewrite rewriter (Optic optic) config = run optic
     -- \| The @filter@ optic: gate the focused value as a whole, running
     -- the suffix on kept values and passing dropped values through
     -- unchanged.
-    rewriteFilter :: Fix OpticF -> Transformation -> Fix OpticF -> KRewrite
+    rewriteFilter :: Fix OpticF -> Transformation -> Fix OpticF -> RewriteContinuation
     rewriteFilter o t suffix input ctxs = do
       result <- lift (pullCursor input)
       case result of
@@ -295,7 +295,7 @@ runRewrite rewriter (Optic optic) config = run optic
 
     -- \| The @keys@ traversal: rewrite object keys, leaving values alone.
     -- Arrays and scalars pass through unchanged (@keys@ is objects-only).
-    rewriteKeys :: Fix OpticF -> KRewrite
+    rewriteKeys :: Fix OpticF -> RewriteContinuation
     rewriteKeys suffix input ctxs = do
       result <- lift (pullCursor input)
       case result of
@@ -332,15 +332,15 @@ runRewrite rewriter (Optic optic) config = run optic
     -- \| Apply the remainder of a @keys@ optic plus the enclosing
     -- 'Rewriter' to one object key. Keys are scalar strings, so the
     -- suffix either focuses the key as a whole (checked with
-    -- 'landing', e.g. @Id@ or @_String@) or it matches nothing and
+    -- 'focusesWhole', e.g. @Id@ or @_String@) or it matches nothing and
     -- the key is kept.
     rewriteKeyText :: Fix OpticF -> Rewriter -> Text -> ExceptT Text IO KeyAction
     rewriteKeyText suffix rw key = case rw of
       RewriteDelete
-        | landing suffix (JSONString key) -> pure DropKey
+        | focusesWhole suffix (JSONString key) -> pure DropKey
         | otherwise -> pure KeepKey
       RewriteTransform t
-        | landing suffix (JSONString key) -> case runTransformation t (String key) of
+        | focusesWhole suffix (JSONString key) -> case runTransformation t (String key) of
             Left err -> throwError err
             Right (String next) -> pure (if next == key then KeepKey else RenameKey next)
             Right _ -> throwError "key transformation must yield a string"
@@ -351,7 +351,7 @@ runRewrite rewriter (Optic optic) config = run optic
     -- with @continue@. A leading @filter@ step gates the value first:
     -- dropped members pass through, and kept members deleted as a whole
     -- lose their key too.
-    rewriteMember :: Fix OpticF -> Text -> Cursor -> KRewrite -> [EncodeCtx] -> ChunkStream (ExceptT Text IO) ([EncodeCtx], Cursor)
+    rewriteMember :: Fix OpticF -> Text -> Cursor -> RewriteContinuation -> [EncodeCtx] -> ChunkStream (ExceptT Text IO) ([EncodeCtx], Cursor)
     rewriteMember suffix key stream continue ctxs = do
       result <- lift (pullCursor stream)
       case result of
@@ -364,7 +364,7 @@ runRewrite rewriter (Optic optic) config = run optic
                 ctx' <- emitChunk config (JSONObjectKey key) ctxs
                 (ctx'', after) <- takeValueChunks config valCursor ctx'
                 continue after ctx''
-              else case (rewriter, landing rest' firstEv) of
+              else case (rewriter, focusesWhole rest' firstEv) of
                 (RewriteDelete, True) -> continue afterValue ctxs
                 _ -> do
                   ctx' <- emitChunk config (JSONObjectKey key) ctxs
@@ -372,7 +372,7 @@ runRewrite rewriter (Optic optic) config = run optic
                   continue after ctx''
           Nothing -> case rewriter of
             RewriteDelete
-              | landing suffix event -> do
+              | focusesWhole suffix event -> do
                   after <- lift (skipValueE (pushCursor event rest))
                   continue after ctxs
               | otherwise -> do

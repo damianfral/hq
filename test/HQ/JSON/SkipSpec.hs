@@ -9,7 +9,6 @@ import HQ.JSON.Decoder
 import HQ.JSON.Event (JSONEvent (..))
 import HQ.JSON.Skip
 import Relude hiding (Compose, id)
-import Streaming (Of (..), Stream)
 import qualified Streaming.Prelude as S
 import Test.HQ (decodeShown, drainCollect, malformedPullCorpus, runStreaming, splits, validPullCorpus)
 import Test.Syd
@@ -49,13 +48,13 @@ runSkipMember chunks = runExceptT $ case chunks of
 
 -- | Drain a hand-positioned mid-object decoder: after skipping member
 -- @a@, the rest must decode to the remaining members.
-drainAfterSkippedMember :: Text -> Either ParseError [JSONEvent]
+drainAfterSkippedMember :: Text -> Either DecodeError [JSONEvent]
 drainAfterSkippedMember remainder =
   let decoder =
         Decoder
           { decoderInput = remainder,
             decoderStack = [ContextObject],
-            decoderState = ParserStateObjectComma
+            decoderState = DecoderStateObjectComma
           }
    in case step decoder of
         Left err -> Left err
@@ -153,12 +152,12 @@ memberMalformed =
   ]
 
 -- | Pull every remaining event through pullEvent.
-pullRemaining :: Decoder -> Stream (Of Text) (ExceptT Text IO) () -> ExceptT Text IO [JSONEvent]
+pullRemaining :: Decoder -> StreamIO Text () -> ExceptT Text IO [JSONEvent]
 pullRemaining decoder text = do
   pulled <- pullEvent decoder text
   case pulled of
-    PulledEnd -> pure []
-    PulledEvent event decoder' rest -> (event :) <$> pullRemaining decoder' rest
+    EndOfInput -> pure []
+    NextEvent event decoder' rest -> (event :) <$> pullRemaining decoder' rest
 
 skipContainerTextSpec :: Spec
 skipContainerTextSpec = describe "skipContainerText" $ do
@@ -167,14 +166,14 @@ skipContainerTextSpec = describe "skipContainerText" $ do
       let full = "[" <> value <> ",99]"
        in forM_ (splits full) $ \chunks -> do
             result <- runExceptT $ do
-              let textStream :: Stream (Of Text) (ExceptT Text IO) ()
+              let textStream :: StreamIO Text ()
                   textStream = S.each chunks
               openArray <- pullEvent initialDecoder textStream
               case openArray of
-                PulledEvent JSONBeginArray decoder1 text1 -> do
+                NextEvent JSONBeginArray decoder1 text1 -> do
                   openMember <- pullEvent decoder1 text1
                   case openMember of
-                    PulledEvent open decoder2 text2 -> do
+                    NextEvent open decoder2 text2 -> do
                       (decoder3, text3) <- skipContainerText open decoder2 text2
                       pullRemaining decoder3 text3
                     _ -> throwError ("expected a member opener" :: Text)

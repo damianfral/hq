@@ -7,7 +7,7 @@ import Data.Aeson (Value (..))
 import HQ.JSON.Event (JSONEvent (..))
 import HQ.JSON.Parser (parseValue, parseValueEvents)
 import Relude hiding (Compose, id)
-import Test.HQ (decodeStreaming)
+import Test.HQ (decodeChunks)
 import Test.Syd
 
 spec :: Spec
@@ -65,7 +65,7 @@ parseValueEventsSpec = describe "parseValueEvents" $ do
 
   it "produces the same events as the streaming decoder" $ do
     let input = "{\"users\":[{\"name\":\"alice\",\"age\":30}],\"count\":2}"
-    case (parseValueEvents input, decodeStreaming [input]) of
+    case (parseValueEvents input, decodeChunks [input]) of
       (Left err, _) -> expectationFailure (toString err)
       (_, Left err) -> expectationFailure (show err)
       (Right events, Right decoded) -> events `shouldBe` decoded

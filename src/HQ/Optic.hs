@@ -203,7 +203,7 @@ ix :: Int -> Optic
 ix = Optic . Fix . Ix
 
 -- | First-event predicate for each type prism: the single source of
--- truth shared by folding, rewriting and 'landing' (in
+-- truth shared by folding, rewriting and 'focusesWhole' (in
 -- "HQ.Runner.Fold" and "HQ.Runner.Rewrite"). Total over 'PrismKind',
 -- so new shapes extend this table and every dispatch follows.
 prismPredicate :: PrismKind -> JSONEvent -> Bool
