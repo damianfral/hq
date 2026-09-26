@@ -13,11 +13,12 @@ import HQ.Transformation
 import Relude hiding (many, not, or, some, subtract)
 import Text.Megaparsec
 import Text.Megaparsec.Char
+import qualified Text.Megaparsec.Char.Lexer as L
 
 -- | Parse a single transformation expression, e.g. @+1 . == 3@.
 parseTransformation :: Text -> Either (ParseErrorBundle Text Void) Transformation
 parseTransformation =
-  parse (spaceConsumer *> transformationParser <* eof) "transformation"
+  parse (sc *> transformationParser <* eof) "transformation"
 
 -- | Grammar of the DSL, loosest to tightest:
 --
@@ -36,12 +37,12 @@ transformationParser = orParser
 orParser :: Parser Transformation
 orParser = do
   t0 <- combineParser
-  rest <- many ((symbol "or" <|> symbol "||") *> combineParser)
+  rest <- many ((L.symbol sc "or" <|> L.symbol sc "||") *> combineParser)
   pure $ foldl' or t0 rest
 
 combineParser :: Parser Transformation
 combineParser =
-  foldl' combine <$> atomParser <*> many (symbol "." *> atomParser)
+  foldl' combine <$> atomParser <*> many (L.symbol sc "." *> atomParser)
 
 atomParser :: Parser Transformation
 atomParser =
@@ -59,43 +60,43 @@ atomParser =
     <|> replaceParser
 
 parenParser :: Parser Transformation
-parenParser = lexeme (char '(') *> transformationParser <* lexeme (char ')')
+parenParser = L.lexeme sc (char '(') *> transformationParser <* L.lexeme sc (char ')')
 
 constParser :: Parser Transformation
-constParser = constValue <$> (symbol "const" *> jsonValueParser)
+constParser = constValue <$> (L.symbol sc "const" *> jsonValueParser)
 
 equalParser :: Parser Transformation
 equalParser = do
-  void $ try (symbol "==") <|> symbol "="
+  void $ try (L.symbol sc "==") <|> L.symbol sc "="
   equal <$> jsonValueParser
 
 addParser :: Parser Transformation
-addParser = add <$> (symbol "+" *> numberOperand)
+addParser = add <$> (L.symbol sc "+" *> numberOperand)
 
 multiplyParser :: Parser Transformation
-multiplyParser = multiply <$> (symbol "*" *> numberOperand)
+multiplyParser = multiply <$> (L.symbol sc "*" *> numberOperand)
 
 subtractParser :: Parser Transformation
-subtractParser = subtract <$> (symbol "-" *> numberOperand)
+subtractParser = subtract <$> (L.symbol sc "-" *> numberOperand)
 
 divideParser :: Parser Transformation
-divideParser = divide <$> (symbol "/" *> numberOperand)
+divideParser = divide <$> (L.symbol sc "/" *> numberOperand)
 
 strConcatParser :: Parser Transformation
-strConcatParser = concatString <$> (symbol "++" *> textOperand)
+strConcatParser = concatString <$> (L.symbol sc "++" *> textOperand)
 
 arrayConcatParser :: Parser Transformation
-arrayConcatParser = symbol "concat" *> (concatArray <$> arrayOperand)
+arrayConcatParser = L.symbol sc "concat" *> (concatArray <$> arrayOperand)
 
 trimParser :: Parser Transformation
-trimParser = symbol "trim" $> trim
+trimParser = L.symbol sc "trim" $> trim
 
 notParser :: Parser Transformation
-notParser = symbol "not" $> not
+notParser = L.symbol sc "not" $> not
 
 replaceParser :: Parser Transformation
 replaceParser = do
-  void $ symbol "replace"
+  void $ L.symbol sc "replace"
   replace <$> textOperand <*> textOperand
 
 -- | A JSON number literal, e.g. @1@ or @0.5@.
@@ -122,11 +123,5 @@ arrayOperand = do
     Array items -> pure (V.toList items)
     _ -> fail "expected a JSON array"
 
-spaceConsumer :: Parser ()
-spaceConsumer = skipMany spaceChar
-
-symbol :: Text -> Parser Text
-symbol = lexeme . string
-
-lexeme :: Parser a -> Parser a
-lexeme p = p <* spaceConsumer
+sc :: Parser ()
+sc = L.space (void spaceChar) empty empty

@@ -14,11 +14,12 @@ import qualified Streaming.Prelude as S
 import Text.Megaparsec
 import Text.Megaparsec.Char
 import Text.Megaparsec.Char.Lexer (scientific, signed)
+import qualified Text.Megaparsec.Char.Lexer as L
 
 type Parser = Parsec Void Text
 
 parseValue :: Text -> Either (ParseErrorBundle Text Void) Value
-parseValue = parse (spaceConsumer *> jsonValueParser <* eof) "value"
+parseValue = parse (sc *> jsonValueParser <* eof) "value"
 
 -- | Parse a single JSON value into the streaming event grammar,
 -- preserving object member order.
@@ -46,16 +47,16 @@ jsonValueParser :: Parser Value
 jsonValueParser = nullParser <|> boolParser <|> numberParser <|> stringParser <|> arrayParser <|> objectParser
 
 nullParser :: Parser Value
-nullParser = symbol "null" $> Null
+nullParser = L.symbol sc "null" $> Null
 
 boolParser :: Parser Value
-boolParser = (symbol "true" $> Bool True) <|> (symbol "false" $> Bool False)
+boolParser = (L.symbol sc "true" $> Bool True) <|> (L.symbol sc "false" $> Bool False)
 
 numberParser :: Parser Value
-numberParser = lexeme $ Number <$> signed spaceConsumer scientific
+numberParser = L.lexeme sc $ Number <$> signed sc scientific
 
 stringParser :: Parser Value
-stringParser = lexeme $ do
+stringParser = L.lexeme sc $ do
   void $ char '"'
   chars <- many (escapedChar <|> nonEscapeChar)
   void $ char '"'
@@ -74,34 +75,28 @@ stringParser = lexeme $ do
 
 arrayParser :: Parser Value
 arrayParser = do
-  void $ lexeme (char '[')
-  vals <- jsonValueParser `sepBy` lexeme (char ',')
-  void $ lexeme (char ']')
+  void $ L.lexeme sc (char '[')
+  vals <- jsonValueParser `sepBy` L.lexeme sc (char ',')
+  void $ L.lexeme sc (char ']')
   pure $ Array (fromList vals)
 
 objectParser :: Parser Value
 objectParser = do
-  void $ lexeme $ char '{'
-  pairs <- objectField `sepBy` lexeme (char ',')
-  void $ lexeme $ char '}'
+  void $ L.lexeme sc $ char '{'
+  pairs <- objectField `sepBy` L.lexeme sc (char ',')
+  void $ L.lexeme sc $ char '}'
   pure $ Object $ fromList [(fromText k, v) | (k, v) <- pairs]
 
 objectField :: Parser (Text, Value)
 objectField = do
-  key <- lexeme $ do
+  key <- L.lexeme sc $ do
     void $ char '"'
     k <- many (satisfy (\c -> c /= '"' && c /= '\\'))
     void $ char '"'
     pure (toText k)
-  void $ lexeme (char ':')
+  void $ L.lexeme sc (char ':')
   val <- jsonValueParser
   pure (key, val)
 
-spaceConsumer :: Parser ()
-spaceConsumer = skipMany spaceChar
-
-symbol :: Text -> Parser Text
-symbol = lexeme . string
-
-lexeme :: Parser a -> Parser a
-lexeme p = p <* spaceConsumer
+sc :: Parser ()
+sc = L.space (void spaceChar) empty empty
