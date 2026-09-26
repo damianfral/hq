@@ -7,8 +7,19 @@ module HQ.Optic where
 
 import Data.Fix
 import GHC.Show (Show (showsPrec), appPrec, showParen, showString, shows)
+import HQ.JSON.Event (JSONEvent, isArray, isBool, isNull, isNumber, isObject, isString)
 import HQ.Transformation (Transformation (..), TransformationF (..))
 import Relude hiding (Compose, Const, filter, id, many, some)
+
+-- | JSON value shapes selectable by a prism.
+data PrismKind
+  = PString
+  | PNumber
+  | PBool
+  | PNull
+  | PArray
+  | PObject
+  deriving (Eq, Show)
 
 -- | Base functor for optic paths over JSON values.
 --
@@ -23,9 +34,6 @@ import Relude hiding (Compose, Const, filter, id, many, some)
 -- the null case, while '_Just' matches any non-null value. '_Just' is
 -- matching-only (its identity 'review' is not a section on 'Null'),
 -- hence classified affine rather than prism.
---
--- Note: 'OpticF' deliberately has no 'Ord' instance ('Filter' embeds a
--- 'Transformation', which is not ordered).
 data OpticF a
   = -- | Focus on a named field of a JSON object. Fails on non-objects.
     Field Text
@@ -46,18 +54,9 @@ data OpticF a
   | -- | Sequence two optics: first focus where the left points,
     --   then within each target, focus where the right points.
     Compose a a
-  | -- | Prism: focus on a JSON String value. Fails on non-strings.
-    PrismString
-  | -- | Prism: focus on a JSON Number value. Fails on non-numbers.
-    PrismNumber
-  | -- | Prism: focus on a JSON Bool value. Fails on non-booleans.
-    PrismBool
-  | -- | Prism: focus on a JSON null value. Fails on non-nulls.
-    PrismNull
-  | -- | Prism: focus on a JSON Array value. Fails on non-arrays.
-    PrismArray
-  | -- | Prism: focus on a JSON Object value. Fails on non-objects.
-    PrismObject
+  | -- | Prism: focus on a JSON value of the given shape. Fails on
+    -- mismatching values.
+    Prism PrismKind
   | -- | Focus on any non-null JSON value. Fails on null.
     -- Matching-only (affine traversal, not a lawful prism).
     PrismJust
@@ -82,12 +81,7 @@ instance Eq Optic where
   Optic (Fix Id) == Optic (Fix Id) = True
   Optic (Fix (Compose a b)) == Optic (Fix (Compose c d)) =
     Optic a == Optic c && Optic b == Optic d
-  Optic (Fix PrismString) == Optic (Fix PrismString) = True
-  Optic (Fix PrismNumber) == Optic (Fix PrismNumber) = True
-  Optic (Fix PrismBool) == Optic (Fix PrismBool) = True
-  Optic (Fix PrismNull) == Optic (Fix PrismNull) = True
-  Optic (Fix PrismArray) == Optic (Fix PrismArray) = True
-  Optic (Fix PrismObject) == Optic (Fix PrismObject) = True
+  Optic (Fix (Prism a)) == Optic (Fix (Prism b)) = a == b
   Optic (Fix PrismJust) == Optic (Fix PrismJust) = True
   Optic (Fix Keys) == Optic (Fix Keys) = True
   Optic (Fix Values) == Optic (Fix Values) = True
@@ -111,12 +105,7 @@ instance Show Optic where
     where
       composePrec = 5
       prec = composePrec + 1
-  showsPrec _ (Optic (Fix PrismString)) = showString "_String"
-  showsPrec _ (Optic (Fix PrismNumber)) = showString "_Number"
-  showsPrec _ (Optic (Fix PrismBool)) = showString "_Bool"
-  showsPrec _ (Optic (Fix PrismNull)) = showString "_Null"
-  showsPrec _ (Optic (Fix PrismArray)) = showString "_Array"
-  showsPrec _ (Optic (Fix PrismObject)) = showString "_Object"
+  showsPrec _ (Optic (Fix (Prism kind))) = showString (prismName kind)
   showsPrec _ (Optic (Fix PrismJust)) = showString "_Just"
   showsPrec _ (Optic (Fix (Ix i))) = showString $ "ix " <> show i
   showsPrec d (Optic (Fix (Filter o t))) =
@@ -177,29 +166,29 @@ compose (Optic a) (Optic b) = Optic (Fix (Compose a b))
 
 -- | Prism: focus on a JSON String value.
 _String :: Optic
-_String = Optic (Fix PrismString)
+_String = Optic (Fix (Prism PString))
 
 -- | Prism: focus on a JSON Number value.
 _Number :: Optic
-_Number = Optic (Fix PrismNumber)
+_Number = Optic (Fix (Prism PNumber))
 
 -- | Prism: focus on a JSON Bool value.
 _Bool :: Optic
-_Bool = Optic (Fix PrismBool)
+_Bool = Optic (Fix (Prism PBool))
 
 -- | Prism: focus on a JSON null value. This is the lawful prism for
 -- the null ('Nothing') case; see the '_Just' affine traversal for
 -- the non-null case.
 _Null :: Optic
-_Null = Optic (Fix PrismNull)
+_Null = Optic (Fix (Prism PNull))
 
 -- | Prism: focus on a JSON Array value.
 _Array :: Optic
-_Array = Optic (Fix PrismArray)
+_Array = Optic (Fix (Prism PArray))
 
 -- | Prism: focus on a JSON Object value.
 _Object :: Optic
-_Object = Optic (Fix PrismObject)
+_Object = Optic (Fix (Prism PObject))
 
 -- | Focus on any non-null JSON value (the 'Just' case; see 'PrismNull'
 -- for the null case). Matching-only: usable for folding and rewriting,
@@ -212,6 +201,27 @@ _Just = Optic (Fix PrismJust)
 -- only; objects and scalars focus on nothing).
 ix :: Int -> Optic
 ix = Optic . Fix . Ix
+
+-- | First-event predicate for each type prism: the single source of
+-- truth shared by folding, rewriting and 'landing' (in
+-- "HQ.Runner.Fold" and "HQ.Runner.Rewrite"). Total over 'PrismKind',
+-- so new shapes extend this table and every dispatch follows.
+prismPredicate :: PrismKind -> JSONEvent -> Bool
+prismPredicate PString = isString
+prismPredicate PNumber = isNumber
+prismPredicate PBool = isBool
+prismPredicate PNull = isNull
+prismPredicate PArray = isArray
+prismPredicate PObject = isObject
+
+-- | DSL name of each type prism (@_String@, …).
+prismName :: PrismKind -> String
+prismName PString = "_String"
+prismName PNumber = "_Number"
+prismName PBool = "_Bool"
+prismName PNull = "_Null"
+prismName PArray = "_Array"
+prismName PObject = "_Object"
 
 -- | Keep the focused value when the transformation holds of the
 -- sub-optic's focus (@filter o p@ focuses its input when @p@ maps some

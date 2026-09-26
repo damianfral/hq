@@ -9,7 +9,7 @@ import Data.Fix (Fix (..))
 import Data.Functor.Of (Of ((:>)))
 import HQ.JSON.Encoder (ChunkStream, EncodeCtx, EncoderConfig)
 import HQ.JSON.Event
-import HQ.Optic (Optic (..), OpticF (..))
+import HQ.Optic (Optic (..), OpticF (..), prismPredicate)
 import HQ.Runner.Cursor (Cursor (..), KRewrite, pullCursor, pushCursor, skipValueE)
 import HQ.Runner.Fold (evalFilterGate)
 import HQ.Runner.Take (emitChunk, takeValue, takeValueChunks)
@@ -65,12 +65,7 @@ runRewrite rewriter (Optic optic) config = run optic
       Each -> rewriteEach suffix input ctxs
       Keys -> rewriteKeys suffix input ctxs
       Values -> rewriteValues suffix input ctxs
-      PrismString -> rewritePrism isString suffix input ctxs
-      PrismNumber -> rewritePrism isNumber suffix input ctxs
-      PrismBool -> rewritePrism isBool suffix input ctxs
-      PrismNull -> rewritePrism isNull suffix input ctxs
-      PrismArray -> rewritePrism isArray suffix input ctxs
-      PrismObject -> rewritePrism isObject suffix input ctxs
+      Prism kind -> rewritePrism (prismPredicate kind) suffix input ctxs
       PrismJust -> rewriteJust suffix input ctxs
       Ix i -> rewriteIndex i suffix input ctxs
       Filter o t -> rewriteFilter o t suffix input ctxs
@@ -137,12 +132,7 @@ runRewrite rewriter (Optic optic) config = run optic
       Keys -> False
       Values -> False
       Ix _ -> False
-      PrismString -> isString event
-      PrismNumber -> isNumber event
-      PrismBool -> isBool event
-      PrismNull -> isNull event
-      PrismArray -> isArray event
-      PrismObject -> isObject event
+      Prism kind -> prismPredicate kind event
       PrismJust -> not (isNull event)
       Filter _ _ -> False
       Compose l r -> landing l event && landing r event

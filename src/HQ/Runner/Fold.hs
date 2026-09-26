@@ -11,7 +11,7 @@ import Data.Fix (Fix (..))
 import qualified Data.Vector as Vector
 import HQ.JSON.Decoder (initialDecoder)
 import HQ.JSON.Event
-import HQ.Optic (Optic (..), OpticF (..))
+import HQ.Optic (Optic (..), OpticF (..), PrismKind, prismPredicate)
 import HQ.Runner.Cursor (Cursor (..), K, ValueStreamF, pullCursor, pushCursor, skipMemberValue, skipValue)
 import HQ.Runner.Take (takeFirstValue, takeValue)
 import HQ.Transformation (Transformation, runTransformation)
@@ -35,12 +35,7 @@ runFold (Optic optic) = run optic takeValue
       Values -> runValues k input
       Filter o t -> runFilter o t k input
       Compose left right -> run left (run right k) input
-      PrismString -> runScalar isString k input
-      PrismNumber -> runScalar isNumber k input
-      PrismBool -> runScalar isBool k input
-      PrismNull -> runScalar isNull k input
-      PrismArray -> runScalar isArray k input
-      PrismObject -> runScalar isObject k input
+      Prism kind -> runScalar (prismPredicate kind) k input
       PrismJust -> runJust k input
       Ix i -> runIndex i k input
 
@@ -271,12 +266,7 @@ focusMany (Optic optic) = focusFix optic
       Compose l r -> do
         ls <- focusFix l v
         concat <$> traverse (focusFix r) ls
-      PrismString -> pure (matchString v)
-      PrismNumber -> pure (matchNumber v)
-      PrismBool -> pure (matchBool v)
-      PrismNull -> pure (matchNull v)
-      PrismArray -> pure (matchArray v)
-      PrismObject -> pure (matchObject v)
+      Prism kind -> pure (matchPrism kind v)
       PrismJust -> pure (matchJust v)
       Ix i -> pure (matchIndex i v)
       Filter o t -> do
@@ -325,34 +315,12 @@ valuesValues v = case v of
   Object o -> KeyMap.elems o
   _ -> []
 
-matchString :: Value -> [Value]
-matchString v = case v of
-  String _ -> [v]
-  _ -> []
-
-matchNumber :: Value -> [Value]
-matchNumber v = case v of
-  Number _ -> [v]
-  _ -> []
-
-matchBool :: Value -> [Value]
-matchBool v = case v of
-  Bool _ -> [v]
-  _ -> []
-
-matchNull :: Value -> [Value]
-matchNull v = case v of
-  Null -> [v]
-  _ -> []
-
-matchArray :: Value -> [Value]
-matchArray v = case v of
-  Array _ -> [v]
-  _ -> []
-
-matchObject :: Value -> [Value]
-matchObject v = case v of
-  Object _ -> [v]
+-- | Match a type prism against an in-memory value, reusing the shared
+-- 'prismPredicate' on the value's first event (every value yields at
+-- least one event, forced lazily).
+matchPrism :: PrismKind -> Value -> [Value]
+matchPrism kind v = case valueToEvents v of
+  (ev : _) | prismPredicate kind ev -> [v]
   _ -> []
 
 matchJust :: Value -> [Value]

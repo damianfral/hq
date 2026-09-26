@@ -33,4 +33,4 @@ buildOpticAST (Optic optic) = OpticAST $ foldFix algebra optic
     -- 'Filter' keeps its input zero or one times; the annotation of its
     -- sub-optic is irrelevant to its own cardinality.
     algebra o@(Filter _ _) = OpticAffineTraversal :< o
-    algebra p = OpticPrism :< p
+    algebra o@(Prism _) = OpticPrism :< o
