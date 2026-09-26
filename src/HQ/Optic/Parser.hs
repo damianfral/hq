@@ -69,15 +69,15 @@ ixParser = L.symbol sc "ix" >> ix <$> L.lexeme sc decimal
 
 prismNameParser :: Parser Optic
 prismNameParser =
-  s_String <|> s_Number <|> s_Bool <|> s_Null <|> s_Array <|> s_Object <|> s_Just
-  where
-    s_String = L.symbol sc "String" $> _String
-    s_Number = L.symbol sc "Number" $> _Number
-    s_Bool = L.symbol sc "Bool" $> _Bool
-    s_Null = L.symbol sc "Null" $> _Null
-    s_Array = L.symbol sc "Array" $> _Array
-    s_Object = L.symbol sc "Object" $> _Object
-    s_Just = L.symbol sc "Just" $> _Just
+  choice
+    [ L.symbol sc "String" $> _String,
+      L.symbol sc "Number" $> _Number,
+      L.symbol sc "Bool" $> _Bool,
+      L.symbol sc "Null" $> _Null,
+      L.symbol sc "Array" $> _Array,
+      L.symbol sc "Object" $> _Object,
+      L.symbol sc "Just" $> _Just
+    ]
 
 sc :: Parser ()
 sc = L.space (void spaceChar) empty empty
