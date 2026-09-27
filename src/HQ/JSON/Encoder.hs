@@ -23,7 +23,8 @@ module HQ.JSON.Encoder
 where
 
 import Data.Bits (Bits (..))
-import Data.ByteString.Builder (Builder, char7, charUtf8, string7, stringUtf8, toLazyByteString)
+import qualified Data.ByteString as BS
+import Data.ByteString.Builder (Builder, byteString, char7, charUtf8, string7, stringUtf8, toLazyByteString)
 import Data.Scientific (Scientific, base10Exponent, coefficient)
 import qualified Data.Text as Text
 import Data.Text.Encoding (encodeUtf8Builder)
@@ -135,36 +136,39 @@ encodeToChunks config = go []
 -- context. This is one step of 'encodeToChunks', exposed so fused
 -- pipelines can format events without an intermediate event stream.
 formatEvent :: EncoderConfig -> [EncodeCtx] -> JSONEvent -> (Chunk, [EncodeCtx])
-formatEvent (EncoderConfig style (ValueOptions rawOption joinOption)) ctxs event
-  | event == JSONEndArray || event == JSONEndObject =
+formatEvent (EncoderConfig style (ValueOptions rawOpt joinOpt)) ctxs event =
+  case event of
+    JSONEndArray -> closeContainerAndFinish
+    JSONEndObject -> closeContainerAndFinish
+    JSONBeginArray ->
+      let (sep, ctxs') = beforeValue style ctxs
+       in (sep <> encodeEvent event, EncodeArray False : ctxs')
+    JSONBeginObject ->
+      let (sep, ctxs') = beforeValue style ctxs
+       in (sep <> encodeEvent event, EncodeObject False : ctxs')
+    JSONObjectKey _ ->
+      let (sep, ctxs') = beforeKey style ctxs
+       in (sep <> encodeEvent event, ctxs')
+    _ ->
+      let (sep, ctxs') = beforeValue style ctxs
+          ctxs'' = afterValue ctxs'
+       in (sep <> valueChunk event ctxs <> finishValue ctxs'', ctxs'')
+  where
+    closeContainerAndFinish =
       let (sep, ctxs') = closeContainer style ctxs
        in (sep <> finishValue ctxs', ctxs')
-  | otherwise = case event of
-      JSONBeginArray ->
-        let (sep, ctxs') = beforeValue style ctxs
-         in (sep <> encodeEvent event, EncodeArray False : ctxs')
-      JSONBeginObject ->
-        let (sep, ctxs') = beforeValue style ctxs
-         in (sep <> encodeEvent event, EncodeObject False : ctxs')
-      JSONObjectKey _ ->
-        let (sep, ctxs') = beforeKey style ctxs
-         in (sep <> encodeEvent event, ctxs')
-      _ ->
-        let (sep, ctxs') = beforeValue style ctxs
-            ctxs'' = afterValue ctxs'
-         in (sep <> valueChunk event ctxs <> finishValue ctxs'', ctxs'')
-  where
+
     -- Render one value event, honoring raw top-level string output.
     valueChunk :: JSONEvent -> [EncodeCtx] -> Chunk
     valueChunk (JSONString text) valueCtxs
-      | rawOption == Raw && null valueCtxs = encodeRawString text
+      | rawOpt == Raw && null valueCtxs = encodeRawString text
     valueChunk ev _ = encodeEvent ev
 
     -- Separator emitted after a complete top-level value.  A top-level
     -- value is one that leaves the context stack empty.
     finishValue :: [EncodeCtx] -> Chunk
     finishValue ctxs'
-      | joinOption == NoJoin && null ctxs' = Chunk (char7 '\n') 1
+      | joinOpt == NoJoin && null ctxs' = Chunk newline 1
       | otherwise = mempty
 
 -- | The structural pieces to emit before an object key: a separator for
@@ -224,8 +228,7 @@ closingDelimiter style depth ctx = case ctx of
       Pretty width
         | seen ->
             let size = width * depth
-                s = '\n' : replicate size ' ' ++ [delim]
-             in Chunk (string7 s) (size + 2)
+             in Chunk (newline <> indentSpaces size <> char7 delim) (size + 2)
       _ -> Chunk (char7 delim) 1
 
 -- | The chunk emitted before an array element or an object key.
@@ -235,17 +238,46 @@ closingDelimiter style depth ctx = case ctx of
 -- first item) and indentation to @depth@.
 elementSeparator :: EncodeStyle -> Bool -> Int -> Chunk
 elementSeparator Compact seen _ =
-  if seen then Chunk (char7 ',') 1 else mempty
+  if seen then Chunk comma 1 else mempty
 elementSeparator (Pretty width) seen depth =
   let size = width * depth
-      prefix = if seen then ",\n" else "\n"
-      s = prefix ++ replicate size ' '
-   in Chunk (string7 s) (size + 1 + fromEnum seen)
+      prefix = if seen then commaNewline else newline
+   in Chunk (prefix <> indentSpaces size) (size + 1 + fromEnum seen)
+
+-- | Indentation body of 'size' spaces as a builder. 'BS.replicate'
+-- is a memset, avoiding the two-words-per-space 'Char'-list that
+-- 'replicate' would allocate (and that 'string7' would then
+-- traverse again).
+indentSpaces :: Int -> Builder
+indentSpaces size = byteString (BS.replicate size 0x20)
+
+-- | Constant output fragments as shared builders. 'string7'/'char7'
+-- on a literal re-unpacks it and rebuilds the builder on every
+-- event; these are built once and reused across the whole document.
+commaNewline, newline, colonSpace, colon :: Builder
+commaNewline = string7 ",\n"
+newline = char7 '\n'
+colonSpace = string7 ": "
+colon = char7 ':'
+
+comma :: Builder
+comma = char7 ','
+
+openBrace, closeBrace, openBracket, closeBracket :: Builder
+openBrace = char7 '{'
+closeBrace = char7 '}'
+openBracket = char7 '['
+closeBracket = char7 ']'
+
+jsonNull, jsonTrue, jsonFalse :: Builder
+jsonNull = string7 "null"
+jsonTrue = string7 "true"
+jsonFalse = string7 "false"
 
 -- | The chunk emitted between an object key and its value.
 colonSeparator :: EncodeStyle -> Chunk
-colonSeparator Compact = Chunk (char7 ':') 1
-colonSeparator (Pretty _) = Chunk (string7 ": ") 2
+colonSeparator Compact = Chunk colon 1
+colonSeparator (Pretty _) = Chunk colonSpace 2
 
 -- | An output fragment with its size. The size is a flush heuristic
 -- (character count, not exact bytes for non-ASCII), so chunk
@@ -259,13 +291,13 @@ instance Monoid Chunk where mempty = Chunk mempty 0
 
 encodeEvent :: JSONEvent -> Chunk
 encodeEvent = \case
-  JSONBeginObject -> Chunk (char7 '{') 1
-  JSONEndObject -> Chunk (char7 '}') 1
-  JSONBeginArray -> Chunk (char7 '[') 1
-  JSONEndArray -> Chunk (char7 ']') 1
-  JSONNull -> Chunk (string7 "null") 4
-  JSONBool True -> Chunk (string7 "true") 4
-  JSONBool False -> Chunk (string7 "false") 5
+  JSONBeginObject -> Chunk openBrace 1
+  JSONEndObject -> Chunk closeBrace 1
+  JSONBeginArray -> Chunk openBracket 1
+  JSONEndArray -> Chunk closeBracket 1
+  JSONNull -> Chunk jsonNull 4
+  JSONBool True -> Chunk jsonTrue 4
+  JSONBool False -> Chunk jsonFalse 5
   JSONNumber n ->
     let text = toString (showScientific n)
      in Chunk (string7 text) (length text)
