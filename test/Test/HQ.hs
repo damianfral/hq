@@ -15,7 +15,7 @@ module Test.HQ
 where
 
 import qualified Data.Text as T
-import HQ.JSON.Decoder (DecodeError (..), Decoder (..), DecoderResult (..), decode, finish, step)
+import HQ.JSON.Decoder (DecodeError (..), DecoderResult (..), DecoderState (..), decode, finish, step)
 import HQ.JSON.Event (JSONEvent)
 import Relude hiding (Compose, id)
 import Streaming (Of (..))

@@ -5,7 +5,7 @@ module HQ.Runner.Cursor where
 
 import Control.Monad.Error.Class (MonadError (throwError))
 import HQ.Error (HQError (..))
-import HQ.JSON.Decoder (Decoder (..), Next (..), StreamIO, finishValue, pullEvent)
+import HQ.JSON.Decoder (DecoderState (..), Next (..), StreamIO, finishValue, pullEvent)
 import HQ.JSON.Encoder (ChunkStream, EncoderState)
 import HQ.JSON.Event (JSONEvent (..))
 import HQ.JSON.Skip (skipContainerText, skipMemberValueText)
@@ -21,7 +21,7 @@ type EventStream r = Stream (Of JSONEvent) (ExceptT HQError IO) r
 -- positioned after them. Navigation peeks at events through
 -- 'pullCursor'; bulk take loops decode forward; skipped regions never
 -- decode into events at all.
-data Cursor = Cursor ![JSONEvent] !Decoder (StreamIO Text ())
+data Cursor = Cursor ![JSONEvent] !DecoderState (StreamIO Text ())
 
 -- | Interpret an optic against the JSON value at the cursor,
 -- yielding the taken events and returning the advanced cursor.

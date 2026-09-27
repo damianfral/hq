@@ -4,7 +4,7 @@ module HQ.Runner.Take where
 
 import Control.Monad.Error.Class (MonadError (throwError))
 import HQ.Error (HQError (..))
-import HQ.JSON.Decoder (DecodeError (..), Decoder (..), DecoderResult (..), DecoderState (..), Next (..), StreamIO, finish, pullEvent)
+import HQ.JSON.Decoder (DecodeError (..), DecoderPhase (..), DecoderResult (..), DecoderState (..), Next (..), StreamIO, finish, pullEvent)
 import qualified HQ.JSON.Decoder as Decoder
 import HQ.JSON.Encoder (Builder, Chunk (..), ChunkStream, EncoderConfig, EncoderState, formatEvent)
 import HQ.JSON.Event (JSONEvent (..))
@@ -15,7 +15,7 @@ import qualified Streaming.Prelude as S
 
 -- | Pull a single event for bulk takes. Used once per taken value
 -- (not per event), so the intermediate tuple is negligible.
-pullOne :: [JSONEvent] -> Decoder -> StreamIO Text () -> ExceptT HQError IO (JSONEvent, [JSONEvent], Decoder, StreamIO Text ())
+pullOne :: [JSONEvent] -> DecoderState -> StreamIO Text () -> ExceptT HQError IO (JSONEvent, [JSONEvent], DecoderState, StreamIO Text ())
 pullOne (event : buffered) decoder text = pure (event, buffered, decoder, text)
 pullOne [] decoder text = do
   pulled <- pullEvent decoder text
@@ -63,10 +63,10 @@ takeFirstValue = go (0 :: Int)
 -- | Take a container body event by event, driving the decoder
 -- directly with no tuples or wrappers on the hot path: the event,
 -- buffer, decoder and text flow as explicit arguments.
-takeContainerFrom :: JSONEvent -> [JSONEvent] -> Decoder -> StreamIO Text () -> EventStream Cursor
+takeContainerFrom :: JSONEvent -> [JSONEvent] -> DecoderState -> StreamIO Text () -> EventStream Cursor
 takeContainerFrom closing = go
   where
-    go :: [JSONEvent] -> Decoder -> StreamIO Text () -> EventStream Cursor
+    go :: [JSONEvent] -> DecoderState -> StreamIO Text () -> EventStream Cursor
     go buf dec txt = case buf of
       event : rest -> emit event rest dec txt
       [] -> case Decoder.step dec of
@@ -99,7 +99,7 @@ takeContainerFrom closing = go
     -- same way the event-stream takes did.
     finishTake dec = case finish dec of
       Left UnexpectedEnd
-        | decoderState dec == DecoderStateValue && null (decoderStack dec) ->
+        | decoderPhase dec == DecoderPhaseValue && null (decoderStack dec) ->
             throwError (HQRunnerError UnexpectedEndOfInput)
       Left err -> throwError (HQDecodeError err)
       Right (Done _) -> throwError (HQRunnerError UnexpectedEndOfInput)
@@ -143,13 +143,13 @@ takeContainerChunks ::
   EncoderConfig ->
   JSONEvent ->
   [JSONEvent] ->
-  Decoder ->
+  DecoderState ->
   StreamIO Text () ->
   EncoderState ->
   ChunkStream (ExceptT HQError IO) (EncoderState, Cursor)
 takeContainerChunks config closing buf0 dec0 txt0 st0 = go buf0 dec0 txt0 st0 mempty 0
   where
-    go :: [JSONEvent] -> Decoder -> StreamIO Text () -> EncoderState -> Builder -> Int -> ChunkStream (ExceptT HQError IO) (EncoderState, Cursor)
+    go :: [JSONEvent] -> DecoderState -> StreamIO Text () -> EncoderState -> Builder -> Int -> ChunkStream (ExceptT HQError IO) (EncoderState, Cursor)
     go buf dec txt st pend pendSize = case buf of
       event : rest -> emit event rest dec txt st pend pendSize
       [] -> case Decoder.step dec of
@@ -160,7 +160,7 @@ takeContainerChunks config closing buf0 dec0 txt0 st0 = go buf0 dec0 txt0 st0 me
     emit ::
       JSONEvent ->
       [JSONEvent] ->
-      Decoder ->
+      DecoderState ->
       StreamIO Text () ->
       EncoderState ->
       Builder ->
@@ -184,7 +184,7 @@ takeContainerChunks config closing buf0 dec0 txt0 st0 = go buf0 dec0 txt0 st0 me
     nested ::
       JSONEvent ->
       [JSONEvent] ->
-      Decoder ->
+      DecoderState ->
       StreamIO Text () ->
       EncoderState ->
       Builder ->
@@ -196,7 +196,7 @@ takeContainerChunks config closing buf0 dec0 txt0 st0 = go buf0 dec0 txt0 st0 me
       (st', Cursor buf' dec' txt') <- takeContainerChunks config end buf dec txt st
       go buf' dec' txt' st' mempty 0
     pullMore ::
-      Decoder ->
+      DecoderState ->
       StreamIO Text () ->
       EncoderState ->
       Builder ->
@@ -213,14 +213,14 @@ takeContainerChunks config closing buf0 dec0 txt0 st0 = go buf0 dec0 txt0 st0 me
           Right (Done _) -> throwError (HQRunnerError UnexpectedEndOfInput)
     -- Mirror 'drainAtEnd', emitting the final event as a chunk.
     finishTake ::
-      Decoder ->
+      DecoderState ->
       EncoderState ->
       Builder ->
       Int ->
       ChunkStream (ExceptT HQError IO) (EncoderState, Cursor)
     finishTake dec st pend pendSize = case finish dec of
       Left UnexpectedEnd
-        | decoderState dec == DecoderStateValue && null (decoderStack dec) ->
+        | decoderPhase dec == DecoderPhaseValue && null (decoderStack dec) ->
             throwError (HQRunnerError UnexpectedEndOfInput)
       Left err -> throwError (HQDecodeError err)
       Right (Done _) -> throwError (HQRunnerError UnexpectedEndOfInput)

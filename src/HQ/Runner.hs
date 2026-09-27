@@ -55,7 +55,12 @@ newtype RunnerF a = Runner {unRunner :: ReaderT RunnerEnv (ExceptT HQError IO) a
 
 type Runner = RunnerF (BSStream (ExceptT HQError IO) ())
 
-runRunner :: Runner -> Query -> EncoderConfig -> Handle -> ExceptT HQError IO (BSStream (ExceptT HQError IO) ())
+runRunner ::
+  Runner ->
+  Query ->
+  EncoderConfig ->
+  Handle ->
+  ExceptT HQError IO (BSStream (ExceptT HQError IO) ())
 runRunner (Runner runner) query config handle = runReaderT runner env
   where
     env = RunnerEnv query (streamHandle 256 handle) config

@@ -16,26 +16,26 @@ import HQ.JSON.Event (JSONEvent (..))
 import Relude hiding (Compose, id, many, some, state)
 import Streaming (Of, Stream)
 
-data Decoder = Decoder
+data DecoderState = DecoderState
   { decoderInput :: Text,
-    decoderStack :: [Context],
-    decoderState :: DecoderState
+    decoderStack :: [DecodeContext],
+    decoderPhase :: DecoderPhase
   }
   deriving (Show, Eq)
 
-data DecoderState
-  = DecoderStateValue
-  | DecoderStateObjectKey
-  | DecoderStateObjectColon
-  | DecoderStateObjectComma
-  | DecoderStateArrayComma
-  | DecoderStateString StringState
-  | DecoderStateNumber NumberState
-  | DecoderStateKeyword KeywordState
-  | DecoderStateFinished
+data DecoderPhase
+  = DecoderPhaseValue
+  | DecoderPhaseObjectKey
+  | DecoderPhaseObjectColon
+  | DecoderPhaseObjectComma
+  | DecoderPhaseArrayComma
+  | DecoderPhaseString StringState
+  | DecoderPhaseNumber NumberState
+  | DecoderPhaseKeyword KeywordState
+  | DecoderPhaseFinished
   deriving (Eq, Show)
 
-data Context = ContextArray | ContextObject
+data DecodeContext = DecodeArray | DecodeObject
   deriving (Eq, Show)
 
 newtype ReversedString = ReversedString {unReversedString :: String}
@@ -103,27 +103,27 @@ data KeywordState
   deriving (Eq, Show)
 
 data DecoderResult
-  = Emit JSONEvent Decoder
-  | NeedInput Decoder
-  | Done Decoder
+  = Emit JSONEvent DecoderState
+  | NeedInput DecoderState
+  | Done DecoderState
   deriving (Eq, Show)
 
-emitScalar :: JSONEvent -> Text -> Decoder -> Either DecodeError DecoderResult
+emitScalar :: JSONEvent -> Text -> DecoderState -> Either DecodeError DecoderResult
 emitScalar event remaining decoder =
   let newDec = decoder {decoderInput = remaining}
    in Right $ Emit event $ finishValue newDec
 
 -- | A JSON value has just been completed.
 -- Determine what the enclosing context expects next.
-finishValue :: Decoder -> Decoder
+finishValue :: DecoderState -> DecoderState
 finishValue decoder = case decoderStack decoder of
-  [] -> decoder {decoderState = DecoderStateFinished}
-  ContextArray : _ ->
-    decoder {decoderState = DecoderStateArrayComma}
-  ContextObject : _ ->
-    decoder {decoderState = DecoderStateObjectComma}
+  [] -> decoder {decoderPhase = DecoderPhaseFinished}
+  DecodeArray : _ ->
+    decoder {decoderPhase = DecoderPhaseArrayComma}
+  DecodeObject : _ ->
+    decoder {decoderPhase = DecoderPhaseObjectComma}
 
-emitContainerEnd :: JSONEvent -> Text -> Decoder -> Either DecodeError DecoderResult
+emitContainerEnd :: JSONEvent -> Text -> DecoderState -> Either DecodeError DecoderResult
 emitContainerEnd event remaining decoder =
   let decoder' = decoder {decoderInput = remaining}
    in Right $ Emit event (finishValue decoder')
@@ -142,7 +142,7 @@ isLowSurrogate x = x >= 0xDC00 && x <= 0xDFFF
 
 -- | The result of pulling a single event: clean end of input, or one
 -- event with the decoder and text positioned immediately after it.
-data Next = EndOfInput | NextEvent JSONEvent Decoder (StreamIO Text ())
+data Next = EndOfInput | NextEvent JSONEvent DecoderState (StreamIO Text ())
 
 -- | The house stream: 'Stream' over 'ExceptT HQError IO', i.e. a
 -- stream that can fail with an 'HQError'. All streaming pipelines in

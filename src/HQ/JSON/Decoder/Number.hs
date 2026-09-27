@@ -3,7 +3,7 @@
 {-# LANGUAGE NoImplicitPrelude #-}
 
 -- | Number parsing for the streaming JSON decoder: the number state
--- machine plus stepping and finalization over a 'Decoder'.
+-- machine plus stepping and finalization over a 'DecoderState'.
 module HQ.JSON.Decoder.Number where
 
 import Data.Char (digitToInt, isDigit)
@@ -79,7 +79,7 @@ startNumberState c =
 -- is handled by a tight index loop: the chunk length is measured
 -- once and no per-character 'T.uncons'.State is written back exactly once,
 -- when the number ends, fails, or runs out of input.
-stepNumber :: Decoder -> NumberState -> Either DecodeError DecoderResult
+stepNumber :: DecoderState -> NumberState -> Either DecodeError DecoderResult
 stepNumber decoder numState = loop 0 rev0 phase0
   where
     input = decoderInput decoder
@@ -93,7 +93,7 @@ stepNumber decoder numState = loop 0 rev0 phase0
             $ NeedInput
               decoder
                 { decoderInput = mempty,
-                  decoderState = DecoderStateNumber (NumberState (ReversedString rev) phase)
+                  decoderPhase = DecoderPhaseNumber (NumberState (ReversedString rev) phase)
                 }
       | otherwise =
           let c = T.index input pos
@@ -102,14 +102,14 @@ stepNumber decoder numState = loop 0 rev0 phase0
                   finalizeNumber
                     decoder
                       { decoderInput = T.drop pos input,
-                        decoderState = DecoderStateNumber (NumberState (ReversedString rev) phase)
+                        decoderPhase = DecoderPhaseNumber (NumberState (ReversedString rev) phase)
                       }
                 NumberError -> Left (InvalidNumber (reversedStringToText (ReversedString rev) <> one c))
                 NumberStep nextPhase -> loop (pos + 1) (c : rev) nextPhase
 
-finalizeNumber :: Decoder -> Either DecodeError DecoderResult
-finalizeNumber decoder = case decoderState decoder of
-  DecoderStateNumber numState
+finalizeNumber :: DecoderState -> Either DecodeError DecoderResult
+finalizeNumber decoder = case decoderPhase decoder of
+  DecoderPhaseNumber numState
     | isValidNumberFinal (numberPhase numState) ->
         let value = parseNumberBuffer (reversedStringToText $ numberBuffer numState)
          in emitScalar

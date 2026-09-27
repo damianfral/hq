@@ -15,7 +15,7 @@ module HQ.JSON.Encoder
     Chunk (..),
     ChunkStream,
     BSStream,
-    EncodeCtx (..),
+    EncodeContext (..),
     NestDepth,
     initialDepth,
     EncoderState,
@@ -78,7 +78,7 @@ data ValueOptions = ValueOptions Raw Join deriving (Eq, Show)
 -- even in 'Pretty' mode) from one that has already emitted a value, and
 -- 'EncodeObjectAfterKey' remembers that a key still needs its colon and
 -- value.
-data EncodeCtx
+data EncodeContext
   = -- | Inside an array; 'True' once at least one element was emitted.
     EncodeArray !Bool
   | -- | Inside an object; 'True' once at least one pair was emitted.
@@ -88,7 +88,7 @@ data EncodeCtx
   deriving (Eq, Show)
 
 -- | Nesting depth: the number of enclosing containers, tracking
--- 'length' of the '[EncodeCtx]' stack without traversing it.
+-- 'length' of the '[EncodeContext]' stack without traversing it.
 -- Constructed once at 'initialDepth'; pushed with 'deeper', popped
 -- with 'shallower'.
 newtype NestDepth = NestDepth Int deriving (Eq, Ord, Show)
@@ -108,7 +108,7 @@ shallower (NestDepth n) = NestDepth (n - 1)
 -- | Encoder state threaded through transcription: container contexts
 -- plus their depth, kept in sync by construction (only 'formatEvent'
 -- and 'closeContainer' reshape it).
-data EncoderState = EncoderState [EncodeCtx] NestDepth
+data EncoderState = EncoderState [EncodeContext] NestDepth
   deriving (Eq, Show)
 
 -- | The state outside all containers.
@@ -191,7 +191,7 @@ formatEvent (EncoderConfig style (ValueOptions rawOpt joinOpt)) st event =
        in (sep <> finishValue st', st')
 
     -- Push one container context, tracking depth alongside.
-    pushCtx :: EncodeCtx -> EncoderState -> EncoderState
+    pushCtx :: EncodeContext -> EncoderState -> EncoderState
     pushCtx ctx (EncoderState ctxs depth) = EncoderState (ctx : ctxs) (deeper depth)
 
     -- Render one value event, honoring raw top-level string output.
@@ -257,7 +257,7 @@ closeContainer style (EncoderState (ctx : rest) depth) =
 -- container stays on one line; a non-empty one is closed on its own
 -- line, indented to the depth of the container itself (the parent
 -- depth).
-closingDelimiter :: EncodeStyle -> NestDepth -> EncodeCtx -> Chunk
+closingDelimiter :: EncodeStyle -> NestDepth -> EncodeContext -> Chunk
 closingDelimiter style (NestDepth depth) ctx = case ctx of
   EncodeArray seen -> close seen ']'
   EncodeObject seen -> close seen '}'

@@ -50,44 +50,44 @@ import Relude hiding (Compose, id, many, some, state)
 import Streaming (Of, Stream)
 import qualified Streaming.Prelude as S
 
-initialDecoder :: Decoder
+initialDecoder :: DecoderState
 initialDecoder =
-  Decoder
+  DecoderState
     { decoderInput = mempty,
       decoderStack = [],
-      decoderState = DecoderStateValue
+      decoderPhase = DecoderPhaseValue
     }
 
-feed :: Text -> Decoder -> Either DecodeError DecoderResult
+feed :: Text -> DecoderState -> Either DecodeError DecoderResult
 feed input decoder = step decoder {decoderInput = decoderInput decoder <> input}
 
-finish :: Decoder -> Either DecodeError DecoderResult
-finish decoder = case decoderState decoder of
-  DecoderStateString (AfterHighSurrogate _ _) -> Left InvalidSurrogatePair
-  DecoderStateString _ -> Left UnexpectedEnd
-  DecoderStateNumber numState
+finish :: DecoderState -> Either DecodeError DecoderResult
+finish decoder = case decoderPhase decoder of
+  DecoderPhaseString (AfterHighSurrogate _ _) -> Left InvalidSurrogatePair
+  DecoderPhaseString _ -> Left UnexpectedEnd
+  DecoderPhaseNumber numState
     | isValidNumberFinal (numberPhase numState) -> finalizeNumber decoder
     | otherwise ->
         Left $ InvalidNumber (reversedStringToText $ numberBuffer numState)
-  DecoderStateKeyword _ -> finalizeKeyword decoder
-  DecoderStateFinished -> case decoderStack decoder of
+  DecoderPhaseKeyword _ -> finalizeKeyword decoder
+  DecoderPhaseFinished -> case decoderStack decoder of
     [] ->
       let isNull = T.null (decoderInput decoder)
        in if isNull then Right (Done decoder) else Left TrailingInput
     _ -> Left UnexpectedEnd
   _ -> Left UnexpectedEnd
 
-step :: Decoder -> Either DecodeError DecoderResult
-step decoder = case decoderState decoder of
-  DecoderStateString state -> stepString decoder state
-  DecoderStateNumber numState -> stepNumber decoder numState
-  DecoderStateKeyword state -> stepKeyword decoder state
+step :: DecoderState -> Either DecodeError DecoderResult
+step decoder = case decoderPhase decoder of
+  DecoderPhaseString state -> stepString decoder state
+  DecoderPhaseNumber numState -> stepNumber decoder numState
+  DecoderPhaseKeyword state -> stepKeyword decoder state
   _ -> stepStructural decoder
 
-stepStructural :: Decoder -> Either DecodeError DecoderResult
+stepStructural :: DecoderState -> Either DecodeError DecoderResult
 stepStructural decoder = case T.uncons input of
-  Nothing -> case decoderState decoder of
-    DecoderStateFinished ->
+  Nothing -> case decoderPhase decoder of
+    DecoderPhaseFinished ->
       let newDecoder = decoder {decoderInput = mempty}
        in Right
             $ if null (decoderStack decoder)
@@ -99,10 +99,10 @@ stepStructural decoder = case T.uncons input of
     input = T.dropWhile isWhitespace (decoderInput decoder)
 
 parseStructuralChar ::
-  Char -> Text -> Decoder -> Either DecodeError DecoderResult
-parseStructuralChar c rest decoder = case decoderState decoder of
-  DecoderStateValue -> parseValueChar c rest decoder
-  DecoderStateObjectKey
+  Char -> Text -> DecoderState -> Either DecodeError DecoderResult
+parseStructuralChar c rest decoder = case decoderPhase decoder of
+  DecoderPhaseValue -> parseValueChar c rest decoder
+  DecoderPhaseObjectKey
     | c == '}' -> case decoderStack decoder of
         (_ : contexts) ->
           let newDecoder = decoder {decoderStack = contexts}
@@ -110,41 +110,41 @@ parseStructuralChar c rest decoder = case decoderState decoder of
         [] -> Left ExpectedObjectKey
     | c == '"' -> startString StringKey rest decoder
     | otherwise -> Left ExpectedObjectKey
-  DecoderStateObjectColon
+  DecoderPhaseObjectColon
     | c == ':' ->
-        step decoder {decoderInput = rest, decoderState = DecoderStateValue}
+        step decoder {decoderInput = rest, decoderPhase = DecoderPhaseValue}
     | otherwise -> Left ExpectedColon
-  DecoderStateObjectComma
+  DecoderPhaseObjectComma
     | c == ',' ->
         step
-          decoder {decoderInput = rest, decoderState = DecoderStateObjectKey}
+          decoder {decoderInput = rest, decoderPhase = DecoderPhaseObjectKey}
     | c == '}' -> case decoderStack decoder of
         (_ : contexts) ->
           let newDecoder = decoder {decoderStack = contexts}
            in emitContainerEnd JSONEndObject rest newDecoder
         [] -> Left ExpectedCommaOrEnd
     | otherwise -> Left ExpectedCommaOrEnd
-  DecoderStateArrayComma
+  DecoderPhaseArrayComma
     | c == ',' ->
-        step decoder {decoderInput = rest, decoderState = DecoderStateValue}
+        step decoder {decoderInput = rest, decoderPhase = DecoderPhaseValue}
     | c == ']' -> case decoderStack decoder of
         (_ : contexts) ->
           emitContainerEnd JSONEndArray rest decoder {decoderStack = contexts}
         [] -> Left ExpectedCommaOrEnd
     | otherwise -> Left ExpectedCommaOrEnd
-  DecoderStateFinished -> Left TrailingInput
-  DecoderStateString _ -> Left (UnexpectedChar c)
-  DecoderStateNumber _ -> Left (UnexpectedChar c)
-  DecoderStateKeyword _ -> Left (UnexpectedChar c)
+  DecoderPhaseFinished -> Left TrailingInput
+  DecoderPhaseString _ -> Left (UnexpectedChar c)
+  DecoderPhaseNumber _ -> Left (UnexpectedChar c)
+  DecoderPhaseKeyword _ -> Left (UnexpectedChar c)
 
-parseValueChar :: Char -> Text -> Decoder -> Either DecodeError DecoderResult
+parseValueChar :: Char -> Text -> DecoderState -> Either DecodeError DecoderResult
 parseValueChar c rest decoder = case decoderStack decoder of
-  ContextArray : contexts
+  DecodeArray : contexts
     | c == ']' ->
         emitContainerEnd JSONEndArray rest decoder {decoderStack = contexts}
   _ -> startValue c rest decoder
 
-startValue :: Char -> Text -> Decoder -> Either DecodeError DecoderResult
+startValue :: Char -> Text -> DecoderState -> Either DecodeError DecoderResult
 startValue c rest decoder = case c of
   '{' ->
     Right
@@ -152,8 +152,8 @@ startValue c rest decoder = case c of
         JSONBeginObject
         decoder
           { decoderInput = rest,
-            decoderStack = ContextObject : decoderStack decoder,
-            decoderState = DecoderStateObjectKey
+            decoderStack = DecodeObject : decoderStack decoder,
+            decoderPhase = DecoderPhaseObjectKey
           }
   '[' ->
     Right
@@ -161,8 +161,8 @@ startValue c rest decoder = case c of
         JSONBeginArray
         decoder
           { decoderInput = rest,
-            decoderStack = ContextArray : decoderStack decoder,
-            decoderState = DecoderStateValue
+            decoderStack = DecodeArray : decoderStack decoder,
+            decoderPhase = DecoderPhaseValue
           }
   '"' -> startString StringValue rest decoder
   'n' -> startKeyword decoder rest "null" 1
@@ -172,7 +172,7 @@ startValue c rest decoder = case c of
     | isNumberStart c ->
         let numState = startNumberState c
          in stepNumber
-              decoder {decoderInput = rest, decoderState = DecoderStateNumber numState}
+              decoder {decoderInput = rest, decoderPhase = DecoderPhaseNumber numState}
               numState
     | otherwise -> Left (UnexpectedChar c)
 
@@ -180,9 +180,9 @@ isNumberStart :: Char -> Bool
 isNumberStart c = c == '-' || isDigit c
 
 -- | The root value is complete: empty stack + finished state.
-isRootDone :: Decoder -> Bool
+isRootDone :: DecoderState -> Bool
 isRootDone decoder =
-  decoderState decoder == DecoderStateFinished && null (decoderStack decoder)
+  decoderPhase decoder == DecoderPhaseFinished && null (decoderStack decoder)
 
 decode ::
   (Monad m) =>
@@ -191,7 +191,7 @@ decode = runDecoder initialDecoder
 
 runDecoder ::
   (Monad m) =>
-  Decoder ->
+  DecoderState ->
   Stream (Of Text) m r ->
   Stream (Of JSONEvent) m (Either DecodeError r)
 runDecoder decoder input = do
@@ -234,7 +234,7 @@ drainStep (Right result) rest = drain result rest
 
 drainTrailing ::
   (Monad m) =>
-  Decoder ->
+  DecoderState ->
   Stream (Of Text) m r ->
   Stream (Of JSONEvent) m (Either DecodeError r)
 drainTrailing nextDecoder rest = do
@@ -249,13 +249,13 @@ drainTrailing nextDecoder rest = do
       | otherwise -> pure (Left TrailingInput)
 
 drainAtEnd ::
-  (Monad m) => Decoder -> r -> Stream (Of JSONEvent) m (Either DecodeError r)
+  (Monad m) => DecoderState -> r -> Stream (Of JSONEvent) m (Either DecodeError r)
 drainAtEnd decoder r = case finish decoder of
   Left UnexpectedEnd
     | getAll
         $ foldMap
           All
-          [ decoderState decoder == DecoderStateValue,
+          [ decoderPhase decoder == DecoderPhaseValue,
             null $ decoderStack decoder
           ] ->
         pure (Right r)
@@ -271,14 +271,14 @@ drainAtEnd decoder r = case finish decoder of
 -- but returns one event at a time with the advanced cursor instead of
 -- an event stream. Navigation peeks at events through this; bulk
 -- take/skip loops drive 'step' directly.
-pullEvent :: Decoder -> StreamIO Text () -> ExceptT HQError IO Next
+pullEvent :: DecoderState -> StreamIO Text () -> ExceptT HQError IO Next
 pullEvent decoder txtStream = case step decoder of
   Left err -> throwError (HQDecodeError err)
   Right (Emit event dec') -> pure $ NextEvent event dec' txtStream
   Right (NeedInput dec') -> pullMore dec' txtStream
   Right (Done dec') -> endCheck dec' txtStream
   where
-    pullMore :: Decoder -> StreamIO Text () -> ExceptT HQError IO Next
+    pullMore :: DecoderState -> StreamIO Text () -> ExceptT HQError IO Next
     pullMore dec txt
       -- Pending input takes precedence over pulling more text,
       -- mirroring drain: only a truly drained decoder may end.
@@ -298,7 +298,7 @@ pullEvent decoder txtStream = case step decoder of
               Right (Emit event dec') -> pure (NextEvent event dec' rest)
               Right (NeedInput dec') -> pullMore dec' rest
               Right (Done dec') -> endCheck dec' rest
-    endCheck :: Decoder -> StreamIO Text () -> ExceptT HQError IO Next
+    endCheck :: DecoderState -> StreamIO Text () -> ExceptT HQError IO Next
     endCheck dec txt = do
       result <- S.next txt
       case result of
@@ -309,10 +309,10 @@ pullEvent decoder txtStream = case step decoder of
                 then endCheck dec rest
                 else throwError (HQDecodeError TrailingInput)
           | otherwise -> throwError (HQDecodeError TrailingInput)
-    finishEnd :: Decoder -> ExceptT HQError IO Next
+    finishEnd :: DecoderState -> ExceptT HQError IO Next
     finishEnd dec = case finish dec of
       Left UnexpectedEnd
-        | decoderState dec == DecoderStateValue && null (decoderStack dec) ->
+        | decoderPhase dec == DecoderPhaseValue && null (decoderStack dec) ->
             pure EndOfInput
       Left err -> throwError (HQDecodeError err)
       Right (Done _) -> pure EndOfInput

@@ -43,7 +43,7 @@ runSkipMember :: [Text] -> IO (Either Text (Text, [Text]))
 runSkipMember [] = pure (Left "empty chunk list")
 runSkipMember (c : cs) = do
   result <- runExceptT $ do
-    (remText, rest) <- skipMemberValueText [ContextObject] c (S.each cs)
+    (remText, rest) <- skipMemberValueText [DecodeObject] c (S.each cs)
     remaining <- S.toList_ rest
     pure (remText, remaining)
   pure (first renderHQError result)
@@ -53,10 +53,10 @@ runSkipMember (c : cs) = do
 drainAfterSkippedMember :: Text -> Either DecodeError [JSONEvent]
 drainAfterSkippedMember remainder =
   let decoder =
-        Decoder
+        DecoderState
           { decoderInput = remainder,
-            decoderStack = [ContextObject],
-            decoderState = DecoderStateObjectComma
+            decoderStack = [DecodeObject],
+            decoderPhase = DecoderPhaseObjectComma
           }
    in case step decoder of
         Left err -> Left err
@@ -154,7 +154,7 @@ memberMalformed =
   ]
 
 -- | Pull every remaining event through pullEvent.
-pullRemaining :: Decoder -> StreamIO Text () -> ExceptT HQError IO [JSONEvent]
+pullRemaining :: DecoderState -> StreamIO Text () -> ExceptT HQError IO [JSONEvent]
 pullRemaining decoder text = do
   pulled <- pullEvent decoder text
   case pulled of

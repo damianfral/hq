@@ -10,9 +10,9 @@ import Data.Char (digitToInt, isDigit, isHexDigit)
 import qualified Data.Text as T
 import HQ.Error (HQError (..))
 import HQ.JSON.Decoder
-  ( Context (..),
+  ( DecodeContext (..),
     DecodeError (..),
-    Decoder (..),
+    DecoderState (..),
     KeywordState (..),
     NumberPhase,
     NumberState (..),
@@ -57,7 +57,8 @@ data SkipExpect
 -- | Pull the next chunk when the current text is empty, skipping empty
 -- chunks. Exhaustion inside a skipped region is 'UnexpectedEnd',
 -- exactly like the decoder stalling on 'NeedInput' at end of input.
-pullSkipText :: Text -> StreamIO Text () -> ExceptT HQError IO (Text, StreamIO Text ())
+pullSkipText ::
+  Text -> StreamIO Text () -> ExceptT HQError IO (Text, StreamIO Text ())
 pullSkipText input text
   | T.null input = do
       result <- S.next text
@@ -67,7 +68,8 @@ pullSkipText input text
   | otherwise = pure (input, text)
 
 -- | The next non-whitespace character, pulling more chunks as needed.
-nextSkipChar :: Text -> StreamIO Text () -> ExceptT HQError IO (Char, Text, StreamIO Text ())
+nextSkipChar ::
+  Text -> StreamIO Text () -> ExceptT HQError IO (Char, Text, StreamIO Text ())
 nextSkipChar input text = case T.uncons (T.dropWhile isWhitespace input) of
   Just (c, rest) -> pure (c, rest, text)
   Nothing -> do
@@ -81,12 +83,20 @@ nextSkipChar input text = case T.uncons (T.dropWhile isWhitespace input) of
 -- context, used for error categories and for detecting completion:
 -- the skip ends when the stack is back at its entry depth. Returns
 -- the unconsumed remainder and the rest of the stream.
-skipValueText :: [Context] -> Text -> StreamIO Text () -> ExceptT HQError IO (Text, StreamIO Text ())
+skipValueText ::
+  [DecodeContext] ->
+  Text ->
+  StreamIO Text () ->
+  ExceptT HQError IO (Text, StreamIO Text ())
 skipValueText stack = skipExpect (length stack) stack ExpectValue
 
 -- | Skip an object member value: the text starts where the key ended,
 -- so a colon is required first (mirroring 'ParserStateObjectColon').
-skipMemberValueText :: [Context] -> Text -> StreamIO Text () -> ExceptT HQError IO (Text, StreamIO Text ())
+skipMemberValueText ::
+  [DecodeContext] ->
+  Text ->
+  StreamIO Text () ->
+  ExceptT HQError IO (Text, StreamIO Text ())
 skipMemberValueText stack input text = do
   (c, rest, text') <- nextSkipChar input text
   case c of
@@ -98,7 +108,10 @@ skipMemberValueText stack input text = do
 -- advances past the value, like 'emitContainerEnd' followed by
 -- 'finishValue', but validates without materializing anything.
 skipContainerText ::
-  JSONEvent -> Decoder -> StreamIO Text () -> ExceptT HQError IO (Decoder, StreamIO Text ())
+  JSONEvent ->
+  DecoderState ->
+  StreamIO Text () ->
+  ExceptT HQError IO (DecoderState, StreamIO Text ())
 skipContainerText open decoder text = case open of
   JSONBeginArray -> skipRest ExpectValue
   JSONBeginObject -> skipRest ExpectKey
@@ -108,20 +121,28 @@ skipContainerText open decoder text = case open of
     -- pops back below its entry depth.
     skipRest expect = do
       let base = length (decoderStack decoder) - 1
-      (remainder, rest) <- skipExpect base (decoderStack decoder) expect (decoderInput decoder) text
+      (remainder, rest) <-
+        skipExpect base (decoderStack decoder) expect (decoderInput decoder) text
       case decoderStack decoder of
-        _ : ctxs -> pure (finishValue decoder {decoderInput = remainder, decoderStack = ctxs}, rest)
+        _ : ctxs ->
+          let newDecoder = decoder {decoderInput = remainder, decoderStack = ctxs}
+           in pure (finishValue newDecoder, rest)
         [] -> pure (finishValue decoder {decoderInput = remainder}, rest)
 
 -- | Structural skip loop. A value completing when the stack is back at
 -- its entry depth ends the skip and returns the remainder.
 skipExpect ::
-  Int -> [Context] -> SkipExpect -> Text -> StreamIO Text () -> ExceptT HQError IO (Text, StreamIO Text ())
+  Int ->
+  [DecodeContext] ->
+  SkipExpect ->
+  Text ->
+  StreamIO Text () ->
+  ExceptT HQError IO (Text, StreamIO Text ())
 skipExpect base stack ExpectValue input text = do
   (c, rest, text') <- nextSkipChar input text
   case c of
-    '{' -> skipExpect base (ContextObject : stack) ExpectKey rest text'
-    '[' -> skipExpect base (ContextArray : stack) ExpectValue rest text'
+    '{' -> skipExpect base (DecodeObject : stack) ExpectKey rest text'
+    '[' -> skipExpect base (DecodeArray : stack) ExpectValue rest text'
     '"' -> do
       (rest', text'') <- skipStringText rest text'
       afterValue base stack rest' text''
@@ -133,12 +154,13 @@ skipExpect base stack ExpectValue input text = do
           (rest', text'') <- skipNumberText (startNumberState c) rest text'
           afterValue base stack rest' text''
       | c == ']' -> case stack of
-          ContextArray : ctxs -> afterValue base ctxs rest text'
+          DecodeArray : ctxs -> afterValue base ctxs rest text'
           _ -> throwError (HQDecodeError (UnexpectedChar c))
       | otherwise -> throwError (HQDecodeError (UnexpectedChar c))
   where
     skipKeywordCont keyword consumed rest' text'' = do
-      (rest'', text''') <- skipKeywordText (keywordState keyword consumed) rest' text''
+      (rest'', text''') <-
+        skipKeywordText (keywordState keyword consumed) rest' text''
       afterValue base stack rest'' text'''
 skipExpect base stack ExpectKey input text = do
   (c, rest, text') <- nextSkipChar input text
@@ -175,17 +197,22 @@ skipExpect base stack ExpectArrComma input text = do
 -- | A value just completed: return when back at the entry depth,
 -- otherwise expect the enclosing container's separator.
 afterValue ::
-  Int -> [Context] -> Text -> StreamIO Text () -> ExceptT HQError IO (Text, StreamIO Text ())
+  Int ->
+  [DecodeContext] ->
+  Text ->
+  StreamIO Text () ->
+  ExceptT HQError IO (Text, StreamIO Text ())
 afterValue base stack rest text'
   | length stack <= base = pure (rest, text')
   | otherwise = case stack of
-      ContextArray : _ -> skipExpect base stack ExpectArrComma rest text'
-      ContextObject : _ -> skipExpect base stack ExpectObjComma rest text'
+      DecodeArray : _ -> skipExpect base stack ExpectArrComma rest text'
+      DecodeObject : _ -> skipExpect base stack ExpectObjComma rest text'
       [] -> pure (rest, text')
 
 -- | Skip a string starting after its opening quote. Returns the text
 -- after the closing quote. Mirrors 'consumeString' without buffering.
-skipStringText :: Text -> StreamIO Text () -> ExceptT HQError IO (Text, StreamIO Text ())
+skipStringText ::
+  Text -> StreamIO Text () -> ExceptT HQError IO (Text, StreamIO Text ())
 skipStringText = go
   where
     go :: Text -> StreamIO Text () -> ExceptT HQError IO (Text, StreamIO Text ())
@@ -203,21 +230,28 @@ skipStringText = go
 
 -- | Skip one escape sequence. Mirrors 'consumeStringEscape' without
 -- buffering.
-skipEscape :: Text -> StreamIO Text () -> ExceptT HQError IO (Text, StreamIO Text ())
+skipEscape ::
+  Text -> StreamIO Text () -> ExceptT HQError IO (Text, StreamIO Text ())
 skipEscape input text = do
   (chunk, rest) <- pullSkipText input text
   case T.uncons chunk of
     Nothing -> skipEscape mempty rest
     Just (c, rest')
       | c == '"' || c == '\\' || c == '/' -> skipStringText rest' rest
-      | c == 'b' || c == 'f' || c == 'n' || c == 'r' || c == 't' -> skipStringText rest' rest
+      | c == 'b' || c == 'f' || c == 'n' || c == 'r' || c == 't' ->
+          skipStringText rest' rest
       | c == 'u' -> skipUnicode 0 0 rest' rest
       | otherwise -> throwError (HQDecodeError (InvalidEscape c))
 
 -- | Skip a @\u@ escape's four hex digits. Mirrors 'consumeUnicode''
 -- without buffering: over-long input keeps the extra digits for the
 -- string scan, exhausted chunks pull more, anything else is invalid.
-skipUnicode :: Int -> Int -> Text -> StreamIO Text () -> ExceptT HQError IO (Text, StreamIO Text ())
+skipUnicode ::
+  Int ->
+  Int ->
+  Text ->
+  StreamIO Text () ->
+  ExceptT HQError IO (Text, StreamIO Text ())
 skipUnicode value digits input text = do
   (chunk, rest0) <- pullSkipText input text
   let needed = 4 - digits
@@ -234,7 +268,8 @@ skipUnicode value digits input text = do
 
 -- | Validate a completed @\u@ escape. Mirrors 'finishUnicode' without
 -- buffering.
-finishUnicodeSkip :: Text -> StreamIO Text () -> Int -> ExceptT HQError IO (Text, StreamIO Text ())
+finishUnicodeSkip ::
+  Text -> StreamIO Text () -> Int -> ExceptT HQError IO (Text, StreamIO Text ())
 finishUnicodeSkip input text value
   | isHighSurrogate value = skipLowSurrogate input text value
   | isLowSurrogate value = throwError (HQDecodeError InvalidSurrogatePair)
@@ -242,7 +277,8 @@ finishUnicodeSkip input text value
 
 -- | Skip a low-surrogate escape after a high surrogate. Mirrors
 -- 'consumeLowSurrogate' without buffering.
-skipLowSurrogate :: Text -> StreamIO Text () -> Int -> ExceptT HQError IO (Text, StreamIO Text ())
+skipLowSurrogate ::
+  Text -> StreamIO Text () -> Int -> ExceptT HQError IO (Text, StreamIO Text ())
 skipLowSurrogate input text high = do
   (chunk, rest) <- pullSkipText input text
   case T.uncons chunk of
@@ -255,7 +291,8 @@ skipLowSurrogate input text high = do
 
 -- | The low surrogate's backslash arrived at a chunk end; the next
 -- chunk must start with @u@. Mirrors the 'AfterHighSurrogate' resume.
-skipLowSurrogateBackslash :: StreamIO Text () -> Int -> ExceptT HQError IO (Text, StreamIO Text ())
+skipLowSurrogateBackslash ::
+  StreamIO Text () -> Int -> ExceptT HQError IO (Text, StreamIO Text ())
 skipLowSurrogateBackslash text high = do
   (chunk, rest) <- pullSkipText mempty text
   case T.uncons chunk of
@@ -267,7 +304,12 @@ skipLowSurrogateBackslash text high = do
 -- 'consumeLowSurrogateDigits' without buffering, including forgetting
 -- a pending high surrogate when digits stall at a chunk end.
 skipLowDigits ::
-  Text -> StreamIO Text () -> Int -> Int -> Int -> ExceptT HQError IO (Text, StreamIO Text ())
+  Text ->
+  StreamIO Text () ->
+  Int ->
+  Int ->
+  Int ->
+  ExceptT HQError IO (Text, StreamIO Text ())
 skipLowDigits input text high value digits
   | digits == 4 =
       if isLowSurrogate value
@@ -301,11 +343,20 @@ skipLowDigits input text high value digits
 -- | Skip a number from its saved state. Mirrors 'stepNumber' without
 -- building a 'Scientific': phases advance identically and error
 -- payloads match, but digits only accumulate into a message buffer.
-skipNumberText :: NumberState -> Text -> StreamIO Text () -> ExceptT HQError IO (Text, StreamIO Text ())
+skipNumberText ::
+  NumberState ->
+  Text ->
+  StreamIO Text () ->
+  ExceptT HQError IO (Text, StreamIO Text ())
 skipNumberText numState =
   go (numberBuffer numState) (numberPhase numState)
   where
-    go :: ReversedString -> NumberPhase -> Text -> StreamIO Text () -> ExceptT HQError IO (Text, StreamIO Text ())
+    go ::
+      ReversedString ->
+      NumberPhase ->
+      Text ->
+      StreamIO Text () ->
+      ExceptT HQError IO (Text, StreamIO Text ())
     go (ReversedString rev) phase inp txt
       | T.null inp = do
           result <- S.next txt
@@ -331,7 +382,11 @@ skipNumberText numState =
 -- | Skip a keyword from its saved state. Mirrors 'stepKeyword',
 -- including its end-of-input rules: a complete keyword at
 -- exhaustion succeeds, an incomplete one is 'InvalidKeyword'.
-skipKeywordText :: KeywordState -> Text -> StreamIO Text () -> ExceptT HQError IO (Text, StreamIO Text ())
+skipKeywordText ::
+  KeywordState ->
+  Text ->
+  StreamIO Text () ->
+  ExceptT HQError IO (Text, StreamIO Text ())
 skipKeywordText state input text =
   let (keyword, index) = case state of
         KeywordNull i -> ("null" :: Text, i)
@@ -341,7 +396,11 @@ skipKeywordText state input text =
         then finalCheck keyword input text
         else matchLoop keyword index input text
   where
-    finalCheck :: Text -> Text -> StreamIO Text () -> ExceptT HQError IO (Text, StreamIO Text ())
+    finalCheck ::
+      Text ->
+      Text ->
+      StreamIO Text () ->
+      ExceptT HQError IO (Text, StreamIO Text ())
     finalCheck keyword inp txt
       | T.null inp = do
           result <- S.next txt
@@ -353,7 +412,12 @@ skipKeywordText state input text =
           Just (c, _)
             | isJsonDelimiter c -> pure (inp, txt)
             | otherwise -> throwError (HQDecodeError (InvalidKeyword keyword))
-    matchLoop :: Text -> Int -> Text -> StreamIO Text () -> ExceptT HQError IO (Text, StreamIO Text ())
+    matchLoop ::
+      Text ->
+      Int ->
+      Text ->
+      StreamIO Text () ->
+      ExceptT HQError IO (Text, StreamIO Text ())
     matchLoop keyword index inp txt
       | T.null inp = do
           result <- S.next txt

@@ -16,16 +16,16 @@ import HQ.JSON.Decoder.StringBuffer
 import HQ.JSON.Event (JSONEvent (..))
 import Relude hiding (Compose, id, many, some, state)
 
-startString :: StringTarget -> Text -> Decoder -> Either DecodeError DecoderResult
+startString :: StringTarget -> Text -> DecoderState -> Either DecodeError DecoderResult
 startString target input = consumeString target input emptyStringBuffer
 
 consumeString ::
-  StringTarget -> Text -> StringBuffer -> Decoder -> Either DecodeError DecoderResult
+  StringTarget -> Text -> StringBuffer -> DecoderState -> Either DecodeError DecoderResult
 consumeString target input buffer decoder = case T.uncons rest of
   Nothing ->
     let bufferedTarget = BufferedStringTarget target newBuffer
-        parserString = DecoderStateString (InString bufferedTarget)
-        decoder' = decoder {decoderInput = mempty, decoderState = parserString}
+        parserString = DecoderPhaseString (InString bufferedTarget)
+        decoder' = decoder {decoderInput = mempty, decoderPhase = parserString}
      in Right $ NeedInput decoder'
   Just (c, rest')
     | c == '"' -> finishString target newBuffer rest' decoder
@@ -36,12 +36,12 @@ consumeString target input buffer decoder = case T.uncons rest of
     !newBuffer = appendStringBuffer chunk buffer
 
 consumeStringEscape ::
-  StringTarget -> Text -> StringBuffer -> Decoder -> Either DecodeError DecoderResult
+  StringTarget -> Text -> StringBuffer -> DecoderState -> Either DecodeError DecoderResult
 consumeStringEscape target input buffer decoder = case T.uncons input of
   Nothing ->
     let parserString =
-          DecoderStateString $ AfterEscape $ BufferedStringTarget target buffer
-     in Right $ NeedInput decoder {decoderInput = mempty, decoderState = parserString}
+          DecoderPhaseString $ AfterEscape $ BufferedStringTarget target buffer
+     in Right $ NeedInput decoder {decoderInput = mempty, decoderPhase = parserString}
   Just (c, rest) -> case c of
     '"' -> consumeString target rest (appendCharStringBuffer '"' buffer) decoder
     '\\' -> consumeString target rest (appendCharStringBuffer '\\' buffer) decoder
@@ -55,7 +55,7 @@ consumeStringEscape target input buffer decoder = case T.uncons input of
     _ -> Left (InvalidEscape c)
 
 consumeUnicode ::
-  StringTarget -> Text -> StringBuffer -> Decoder -> Either DecodeError DecoderResult
+  StringTarget -> Text -> StringBuffer -> DecoderState -> Either DecodeError DecoderResult
 consumeUnicode target input buffer = consumeUnicode' target input buffer 0 0
 
 consumeUnicode' ::
@@ -64,15 +64,15 @@ consumeUnicode' ::
   StringBuffer ->
   Int ->
   Int ->
-  Decoder ->
+  DecoderState ->
   Either DecodeError DecoderResult
 consumeUnicode' target input buffer value digits decoder
   | newDigits >= 4 = finishUnicode target rest buffer newValue decoder
   | T.null rest =
       let unicode = Unicode newValue newDigits
           bufferedString = BufferedStringTarget target buffer
-          parserString = DecoderStateString $ InUnicodeEscape bufferedString unicode
-          newDecoder = decoder {decoderInput = "", decoderState = parserString}
+          parserString = DecoderPhaseString $ InUnicodeEscape bufferedString unicode
+          newDecoder = decoder {decoderInput = "", decoderPhase = parserString}
        in Right $ NeedInput newDecoder
   | otherwise = Left InvalidUnicodeEscape
   where
@@ -89,19 +89,19 @@ finishUnicode ::
   Text ->
   StringBuffer ->
   Int ->
-  Decoder ->
+  DecoderState ->
   Either DecodeError DecoderResult
 finishUnicode target input buffer value decoder
   | isHighSurrogate value =
       let bufferedStringT = BufferedStringTarget target buffer
-          parserString = DecoderStateString $ AfterHighSurrogate bufferedStringT value
-          newDecoder = decoder {decoderInput = input, decoderState = parserString}
+          parserString = DecoderPhaseString $ AfterHighSurrogate bufferedStringT value
+          newDecoder = decoder {decoderInput = input, decoderPhase = parserString}
        in Right $ NeedInput newDecoder
   | isLowSurrogate value = Left InvalidSurrogatePair
   | otherwise =
       consumeString target input (appendCharStringBuffer (chr value) buffer) decoder
 
-stepString :: Decoder -> StringState -> Either DecodeError DecoderResult
+stepString :: DecoderState -> StringState -> Either DecodeError DecoderResult
 stepString decoder state =
   case state of
     InString (BufferedStringTarget target buffer) ->
@@ -114,7 +114,7 @@ stepString decoder state =
       consumeLowSurrogate target (decoderInput decoder) buffer high decoder
 
 consumeLowSurrogate ::
-  StringTarget -> Text -> StringBuffer -> Int -> Decoder -> Either DecodeError DecoderResult
+  StringTarget -> Text -> StringBuffer -> Int -> DecoderState -> Either DecodeError DecoderResult
 consumeLowSurrogate target input buffer high decoder = case T.uncons input of
   Nothing -> Right $ NeedInput decoder {decoderInput = mempty}
   Just ('\\', rest) -> case T.uncons rest of
@@ -123,8 +123,8 @@ consumeLowSurrogate target input buffer high decoder = case T.uncons input of
         $ NeedInput
           decoder
             { decoderInput = mempty,
-              decoderState =
-                DecoderStateString
+              decoderPhase =
+                DecoderPhaseString
                   $ AfterHighSurrogate (BufferedStringTarget target buffer) high
             }
     Just ('u', rest') ->
@@ -139,7 +139,7 @@ consumeLowSurrogateDigits ::
   Int ->
   Int ->
   Int ->
-  Decoder ->
+  DecoderState ->
   Either DecodeError DecoderResult
 consumeLowSurrogateDigits target input buffer high value digits decoder
   | digits == 4 =
@@ -178,8 +178,8 @@ consumeLowSurrogateDigits target input buffer high value digits decoder
                     $ NeedInput
                       decoder
                         { decoderInput = mempty,
-                          decoderState =
-                            DecoderStateString
+                          decoderPhase =
+                            DecoderPhaseString
                               $ InUnicodeEscape
                                 (BufferedStringTarget target buffer)
                                 (Unicode newValue newDigits)
@@ -191,7 +191,7 @@ finishString ::
   StringTarget ->
   StringBuffer ->
   Text ->
-  Decoder ->
+  DecoderState ->
   Either DecodeError DecoderResult
 finishString target value remaining decoder = case target of
   StringValue ->
@@ -201,6 +201,6 @@ finishString target value remaining decoder = case target of
     let newDecoder =
           decoder
             { decoderInput = remaining,
-              decoderState = DecoderStateObjectColon
+              decoderPhase = DecoderPhaseObjectColon
             }
     Right $ Emit key newDecoder
