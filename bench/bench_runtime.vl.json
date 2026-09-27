@@ -1,62 +1,128 @@
 {
   "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
   "title": "Runtime (100 MB input)",
-  "width": 756,
-  "height": {
-    "step": 40
-  },
+  "width": 1000,
   "data": {
     "url": "hq-bench.csv"
   },
-  "transform": [
+  "vconcat": [
     {
-      "calculate": "slice(datum.command, 0, 2) == 'hq' ? 'hq' : 'jq'",
-      "as": "backend"
-    },
-    {
-      "aggregate": [{ "op": "median", "field": "runtime", "as": "runtime_median" }],
-      "groupby": ["command", "backend"]
-    }
-  ],
-  "mark": "bar",
-  "encoding": {
-    "y": {
-      "field": "command",
-      "type": "nominal",
-      "title": null,
-      "sort": null
-    },
-    "x": {
-      "field": "runtime_median",
-      "type": "quantitative",
-      "title": "Runtime median (s)"
-    },
-    "color": {
-      "field": "backend",
-      "type": "nominal",
-      "title": "backend",
-      "scale": {
-        "domain": [
-          "hq",
-          "jq"
-        ],
-        "range": [
-          "#DD2233",
-          "#333333"
+      "width": 1000,
+      "height": {
+        "step": 40
+      },
+      "transform": [
+        {
+          "calculate": "slice(datum.command, 0, 2) == 'hq' ? 'hq' : 'jq'",
+          "as": "backend"
+        },
+        {
+          "aggregate": [{ "op": "median", "field": "runtime", "as": "runtime_median" }],
+          "groupby": ["command", "backend"]
+        }
+      ],
+      "mark": "bar",
+      "encoding": {
+        "y": {
+          "field": "command",
+          "type": "nominal",
+          "title": null,
+          "sort": null,
+          "axis": { "labelLimit": 600 }
+        },
+        "x": {
+          "field": "runtime_median",
+          "type": "quantitative",
+          "title": "Runtime median (s)"
+        },
+        "color": {
+          "field": "backend",
+          "type": "nominal",
+          "title": "backend",
+          "scale": {
+            "domain": ["hq", "jq"],
+            "range": ["#DD2233", "#333333"]
+          }
+        },
+        "tooltip": [
+          {
+            "field": "command",
+            "type": "nominal"
+          },
+          {
+            "field": "runtime_median",
+            "type": "quantitative",
+            "title": "Runtime median (s)"
+          }
         ]
       }
     },
-    "tooltip": [
-      {
-        "field": "command",
-        "type": "nominal"
+    {
+      "title": "Average (mean of medians)",
+      "width": 1000,
+      "height": {
+        "step": 40
       },
-      {
-        "field": "runtime_median",
-        "type": "quantitative",
-        "title": "Runtime median (s)"
+      "transform": [
+        {
+          "calculate": "slice(datum.command, 0, 2) == 'hq' ? 'hq' : 'jq'",
+          "as": "backend"
+        },
+        {
+          "aggregate": [{ "op": "median", "field": "runtime", "as": "runtime_median" }],
+          "groupby": ["command", "backend"]
+        },
+        {
+          "aggregate": [{ "op": "mean", "field": "runtime_median", "as": "runtime_average" }],
+          "groupby": ["backend"]
+        },
+        {
+          "calculate": "datum.backend + ' total'",
+          "as": "command"
+        }
+      ],
+      "mark": "bar",
+      "encoding": {
+        "y": {
+          "field": "command",
+          "type": "nominal",
+          "title": null,
+          "sort": ["hq total", "jq total"],
+          "axis": { "labelLimit": 600 }
+        },
+        "x": {
+          "field": "runtime_average",
+          "type": "quantitative",
+          "title": "Runtime average (s)"
+        },
+        "color": {
+          "field": "backend",
+          "type": "nominal",
+          "title": "backend",
+          "scale": {
+            "domain": ["hq", "jq"],
+            "range": ["#DD2233", "#333333"]
+          }
+        },
+        "tooltip": [
+          {
+            "field": "command",
+            "type": "nominal"
+          },
+          {
+            "field": "runtime_average",
+            "type": "quantitative",
+            "title": "Runtime average (s)"
+          }
+        ]
       }
-    ]
+    }
+  ],
+  "resolve": {
+    "scale": {
+      "x": "shared",
+      "color": "shared"
+    }
   },
   "config": {
     "axis": {
@@ -68,7 +134,8 @@
       "titleFont": "monospace"
     },
     "title": {
-      "font": "monospace"
+      "font": "monospace",
+      "anchor": "middle"
     }
   }
 }

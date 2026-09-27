@@ -123,7 +123,7 @@
           version = "0.0.0.1";
           dontUnpack = true;
           buildInputs = [packages.hq-bench pkgs.hq-prof];
-          # Run the hq benchmark commands (same list as hq-bench-results
+          # Run the hq benchmark commands (same list as hq-bench-data
           # uses) under the profiling RTS; jq commands are skipped since
           # only the Haskell binary is built for profiling. Each run
           # writes hq.prof, renamed per command to avoid clobbering.
@@ -158,22 +158,33 @@
               --prefix PATH : ${pkgs.lib.makeBinPath [pkgs.bash pkgs.time pkgs.hq pkgs.jq pkgs.coreutils]}
           '';
         };
-        packages.hq-bench-results = pkgs.stdenv.mkDerivation {
-          name = "hq-bench-results";
-          pname = "hq-bench-results";
+        packages.hq-bench-data = pkgs.stdenv.mkDerivation {
+          name = "hq-bench-data";
+          pname = "hq-bench-data";
           version = "0.0.0.1";
           dontUnpack = true;
-          nativeBuildInputs = [pkgs.vega-lite];
           buildInputs = [packages.hq-bench];
           buildPhase = ''
             set -xue
             hq-bench ${json-data} hq-bench.csv 3
+          '';
+          installPhase = "mkdir $out && cp hq-bench.csv $out/";
+        };
+        packages.hq-bench-charts = pkgs.stdenv.mkDerivation {
+          name = "hq-bench-charts";
+          pname = "hq-bench-charts";
+          version = "0.0.0.1";
+          dontUnpack = true;
+          nativeBuildInputs = [pkgs.vega-lite];
+          buildPhase = ''
+            set -xue
+            cp ${packages.hq-bench-data}/hq-bench.csv hq-bench.csv
             cp ${./bench/bench_runtime.vl.json} bench_runtime.vl.json
             cp ${./bench/bench_memory.vl.json} bench_memory.vl.json
             vl2svg bench_runtime.vl.json bench_runtime.svg
             vl2svg bench_memory.vl.json bench_memory.svg
           '';
-          installPhase = "mkdir $out && cp -t $out hq-bench.csv bench_runtime.svg bench_memory.svg";
+          installPhase = "mkdir $out && cp -t $out bench_runtime.svg bench_memory.svg";
         };
 
         apps.hq = flake-utils.lib.mkApp {drv = pkgs.hq;};
