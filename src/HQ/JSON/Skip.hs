@@ -8,29 +8,7 @@ module HQ.JSON.Skip where
 import Control.Monad.Error.Class (MonadError (throwError))
 import Data.Char (digitToInt, isDigit, isHexDigit)
 import qualified Data.Text as T
-import HQ.Error (HQError (..))
 import HQ.JSON.Decoder
-  ( DecodeContext (..),
-    DecodeError (..),
-    DecoderState (..),
-    KeywordState (..),
-    NumberPhase,
-    NumberState (..),
-    NumberStep (..),
-    ReversedString (..),
-    StreamIO,
-    advanceKeyword,
-    advanceNumber,
-    finishValue,
-    isHighSurrogate,
-    isJsonDelimiter,
-    isLowSurrogate,
-    isValidNumberFinal,
-    isWhitespace,
-    keywordState,
-    reversedStringToText,
-    startNumberState,
-  )
 import HQ.JSON.Event (JSONEvent (..))
 import Relude hiding (Compose, id, many, some, state)
 import qualified Streaming.Prelude as S
@@ -314,7 +292,7 @@ skipLowDigits input text high value digits
   | digits == 4 =
       if isLowSurrogate value
         then skipStringText input text
-        else throwError (HQDecodeError InvalidSurrogatePair)
+        else throwError $ HQDecodeError InvalidSurrogatePair
   | otherwise = do
       (chunk, rest) <- pullSkipText input text
       case T.uncons chunk of
@@ -331,14 +309,14 @@ skipLowDigits input text high value digits
             then
               if isLowSurrogate value'
                 then skipStringText rest' rest
-                else throwError (HQDecodeError InvalidSurrogatePair)
+                else throwError $ HQDecodeError InvalidSurrogatePair
             else
               -- The chunk is exhausted mid-escape: keep the pending
               -- high surrogate and continue with more input, mirroring
               -- how feeding appends chunks before stepping.
               if T.null rest'
                 then skipLowDigits mempty rest high value' digits'
-                else throwError (HQDecodeError InvalidUnicodeEscape)
+                else throwError $ HQDecodeError InvalidUnicodeEscape
 
 -- | Skip a number from its saved state. Mirrors 'stepNumber' without
 -- building a 'Scientific': phases advance identically and error
@@ -363,7 +341,10 @@ skipNumberText numState =
           case result of
             Left ()
               | isValidNumberFinal phase -> pure (mempty, txt)
-              | otherwise -> throwError (HQDecodeError (InvalidNumber (reversedStringToText (ReversedString rev))))
+              | otherwise ->
+                  throwError
+                    $ HQDecodeError
+                    $ InvalidNumber (reversedStringToText (ReversedString rev))
             Right (chunk, rest) -> go (ReversedString rev) phase chunk rest
       | otherwise = loop rev phase 0
       where
@@ -376,7 +357,12 @@ skipNumberText numState =
                     NumberEnd
                       | isValidNumberFinal p -> pure (T.drop pos inp, txt)
                       | otherwise -> throwError (HQDecodeError (InvalidNumber (reversedStringToText (ReversedString r))))
-                    NumberError -> throwError (HQDecodeError (InvalidNumber (reversedStringToText (ReversedString r) <> one c)))
+                    NumberError ->
+                      throwError
+                        $ HQDecodeError
+                        $ InvalidNumber
+                        $ reversedStringToText (ReversedString r)
+                        <> one c
                     NumberStep p' -> loop (c : r) p' (pos + 1)
 
 -- | Skip a keyword from its saved state. Mirrors 'stepKeyword',
@@ -422,11 +408,11 @@ skipKeywordText state input text =
       | T.null inp = do
           result <- S.next txt
           case result of
-            Left () -> throwError (HQDecodeError (InvalidKeyword keyword))
+            Left () -> throwError $ HQDecodeError $ InvalidKeyword keyword
             Right (chunk, rest) -> matchLoop keyword index chunk rest
       | otherwise = case T.uncons inp of
           Nothing -> matchLoop keyword index mempty txt
           Just (c, rest)
             | c == T.index keyword index ->
                 skipKeywordText (advanceKeyword state) rest txt
-            | otherwise -> throwError (HQDecodeError (InvalidKeyword keyword))
+            | otherwise -> throwError $ HQDecodeError $ InvalidKeyword keyword
