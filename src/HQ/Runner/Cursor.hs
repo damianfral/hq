@@ -6,7 +6,7 @@ module HQ.Runner.Cursor where
 import Control.Monad.Error.Class (MonadError (throwError))
 import HQ.Error (HQError (..))
 import HQ.JSON.Decoder (Decoder (..), Next (..), StreamIO, finishValue, pullEvent)
-import HQ.JSON.Encoder (ChunkStream, EncodeCtx)
+import HQ.JSON.Encoder (ChunkStream, EncoderState)
 import HQ.JSON.Event (JSONEvent (..))
 import HQ.JSON.Skip (skipContainerText, skipMemberValueText)
 import HQ.Runner.Error (RunnerError (..))
@@ -30,7 +30,7 @@ type Continuation = Cursor -> EventStream Cursor
 -- | Rewrite output: chunk stream returning advanced encoder contexts
 -- and cursor. Passthrough regions transcribe text straight to chunks
 -- without an intermediate event stream.
-type RewriteContinuation = Cursor -> [EncodeCtx] -> ChunkStream (ExceptT HQError IO) ([EncodeCtx], Cursor)
+type RewriteContinuation = Cursor -> EncoderState -> ChunkStream (ExceptT HQError IO) (EncoderState, Cursor)
 
 -- | Pull one event for navigation. Buffered events come first;
 -- otherwise the decoder drives forward. Returns 'Nothing' at clean

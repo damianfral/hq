@@ -7,7 +7,7 @@ import Data.Aeson (Value (..))
 import Data.Fix (Fix (..))
 import Data.Functor.Of (Of ((:>)))
 import HQ.Error (HQError (..))
-import HQ.JSON.Encoder (ChunkStream, EncodeCtx, EncoderConfig)
+import HQ.JSON.Encoder (ChunkStream, EncoderConfig, EncoderState)
 import HQ.JSON.Event
 import HQ.Optic (Optic (..), OpticF (..), prismPredicate)
 import HQ.Runner.Cursor (Cursor (..), RewriteContinuation, pullCursor, pushCursor, skipValueE)
@@ -55,22 +55,22 @@ runRewrite :: Rewriter -> Optic -> EncoderConfig -> RewriteContinuation
 runRewrite rewriter (Optic optic) config = run optic
   where
     run :: Fix OpticF -> RewriteContinuation
-    run step input ctxs = case unFix step of
-      Id -> rewriteValue rewriter input ctxs
-      _ -> navigate step (Fix Id) input ctxs
+    run step input st = case unFix step of
+      Id -> rewriteValue rewriter input st
+      _ -> navigate step (Fix Id) input st
 
     navigate :: Fix OpticF -> Fix OpticF -> RewriteContinuation
-    navigate step suffix input ctxs = case unFix step of
-      Id -> run suffix input ctxs
-      Compose left right -> navigate left (composeStep right suffix) input ctxs
-      Field name -> rewriteField name suffix input ctxs
-      Each -> rewriteEach suffix input ctxs
-      Keys -> rewriteKeys suffix input ctxs
-      Values -> rewriteValues suffix input ctxs
-      Prism kind -> rewritePrism (prismPredicate kind) suffix input ctxs
-      PrismJust -> rewriteJust suffix input ctxs
-      Ix i -> rewriteIndex i suffix input ctxs
-      Filter o t -> rewriteFilter o t suffix input ctxs
+    navigate step suffix input st = case unFix step of
+      Id -> run suffix input st
+      Compose left right -> navigate left (composeStep right suffix) input st
+      Field name -> rewriteField name suffix input st
+      Each -> rewriteEach suffix input st
+      Keys -> rewriteKeys suffix input st
+      Values -> rewriteValues suffix input st
+      Prism kind -> rewritePrism (prismPredicate kind) suffix input st
+      PrismJust -> rewriteJust suffix input st
+      Ix i -> rewriteIndex i suffix input st
+      Filter o t -> rewriteFilter o t suffix input st
 
     composeStep :: Fix OpticF -> Fix OpticF -> Fix OpticF
     composeStep (Fix Id) rest = rest
@@ -103,31 +103,31 @@ runRewrite rewriter (Optic optic) config = run optic
     stripFilterGate _ = Nothing
 
     rewriteValue :: Rewriter -> RewriteContinuation
-    rewriteValue RewriteDelete input ctxs = do
+    rewriteValue RewriteDelete input st = do
       after <- lift (skipValueE input)
-      pure (ctxs, after)
+      pure (st, after)
     -- A constant replacement never reads the focused value: skip it
     -- at the text level instead of decoding it.
-    rewriteValue (RewriteTransform (Transformation (Fix (Const value)))) input ctxs = do
+    rewriteValue (RewriteTransform (Transformation (Fix (Const value)))) input st = do
       after <- lift (skipValueE input)
-      emitValueChunks value ctxs after
-    rewriteValue (RewriteTransform t) input ctxs = do
+      emitValueChunks value st after
+    rewriteValue (RewriteTransform t) input st = do
       events :> rest <- lift (S.toList (takeValue input))
       value <- case eventsToValue events of
         Left err -> throwError (HQRunnerError err)
         Right v -> case runTransformation t v of
           Left err -> throwError (HQTransformationError err)
           Right value -> pure value
-      emitValueChunks value ctxs rest
+      emitValueChunks value st rest
 
     -- \| Emit a transformed value's events as chunks.
-    emitValueChunks :: Value -> [EncodeCtx] -> Cursor -> ChunkStream (ExceptT HQError IO) ([EncodeCtx], Cursor)
-    emitValueChunks value ctxs cursor = go ctxs (valueToEvents value)
+    emitValueChunks :: Value -> EncoderState -> Cursor -> ChunkStream (ExceptT HQError IO) (EncoderState, Cursor)
+    emitValueChunks value st cursor = go st (valueToEvents value)
       where
-        go cs [] = pure (cs, cursor)
-        go cs (event : events) = do
-          cs' <- emitChunk config event cs
-          go cs' events
+        go s [] = pure (s, cursor)
+        go s (event : events) = do
+          s' <- emitChunk config event s
+          go s' events
 
     focusesWhole :: Fix OpticF -> JSONEvent -> Bool
     focusesWhole (Fix opticF) event = case opticF of
@@ -145,193 +145,193 @@ runRewrite rewriter (Optic optic) config = run optic
     -- \| Prism: value whose first event satisfies the predicate goes
     -- through the suffix; everything else passes through unchanged.
     rewritePrism :: (JSONEvent -> Bool) -> Fix OpticF -> RewriteContinuation
-    rewritePrism predicate suffix input ctxs = do
+    rewritePrism predicate suffix input st = do
       result <- lift (pullCursor input)
       case result of
-        Nothing -> pure (ctxs, input)
+        Nothing -> pure (st, input)
         Just (event, rest)
-          | predicate event -> run suffix (pushCursor event rest) ctxs
-          | otherwise -> takeValueChunks config (pushCursor event rest) ctxs
+          | predicate event -> run suffix (pushCursor event rest) st
+          | otherwise -> takeValueChunks config (pushCursor event rest) st
 
     -- \| Prism on non-null: null passes through, anything else goes
     -- through the suffix.
     rewriteJust :: Fix OpticF -> RewriteContinuation
-    rewriteJust suffix input ctxs = do
+    rewriteJust suffix input st = do
       result <- lift (pullCursor input)
       case result of
-        Nothing -> pure (ctxs, input)
+        Nothing -> pure (st, input)
         Just (JSONNull, rest) -> do
-          ctxs' <- emitChunk config JSONNull ctxs
-          pure (ctxs', rest)
-        Just (event, rest) -> run suffix (pushCursor event rest) ctxs
+          st' <- emitChunk config JSONNull st
+          pure (st', rest)
+        Just (event, rest) -> run suffix (pushCursor event rest) st
 
     -- \| Array index: rewrite the element at @index@, pass through the
     -- rest of the array. Non-arrays pass through unchanged.
     rewriteIndex :: Int -> Fix OpticF -> RewriteContinuation
-    rewriteIndex index suffix input ctxs = do
+    rewriteIndex index suffix input st = do
       result <- lift (pullCursor input)
       case result of
-        Nothing -> pure (ctxs, input)
+        Nothing -> pure (st, input)
         Just (JSONBeginArray, rest) -> do
-          ctxs' <- emitChunk config JSONBeginArray ctxs
-          go index rest ctxs'
-        Just (event, rest) -> takeValueChunks config (pushCursor event rest) ctxs
+          st' <- emitChunk config JSONBeginArray st
+          go index rest st'
+        Just (event, rest) -> takeValueChunks config (pushCursor event rest) st
       where
-        go n stream ctx = do
+        go n stream s = do
           result <- lift (pullCursor stream)
           case result of
             Nothing -> throwError (HQRunnerError UnexpectedEndReadingArray)
             Just (JSONEndArray, rest) -> do
-              ctx' <- emitChunk config JSONEndArray ctx
-              pure (ctx', rest)
+              s' <- emitChunk config JSONEndArray s
+              pure (s', rest)
             Just (event, rest)
               | n == 0 -> do
-                  (ctx', after) <- run suffix (pushCursor event rest) ctx
-                  go (-1) after ctx'
+                  (s', after) <- run suffix (pushCursor event rest) s
+                  go (-1) after s'
               | otherwise -> do
-                  (ctx', after) <- takeValueChunks config (pushCursor event rest) ctx
-                  go (n - 1) after ctx'
+                  (s', after) <- takeValueChunks config (pushCursor event rest) s
+                  go (n - 1) after s'
 
     -- \| Object field: rewrite the member named @name@ (dropping the key
     -- too under @delete@ when the suffix lands on the value), pass
     -- every other member through unchanged.
     rewriteField :: Text -> Fix OpticF -> RewriteContinuation
-    rewriteField name suffix input ctxs = do
+    rewriteField name suffix input st = do
       result <- lift (pullCursor input)
       case result of
-        Nothing -> pure (ctxs, input)
+        Nothing -> pure (st, input)
         Just (JSONBeginObject, rest) -> do
-          ctxs' <- emitChunk config JSONBeginObject ctxs
-          pairs rest ctxs'
-        Just (event, rest) -> takeValueChunks config (pushCursor event rest) ctxs
+          st' <- emitChunk config JSONBeginObject st
+          pairs rest st'
+        Just (event, rest) -> takeValueChunks config (pushCursor event rest) st
       where
-        pairs :: Cursor -> [EncodeCtx] -> ChunkStream (ExceptT HQError IO) ([EncodeCtx], Cursor)
-        pairs stream ctx = do
+        pairs :: Cursor -> EncoderState -> ChunkStream (ExceptT HQError IO) (EncoderState, Cursor)
+        pairs stream s = do
           result <- lift (pullCursor stream)
           case result of
             Nothing -> throwError (HQRunnerError UnexpectedEndReadingObject)
             Just (JSONEndObject, rest) -> do
-              ctx' <- emitChunk config JSONEndObject ctx
-              pure (ctx', rest)
+              s' <- emitChunk config JSONEndObject s
+              pure (s', rest)
             Just (JSONObjectKey key, rest)
-              | key == name -> rewriteMember suffix key rest pairs ctx
+              | key == name -> rewriteMember suffix key rest pairs s
               | otherwise -> do
-                  ctx' <- emitChunk config (JSONObjectKey key) ctx
-                  (ctx'', after) <- takeValueChunks config rest ctx'
-                  pairs after ctx''
+                  s' <- emitChunk config (JSONObjectKey key) s
+                  (s'', after) <- takeValueChunks config rest s'
+                  pairs after s''
             Just _ -> throwError (HQRunnerError InvalidObject)
 
     -- \| The @each@ traversal: rewrite every array element, or every
     -- object member value. Non-containers pass through.
     rewriteEach :: Fix OpticF -> RewriteContinuation
-    rewriteEach suffix input ctxs = do
+    rewriteEach suffix input st = do
       result <- lift (pullCursor input)
       case result of
-        Nothing -> pure (ctxs, input)
+        Nothing -> pure (st, input)
         Just (JSONBeginArray, rest) -> do
-          ctxs' <- emitChunk config JSONBeginArray ctxs
-          allElements rest ctxs'
+          st' <- emitChunk config JSONBeginArray st
+          allElements rest st'
         Just (JSONBeginObject, rest) -> do
-          ctxs' <- emitChunk config JSONBeginObject ctxs
-          allMembers rest ctxs'
-        Just (event, rest) -> takeValueChunks config (pushCursor event rest) ctxs
+          st' <- emitChunk config JSONBeginObject st
+          allMembers rest st'
+        Just (event, rest) -> takeValueChunks config (pushCursor event rest) st
       where
-        allElements :: Cursor -> [EncodeCtx] -> ChunkStream (ExceptT HQError IO) ([EncodeCtx], Cursor)
-        allElements stream ctx = do
+        allElements :: Cursor -> EncoderState -> ChunkStream (ExceptT HQError IO) (EncoderState, Cursor)
+        allElements stream s = do
           result <- lift (pullCursor stream)
           case result of
             Nothing -> throwError (HQRunnerError UnexpectedEndReadingArray)
             Just (JSONEndArray, rest) -> do
-              ctx' <- emitChunk config JSONEndArray ctx
-              pure (ctx', rest)
+              s' <- emitChunk config JSONEndArray s
+              pure (s', rest)
             Just (event, rest) -> do
-              (ctx', after) <- run suffix (pushCursor event rest) ctx
-              allElements after ctx'
+              (s', after) <- run suffix (pushCursor event rest) s
+              allElements after s'
 
-        allMembers :: Cursor -> [EncodeCtx] -> ChunkStream (ExceptT HQError IO) ([EncodeCtx], Cursor)
-        allMembers stream ctx = do
+        allMembers :: Cursor -> EncoderState -> ChunkStream (ExceptT HQError IO) (EncoderState, Cursor)
+        allMembers stream s = do
           result <- lift (pullCursor stream)
           case result of
             Nothing -> throwError (HQRunnerError UnexpectedEndReadingObject)
             Just (JSONEndObject, rest) -> do
-              ctx' <- emitChunk config JSONEndObject ctx
-              pure (ctx', rest)
+              s' <- emitChunk config JSONEndObject s
+              pure (s', rest)
             Just (JSONObjectKey key, rest) ->
-              rewriteMember suffix key rest allMembers ctx
+              rewriteMember suffix key rest allMembers s
             Just _ -> throwError (HQRunnerError InvalidObject)
 
     -- \| The @values@ traversal: rewrite every object member value.
     -- Arrays and scalars pass through unchanged (unlike 'rewriteEach').
     rewriteValues :: Fix OpticF -> RewriteContinuation
-    rewriteValues suffix input ctxs = do
+    rewriteValues suffix input st = do
       result <- lift (pullCursor input)
       case result of
-        Nothing -> pure (ctxs, input)
+        Nothing -> pure (st, input)
         Just (JSONBeginObject, rest) -> do
-          ctxs' <- emitChunk config JSONBeginObject ctxs
-          allMembers rest ctxs'
-        Just (event, rest) -> takeValueChunks config (pushCursor event rest) ctxs
+          st' <- emitChunk config JSONBeginObject st
+          allMembers rest st'
+        Just (event, rest) -> takeValueChunks config (pushCursor event rest) st
       where
-        allMembers :: Cursor -> [EncodeCtx] -> ChunkStream (ExceptT HQError IO) ([EncodeCtx], Cursor)
-        allMembers stream ctx = do
+        allMembers :: Cursor -> EncoderState -> ChunkStream (ExceptT HQError IO) (EncoderState, Cursor)
+        allMembers stream s = do
           result <- lift (pullCursor stream)
           case result of
             Nothing -> throwError (HQRunnerError UnexpectedEndReadingObject)
             Just (JSONEndObject, rest) -> do
-              ctx' <- emitChunk config JSONEndObject ctx
-              pure (ctx', rest)
+              s' <- emitChunk config JSONEndObject s
+              pure (s', rest)
             Just (JSONObjectKey key, rest) ->
-              rewriteMember suffix key rest allMembers ctx
+              rewriteMember suffix key rest allMembers s
             Just _ -> throwError (HQRunnerError InvalidObject)
 
     -- \| The @filter@ optic: gate the focused value as a whole, running
     -- the suffix on kept values and passing dropped values through
     -- unchanged.
     rewriteFilter :: Fix OpticF -> Transformation -> Fix OpticF -> RewriteContinuation
-    rewriteFilter o t suffix input ctxs = do
+    rewriteFilter o t suffix input st = do
       result <- lift (pullCursor input)
       case result of
-        Nothing -> pure (ctxs, input)
+        Nothing -> pure (st, input)
         Just (event, rest) -> do
           (keep, _, valCursor, _) <- lift (gateTake o t (pushCursor event rest))
           if keep
-            then run suffix valCursor ctxs
-            else takeValueChunks config valCursor ctxs
+            then run suffix valCursor st
+            else takeValueChunks config valCursor st
 
     -- \| The @keys@ traversal: rewrite object keys, leaving values alone.
     -- Arrays and scalars pass through unchanged (@keys@ is objects-only).
     rewriteKeys :: Fix OpticF -> RewriteContinuation
-    rewriteKeys suffix input ctxs = do
+    rewriteKeys suffix input st = do
       result <- lift (pullCursor input)
       case result of
-        Nothing -> pure (ctxs, input)
+        Nothing -> pure (st, input)
         Just (JSONBeginObject, rest) -> do
-          ctxs' <- emitChunk config JSONBeginObject ctxs
-          allKeys rest ctxs'
-        Just (event, rest) -> takeValueChunks config (pushCursor event rest) ctxs
+          st' <- emitChunk config JSONBeginObject st
+          allKeys rest st'
+        Just (event, rest) -> takeValueChunks config (pushCursor event rest) st
       where
-        allKeys :: Cursor -> [EncodeCtx] -> ChunkStream (ExceptT HQError IO) ([EncodeCtx], Cursor)
-        allKeys stream ctx = do
+        allKeys :: Cursor -> EncoderState -> ChunkStream (ExceptT HQError IO) (EncoderState, Cursor)
+        allKeys stream s = do
           result <- lift (pullCursor stream)
           case result of
             Nothing -> throwError (HQRunnerError UnexpectedEndReadingObject)
             Just (JSONEndObject, rest) -> do
-              ctx' <- emitChunk config JSONEndObject ctx
-              pure (ctx', rest)
+              s' <- emitChunk config JSONEndObject s
+              pure (s', rest)
             Just (JSONObjectKey key, rest) -> do
               action <- lift (rewriteKeyText suffix rewriter key)
               case action of
                 DropKey -> do
                   after <- lift (skipValueE rest)
-                  allKeys after ctx
+                  allKeys after s
                 KeepKey -> do
-                  ctx' <- emitChunk config (JSONObjectKey key) ctx
-                  (ctx'', after) <- takeValueChunks config rest ctx'
-                  allKeys after ctx''
+                  s' <- emitChunk config (JSONObjectKey key) s
+                  (s'', after) <- takeValueChunks config rest s'
+                  allKeys after s''
                 RenameKey newKey -> do
-                  ctx' <- emitChunk config (JSONObjectKey newKey) ctx
-                  (ctx'', after) <- takeValueChunks config rest ctx'
-                  allKeys after ctx''
+                  s' <- emitChunk config (JSONObjectKey newKey) s
+                  (s'', after) <- takeValueChunks config rest s'
+                  allKeys after s''
             Just _ -> throwError (HQRunnerError InvalidObject)
 
     -- \| Apply the remainder of a @keys@ optic plus the enclosing
@@ -356,8 +356,8 @@ runRewrite rewriter (Optic optic) config = run optic
     -- with @continue@. A leading @filter@ step gates the value first:
     -- dropped members pass through, and kept members deleted as a whole
     -- lose their key too.
-    rewriteMember :: Fix OpticF -> Text -> Cursor -> RewriteContinuation -> [EncodeCtx] -> ChunkStream (ExceptT HQError IO) ([EncodeCtx], Cursor)
-    rewriteMember suffix key stream continue ctxs = do
+    rewriteMember :: Fix OpticF -> Text -> Cursor -> RewriteContinuation -> EncoderState -> ChunkStream (ExceptT HQError IO) (EncoderState, Cursor)
+    rewriteMember suffix key stream continue st = do
       result <- lift (pullCursor stream)
       case result of
         Nothing -> throwError (HQRunnerError ExpectedMemberValue)
@@ -366,25 +366,25 @@ runRewrite rewriter (Optic optic) config = run optic
             (keep, firstEv, valCursor, afterValue) <- lift (gateTake o t (pushCursor event rest))
             if not keep
               then do
-                ctx' <- emitChunk config (JSONObjectKey key) ctxs
-                (ctx'', after) <- takeValueChunks config valCursor ctx'
-                continue after ctx''
+                st' <- emitChunk config (JSONObjectKey key) st
+                (st'', after) <- takeValueChunks config valCursor st'
+                continue after st''
               else case (rewriter, focusesWhole rest' firstEv) of
-                (RewriteDelete, True) -> continue afterValue ctxs
+                (RewriteDelete, True) -> continue afterValue st
                 _ -> do
-                  ctx' <- emitChunk config (JSONObjectKey key) ctxs
-                  (ctx'', after) <- run rest' valCursor ctx'
-                  continue after ctx''
+                  st' <- emitChunk config (JSONObjectKey key) st
+                  (st'', after) <- run rest' valCursor st'
+                  continue after st''
           Nothing -> case rewriter of
             RewriteDelete
               | focusesWhole suffix event -> do
                   after <- lift (skipValueE (pushCursor event rest))
-                  continue after ctxs
+                  continue after st
               | otherwise -> do
-                  ctx' <- emitChunk config (JSONObjectKey key) ctxs
-                  (ctx'', after) <- run suffix (pushCursor event rest) ctx'
-                  continue after ctx''
+                  st' <- emitChunk config (JSONObjectKey key) st
+                  (st'', after) <- run suffix (pushCursor event rest) st'
+                  continue after st''
             RewriteTransform _ -> do
-              ctx' <- emitChunk config (JSONObjectKey key) ctxs
-              (ctx'', after) <- run suffix (pushCursor event rest) ctx'
-              continue after ctx''
+              st' <- emitChunk config (JSONObjectKey key) st
+              (st'', after) <- run suffix (pushCursor event rest) st'
+              continue after st''

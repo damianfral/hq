@@ -16,6 +16,10 @@ module HQ.JSON.Encoder
     ChunkStream,
     BSStream,
     EncodeCtx (..),
+    NestDepth,
+    initialDepth,
+    EncoderState,
+    initialEncoderState,
     Raw (..),
     Join (..),
     EncoderConfig (..),
@@ -83,6 +87,34 @@ data EncodeCtx
     EncodeObjectAfterKey
   deriving (Eq, Show)
 
+-- | Nesting depth: the number of enclosing containers, tracking
+-- 'length' of the '[EncodeCtx]' stack without traversing it.
+-- Constructed once at 'initialDepth'; pushed with 'deeper', popped
+-- with 'shallower'.
+newtype NestDepth = NestDepth Int deriving (Eq, Ord, Show)
+
+-- | The depth outside all containers.
+initialDepth :: NestDepth
+initialDepth = NestDepth 0
+
+-- | Descend into a container.
+deeper :: NestDepth -> NestDepth
+deeper (NestDepth n) = NestDepth (n + 1)
+
+-- | Ascend out of a container.
+shallower :: NestDepth -> NestDepth
+shallower (NestDepth n) = NestDepth (n - 1)
+
+-- | Encoder state threaded through transcription: container contexts
+-- plus their depth, kept in sync by construction (only 'formatEvent'
+-- and 'closeContainer' reshape it).
+data EncoderState = EncoderState [EncodeCtx] NestDepth
+  deriving (Eq, Show)
+
+-- | The state outside all containers.
+initialEncoderState :: EncoderState
+initialEncoderState = EncoderState [] initialDepth
+
 -- | Show a 'Scientific' in compact JSON-compatible form.
 --
 -- GHC's 'show' instance for 'Scientific' produces "42.0" for integer
@@ -122,104 +154,111 @@ formatNonInteger c e
 -- values are rendered: a newline may separate them, and top-level
 -- strings may be emitted bare.
 encodeToChunks :: (Monad m) => EncoderConfig -> JSONStream m r -> ChunkStream m r
-encodeToChunks config = go []
+encodeToChunks config = go initialEncoderState
   where
-    go ctxs events = do
+    go st events = do
       result <- lift $ S.next events
       case result of
         Left r -> pure r
         Right (event, rest) ->
-          let (chunk, ctxs') = formatEvent config ctxs event
-           in S.yield chunk >> go ctxs' rest
+          let (chunk, st') = formatEvent config st event
+           in S.yield chunk >> go st' rest
 
 -- | Format a single event to a 'Chunk', threading the container
 -- context. This is one step of 'encodeToChunks', exposed so fused
 -- pipelines can format events without an intermediate event stream.
-formatEvent :: EncoderConfig -> [EncodeCtx] -> JSONEvent -> (Chunk, [EncodeCtx])
-formatEvent (EncoderConfig style (ValueOptions rawOpt joinOpt)) ctxs event =
+formatEvent :: EncoderConfig -> EncoderState -> JSONEvent -> (Chunk, EncoderState)
+formatEvent (EncoderConfig style (ValueOptions rawOpt joinOpt)) st event =
   case event of
     JSONEndArray -> closeContainerAndFinish
     JSONEndObject -> closeContainerAndFinish
     JSONBeginArray ->
-      let (sep, ctxs') = beforeValue style ctxs
-       in (sep <> encodeEvent event, EncodeArray False : ctxs')
+      let (sep, st') = beforeValue style st
+       in (sep <> encodeEvent event, pushCtx (EncodeArray False) st')
     JSONBeginObject ->
-      let (sep, ctxs') = beforeValue style ctxs
-       in (sep <> encodeEvent event, EncodeObject False : ctxs')
+      let (sep, st') = beforeValue style st
+       in (sep <> encodeEvent event, pushCtx (EncodeObject False) st')
     JSONObjectKey _ ->
-      let (sep, ctxs') = beforeKey style ctxs
-       in (sep <> encodeEvent event, ctxs')
+      let (sep, st') = beforeKey style st
+       in (sep <> encodeEvent event, st')
     _ ->
-      let (sep, ctxs') = beforeValue style ctxs
-          ctxs'' = afterValue ctxs'
-       in (sep <> valueChunk event ctxs <> finishValue ctxs'', ctxs'')
+      let (sep, st') = beforeValue style st
+          st'' = afterValue st'
+       in (sep <> valueChunk event st <> finishValue st'', st'')
   where
     closeContainerAndFinish =
-      let (sep, ctxs') = closeContainer style ctxs
-       in (sep <> finishValue ctxs', ctxs')
+      let (sep, st') = closeContainer style st
+       in (sep <> finishValue st', st')
+
+    -- Push one container context, tracking depth alongside.
+    pushCtx :: EncodeCtx -> EncoderState -> EncoderState
+    pushCtx ctx (EncoderState ctxs depth) = EncoderState (ctx : ctxs) (deeper depth)
 
     -- Render one value event, honoring raw top-level string output.
-    valueChunk :: JSONEvent -> [EncodeCtx] -> Chunk
-    valueChunk (JSONString text) valueCtxs
+    valueChunk :: JSONEvent -> EncoderState -> Chunk
+    valueChunk (JSONString text) (EncoderState valueCtxs _)
       | rawOpt == Raw && null valueCtxs = encodeRawString text
     valueChunk ev _ = encodeEvent ev
 
     -- Separator emitted after a complete top-level value.  A top-level
     -- value is one that leaves the context stack empty.
-    finishValue :: [EncodeCtx] -> Chunk
-    finishValue ctxs'
+    finishValue :: EncoderState -> Chunk
+    finishValue (EncoderState ctxs' _)
       | joinOpt == NoJoin && null ctxs' = Chunk newline 1
       | otherwise = mempty
 
 -- | The structural pieces to emit before an object key: a separator for
 -- the first or any following key, and the switch to
 -- 'EncodeObjectAfterKey' so the upcoming value gets its colon.
-beforeKey :: EncodeStyle -> [EncodeCtx] -> (Chunk, [EncodeCtx])
-beforeKey style ctxs = case ctxs of
+beforeKey :: EncodeStyle -> EncoderState -> (Chunk, EncoderState)
+beforeKey style st@(EncoderState ctxs depth) = case ctxs of
   EncodeObject seen : rest ->
-    ( elementSeparator style seen (length rest + 1),
-      EncodeObjectAfterKey : rest
+    ( elementSeparator style seen depth,
+      EncoderState (EncodeObjectAfterKey : rest) depth
     )
   -- A key outside a container; emit it bare.
-  _ -> (mempty, ctxs)
+  _ -> (mempty, st)
 
 -- | The structural pieces to emit before a value (a scalar or a
 -- container opening).  The context is left unchanged; 'afterValue'
 -- marks the parent non-empty once the value has arrived, or when a
 -- nested container closes.
-beforeValue :: EncodeStyle -> [EncodeCtx] -> (Chunk, [EncodeCtx])
-beforeValue style ctxs = case ctxs of
-  EncodeObjectAfterKey : _ -> (colonSeparator style, ctxs)
-  EncodeArray seen : rest ->
-    (elementSeparator style seen (length rest + 1), ctxs)
+beforeValue :: EncodeStyle -> EncoderState -> (Chunk, EncoderState)
+beforeValue style st@(EncoderState ctxs depth) = case ctxs of
+  EncodeObjectAfterKey : _ -> (colonSeparator style, st)
+  EncodeArray seen : _ ->
+    (elementSeparator style seen depth, st)
   -- A value where a key was expected (malformed input); recover by
   -- treating it as an additional array-like member.
-  EncodeObject seen : rest ->
-    (elementSeparator style seen (length rest + 1), ctxs)
+  EncodeObject seen : _ ->
+    (elementSeparator style seen depth, st)
   -- A top-level value; no separator.
-  [] -> (mempty, ctxs)
+  [] -> (mempty, st)
 
 -- | After a value was emitted, mark the innermost container non-empty.
-afterValue :: [EncodeCtx] -> [EncodeCtx]
-afterValue = \case
-  [] -> []
-  EncodeArray _ : rest -> EncodeArray True : rest
-  EncodeObject _ : rest -> EncodeObject True : rest
-  EncodeObjectAfterKey : rest -> EncodeObject True : rest
+afterValue :: EncoderState -> EncoderState
+afterValue (EncoderState ctxs depth) = EncoderState (mark ctxs) depth
+  where
+    mark = \case
+      [] -> []
+      EncodeArray _ : rest -> EncodeArray True : rest
+      EncodeObject _ : rest -> EncodeObject True : rest
+      EncodeObjectAfterKey : rest -> EncodeObject True : rest
 
 -- | Emit the closing delimiter for a container, then pop it and mark
 -- the parent container as having received a value.
-closeContainer :: EncodeStyle -> [EncodeCtx] -> (Chunk, [EncodeCtx])
-closeContainer _ [] = (mempty, [])
-closeContainer style (ctx : rest) =
-  (closingDelimiter style (length rest) ctx, afterValue rest)
+closeContainer :: EncodeStyle -> EncoderState -> (Chunk, EncoderState)
+closeContainer _ st@(EncoderState [] _) = (mempty, st)
+closeContainer style (EncoderState (ctx : rest) depth) =
+  let depth' = shallower depth
+   in (closingDelimiter style depth' ctx, afterValue (EncoderState rest depth'))
 
 -- | The closing delimiter of the innermost container.  An empty
 -- container stays on one line; a non-empty one is closed on its own
 -- line, indented to the depth of the container itself (the parent
 -- depth).
-closingDelimiter :: EncodeStyle -> Int -> EncodeCtx -> Chunk
-closingDelimiter style depth ctx = case ctx of
+closingDelimiter :: EncodeStyle -> NestDepth -> EncodeCtx -> Chunk
+closingDelimiter style (NestDepth depth) ctx = case ctx of
   EncodeArray seen -> close seen ']'
   EncodeObject seen -> close seen '}'
   EncodeObjectAfterKey -> close True '}'
@@ -236,10 +275,10 @@ closingDelimiter style depth ctx = case ctx of
 -- In 'Compact' mode this is just a comma (or nothing for the first
 -- item); in 'Pretty' mode a newline (preceded by a comma except for the
 -- first item) and indentation to @depth@.
-elementSeparator :: EncodeStyle -> Bool -> Int -> Chunk
+elementSeparator :: EncodeStyle -> Bool -> NestDepth -> Chunk
 elementSeparator Compact seen _ =
   if seen then Chunk comma 1 else mempty
-elementSeparator (Pretty width) seen depth =
+elementSeparator (Pretty width) seen (NestDepth depth) =
   let size = width * depth
       prefix = if seen then commaNewline else newline
    in Chunk (prefix <> indentSpaces size) (size + 1 + fromEnum seen)

@@ -7,7 +7,7 @@ import Data.Aeson (Value (..))
 import qualified Data.Text as T
 import HQ.Error (HQError (..), renderHQError)
 import HQ.JSON.Decoder (StreamIO, initialDecoder)
-import HQ.JSON.Encoder (EncodeStyle (..), EncoderConfig (..), Join (..), Raw (..), ValueOptions (..), encodeChunks)
+import HQ.JSON.Encoder (EncodeStyle (..), EncoderConfig (..), Join (..), Raw (..), ValueOptions (..), encodeChunks, initialEncodeState)
 import HQ.JSON.Event (JSONEvent (..), eventsToValue)
 import HQ.JSON.Parser (parseValueEvents)
 import HQ.Optic.Parser (parseOptic)
@@ -47,7 +47,7 @@ runRewriteTest run input = runRewriteChunks run [input]
 runRewriteChunks :: RewriteContinuation -> [Text] -> IO (Either Text [JSONEvent])
 runRewriteChunks run chunks = do
   result <- runExceptT $ do
-    (outChunks :> _) <- S.toList (run cursor [])
+    (outChunks :> _) <- S.toList (run cursor initialEncodeState)
     (byteChunks :> _) <- S.toList (encodeChunks 65536 (S.each outChunks))
     pure (decodeUtf8 (mconcat byteChunks))
   case first renderHQError result of

@@ -26,7 +26,7 @@ import qualified Data.ByteString.Lazy as LBS
 import Data.Text.IO (hPutStrLn)
 import HQ.Error (HQError (..), renderHQError)
 import HQ.JSON.Decoder (StreamIO, initialDecoder)
-import HQ.JSON.Encoder (BSStream, EncodeStyle (..), EncoderConfig (..), Join (..), Raw (..), ValueOptions (..), encode, encodeChunks)
+import HQ.JSON.Encoder (BSStream, EncodeStyle (..), EncoderConfig (..), Join (..), Raw (..), ValueOptions (..), encode, encodeChunks, initialEncoderState)
 import HQ.Query (Query (..))
 import HQ.Runner.Cursor
 import HQ.Runner.Error (RunnerError (..))
@@ -109,9 +109,9 @@ jsonRunner = do
     Preview optic -> pure (void (encode config 65536 (takeFirstValue (runFold optic cursor))))
     Fold optic -> pure (void (encode config 65536 (runFold optic cursor)))
     Over optic transformation ->
-      pure (void (encodeChunks 65536 (runRewrite (RewriteTransform transformation) optic config cursor [])))
+      pure (void (encodeChunks 65536 (runRewrite (RewriteTransform transformation) optic config cursor initialEncoderState)))
     Delete optic ->
-      pure (void (encodeChunks 65536 (runRewrite RewriteDelete optic config cursor [])))
+      pure (void (encodeChunks 65536 (runRewrite RewriteDelete optic config cursor initialEncoderState)))
 
 decodeUtf8Stream :: StreamIO ByteString () -> StreamIO Text ()
 decodeUtf8Stream = go mempty
