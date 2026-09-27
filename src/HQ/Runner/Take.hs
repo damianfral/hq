@@ -6,7 +6,7 @@ import Control.Monad.Error.Class (MonadError (throwError))
 import HQ.Error (HQError (..))
 import HQ.JSON.Decoder (DecodeError (..), Decoder (..), DecoderResult (..), DecoderState (..), Next (..), StreamIO, finish, pullEvent)
 import qualified HQ.JSON.Decoder as Decoder
-import HQ.JSON.Encoder (ChunkStream, EncodeCtx, EncoderConfig, formatEvent)
+import HQ.JSON.Encoder (Builder, Chunk (..), ChunkStream, EncodeCtx, EncoderConfig, formatEvent)
 import HQ.JSON.Event (JSONEvent (..))
 import HQ.Runner.Cursor (Continuation, Cursor (..), EventStream)
 import HQ.Runner.Error (RunnerError (..))
@@ -126,45 +126,105 @@ takeValueChunks config (Cursor buffered decoder text) ctxs = do
     JSONObjectKey _ -> throwError (HQRunnerError UnexpectedObjectKey)
     _ -> pure (ctxs', Cursor buffered' decoder' text')
 
+-- | Batch threshold for transcribed chunks, in estimated chars: past
+-- this, pending builders yield as one chunk instead of accumulating.
+-- Amortizes stream steps over many events; output bytes are
+-- unaffected (chunk boundaries never change them).
+batchSize :: Int
+batchSize = 8192
+
 -- | Take a container body, transcribing text straight to chunks: the
 -- decode and format steps fuse per event with no intermediate event
--- stream.
-takeContainerChunks :: EncoderConfig -> JSONEvent -> [JSONEvent] -> Decoder -> StreamIO Text () -> [EncodeCtx] -> ChunkStream (ExceptT HQError IO) ([EncodeCtx], Cursor)
-takeContainerChunks config closing = go
+-- stream. Formatted builders batch into one chunk per 'batchSize'
+-- chars instead of one chunk per event, amortizing stream steps over
+-- many events; output bytes are unaffected (chunk boundaries never
+-- change them).
+takeContainerChunks ::
+  EncoderConfig ->
+  JSONEvent ->
+  [JSONEvent] ->
+  Decoder ->
+  StreamIO Text () ->
+  [EncodeCtx] ->
+  ChunkStream (ExceptT HQError IO) ([EncodeCtx], Cursor)
+takeContainerChunks config closing buf0 dec0 txt0 ctx0 = go buf0 dec0 txt0 ctx0 mempty 0
   where
-    go buf dec txt ctx = case buf of
-      event : rest -> emit event rest dec txt ctx
+    go :: [JSONEvent] -> Decoder -> StreamIO Text () -> [EncodeCtx] -> Builder -> Int -> ChunkStream (ExceptT HQError IO) ([EncodeCtx], Cursor)
+    go buf dec txt ctx pend pendSize = case buf of
+      event : rest -> emit event rest dec txt ctx pend pendSize
       [] -> case Decoder.step dec of
         Left err -> throwError (HQDecodeError err)
-        Right (Emit event dec') -> emit event [] dec' txt ctx
-        Right (NeedInput dec') -> pullMore dec' txt ctx
+        Right (Emit event dec') -> emit event [] dec' txt ctx pend pendSize
+        Right (NeedInput dec') -> pullMore dec' txt ctx pend pendSize
         Right (Done _) -> throwError (HQRunnerError UnexpectedEndOfInput)
-    emit event buf dec txt ctx = do
-      ctx' <- emitChunk config event ctx
+    emit ::
+      JSONEvent ->
+      [JSONEvent] ->
+      Decoder ->
+      StreamIO Text () ->
+      [EncodeCtx] ->
+      Builder ->
+      Int ->
+      ChunkStream (ExceptT HQError IO) ([EncodeCtx], Cursor)
+    emit event buf dec txt ctx pend pendSize = do
+      let (Chunk b s, ctx') = formatEvent config ctx event
+          pend' = pend <> b
+          pendSize' = pendSize + s
       if event == closing
-        then pure (ctx', Cursor buf dec txt)
+        then do
+          flush pend' pendSize'
+          pure (ctx', Cursor buf dec txt)
         else case event of
-          JSONBeginArray -> nested JSONEndArray buf dec txt ctx'
-          JSONBeginObject -> nested JSONEndObject buf dec txt ctx'
-          _ -> go buf dec txt ctx'
-    nested end buf dec txt ctx = do
+          JSONBeginArray -> nested JSONEndArray buf dec txt ctx' pend' pendSize'
+          JSONBeginObject -> nested JSONEndObject buf dec txt ctx' pend' pendSize'
+          _ | pendSize' >= batchSize -> do
+            flush pend' pendSize'
+            go buf dec txt ctx' mempty 0
+          _ -> go buf dec txt ctx' pend' pendSize'
+    nested ::
+      JSONEvent ->
+      [JSONEvent] ->
+      Decoder ->
+      StreamIO Text () ->
+      [EncodeCtx] ->
+      Builder ->
+      Int ->
+      ChunkStream (ExceptT HQError IO) ([EncodeCtx], Cursor)
+    nested end buf dec txt ctx pend pendSize = do
+      -- Flush before descending so nested chunks yield after us.
+      flush pend pendSize
       (ctx', Cursor buf' dec' txt') <- takeContainerChunks config end buf dec txt ctx
-      takeContainerChunks config closing buf' dec' txt' ctx'
-    pullMore dec txt ctx = do
+      go buf' dec' txt' ctx' mempty 0
+    pullMore ::
+      Decoder ->
+      StreamIO Text () ->
+      [EncodeCtx] ->
+      Builder ->
+      Int ->
+      ChunkStream (ExceptT HQError IO) ([EncodeCtx], Cursor)
+    pullMore dec txt ctx pend pendSize = do
       result <- lift (S.next txt)
       case result of
-        Left () -> finishTake dec ctx
+        Left () -> finishTake dec ctx pend pendSize
         Right (chunk, rest) -> case Decoder.feed chunk dec of
           Left err -> throwError (HQDecodeError err)
-          Right (Emit event dec') -> emit event [] dec' rest ctx
-          Right (NeedInput dec') -> pullMore dec' rest ctx
+          Right (Emit event dec') -> emit event [] dec' rest ctx pend pendSize
+          Right (NeedInput dec') -> pullMore dec' rest ctx pend pendSize
           Right (Done _) -> throwError (HQRunnerError UnexpectedEndOfInput)
     -- Mirror 'drainAtEnd', emitting the final event as a chunk.
-    finishTake dec ctx = case finish dec of
+    finishTake ::
+      Decoder ->
+      [EncodeCtx] ->
+      Builder ->
+      Int ->
+      ChunkStream (ExceptT HQError IO) ([EncodeCtx], Cursor)
+    finishTake dec ctx pend pendSize = case finish dec of
       Left UnexpectedEnd
         | decoderState dec == DecoderStateValue && null (decoderStack dec) ->
             throwError (HQRunnerError UnexpectedEndOfInput)
       Left err -> throwError (HQDecodeError err)
       Right (Done _) -> throwError (HQRunnerError UnexpectedEndOfInput)
       Right (NeedInput _) -> throwError (HQDecodeError UnexpectedEnd)
-      Right (Emit event dec') -> emit event [] dec' (pure ()) ctx
+      Right (Emit event dec') -> emit event [] dec' (pure ()) ctx pend pendSize
+    flush :: Builder -> Int -> ChunkStream (ExceptT HQError IO) ()
+    flush pend pendSize = when (pendSize > 0) (S.yield (Chunk pend pendSize))

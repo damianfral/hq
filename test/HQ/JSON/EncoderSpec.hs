@@ -501,9 +501,9 @@ valueOptionsSpec = describe "value output options" $ do
               JSONEndArray
             ]
           expected = encodeEventsWith encConfig events
-      forM_ [1, 2, 3, 5, 8, 16] $ \chunkSize -> do
+      forM_ [1, 2, 3, 5, 8, 16] $ \flushSize -> do
         let concatenated = runIdentity $ do
-              result <- S.toList (encode encConfig chunkSize (S.each events))
+              result <- S.toList (encode encConfig flushSize (S.each events))
               case result of
                 chunks :> _ -> pure $ decodeUtf8 $ mconcat chunks
         concatenated `shouldBe` expected
