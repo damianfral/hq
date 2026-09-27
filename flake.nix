@@ -148,14 +148,14 @@
           src = ./bench;
           dontUnpack = true;
           nativeBuildInputs = [pkgs.makeWrapper];
-          buildInputs = [pkgs.hq pkgs.jq pkgs.time pkgs.miller];
+          buildInputs = [pkgs.hq pkgs.jq pkgs.time];
           buildPhase = ''
             set -xue
             mkdir -p "$out/bin"
             cp "$src/bench.sh" "$out/bin/hq-bench"
             chmod +x "$out/bin/hq-bench"
             wrapProgram "$out/bin/hq-bench" \
-              --prefix PATH : ${pkgs.lib.makeBinPath [pkgs.bash pkgs.time pkgs.hq pkgs.jq pkgs.coreutils pkgs.gawk pkgs.miller]}
+              --prefix PATH : ${pkgs.lib.makeBinPath [pkgs.bash pkgs.time pkgs.hq pkgs.jq pkgs.coreutils]}
           '';
         };
         packages.hq-bench-results = pkgs.stdenv.mkDerivation {

@@ -12,6 +12,10 @@
     {
       "calculate": "slice(datum.command, 0, 2) == 'hq' ? 'hq' : 'jq'",
       "as": "backend"
+    },
+    {
+      "aggregate": [{ "op": "median", "field": "peak_rss_mb", "as": "peak_rss_mb_median" }],
+      "groupby": ["command", "backend"]
     }
   ],
   "mark": "bar",
@@ -23,9 +27,9 @@
       "sort": null
     },
     "x": {
-      "field": "peak_rss_mb",
+      "field": "peak_rss_mb_median",
       "type": "quantitative",
-      "title": "Peak RSS (MB)"
+      "title": "Peak RSS median (MB)"
     },
     "color": {
       "field": "backend",
@@ -48,9 +52,9 @@
         "type": "nominal"
       },
       {
-        "field": "peak_rss_mb",
+        "field": "peak_rss_mb_median",
         "type": "quantitative",
-        "title": "Peak RSS (MB)"
+        "title": "Peak RSS median (MB)"
       }
     ]
   },
