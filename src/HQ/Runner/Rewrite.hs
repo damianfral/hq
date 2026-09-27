@@ -1,4 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 
 module HQ.Runner.Rewrite where
@@ -7,13 +6,16 @@ import Control.Monad.Error.Class (MonadError (throwError))
 import Data.Aeson (Value (..))
 import Data.Fix (Fix (..))
 import Data.Functor.Of (Of ((:>)))
+import HQ.Error (HQError (..))
 import HQ.JSON.Encoder (ChunkStream, EncodeCtx, EncoderConfig)
 import HQ.JSON.Event
 import HQ.Optic (Optic (..), OpticF (..), prismPredicate)
 import HQ.Runner.Cursor (Cursor (..), RewriteContinuation, pullCursor, pushCursor, skipValueE)
+import HQ.Runner.Error (RunnerError (..))
 import HQ.Runner.Fold (evalFilterGate)
 import HQ.Runner.Take (emitChunk, takeValue, takeValueChunks)
 import HQ.Transformation (Transformation (..), TransformationF (..), runTransformation)
+import HQ.Transformation.Error (TransformationError (..))
 import Relude hiding (Compose, Const)
 import qualified Streaming.Prelude as S
 
@@ -81,13 +83,13 @@ runRewrite rewriter (Optic optic) config = run optic
       Fix OpticF ->
       Transformation ->
       Cursor ->
-      ExceptT Text IO (Bool, JSONEvent, Cursor, Cursor)
+      ExceptT HQError IO (Bool, JSONEvent, Cursor, Cursor)
     gateTake o t cur = do
       (events :> afterValue) <- S.toList (takeValue cur)
-      v <- hoistEither $ eventsToValue events
-      keep <- hoistEither $ evalFilterGate o t v
+      v <- hoistEither $ first HQRunnerError $ eventsToValue events
+      keep <- hoistEither $ first HQTransformationError $ evalFilterGate o t v
       case events of
-        [] -> throwError "unexpected empty value"
+        [] -> throwError (HQRunnerError EmptyValue)
         (firstEv : _) ->
           let Cursor _ dec txt = afterValue
            in pure (keep, firstEv, Cursor events dec txt, afterValue)
@@ -111,12 +113,15 @@ runRewrite rewriter (Optic optic) config = run optic
       emitValueChunks value ctxs after
     rewriteValue (RewriteTransform t) input ctxs = do
       events :> rest <- lift (S.toList (takeValue input))
-      case eventsToValue events >>= runTransformation t of
-        Left err -> throwError err
-        Right value -> emitValueChunks value ctxs rest
+      value <- case eventsToValue events of
+        Left err -> throwError (HQRunnerError err)
+        Right v -> case runTransformation t v of
+          Left err -> throwError (HQTransformationError err)
+          Right value -> pure value
+      emitValueChunks value ctxs rest
 
     -- \| Emit a transformed value's events as chunks.
-    emitValueChunks :: Value -> [EncodeCtx] -> Cursor -> ChunkStream (ExceptT Text IO) ([EncodeCtx], Cursor)
+    emitValueChunks :: Value -> [EncodeCtx] -> Cursor -> ChunkStream (ExceptT HQError IO) ([EncodeCtx], Cursor)
     emitValueChunks value ctxs cursor = go ctxs (valueToEvents value)
       where
         go cs [] = pure (cs, cursor)
@@ -175,7 +180,7 @@ runRewrite rewriter (Optic optic) config = run optic
         go n stream ctx = do
           result <- lift (pullCursor stream)
           case result of
-            Nothing -> throwError "unexpected end of input while reading array"
+            Nothing -> throwError (HQRunnerError UnexpectedEndReadingArray)
             Just (JSONEndArray, rest) -> do
               ctx' <- emitChunk config JSONEndArray ctx
               pure (ctx', rest)
@@ -200,11 +205,11 @@ runRewrite rewriter (Optic optic) config = run optic
           pairs rest ctxs'
         Just (event, rest) -> takeValueChunks config (pushCursor event rest) ctxs
       where
-        pairs :: Cursor -> [EncodeCtx] -> ChunkStream (ExceptT Text IO) ([EncodeCtx], Cursor)
+        pairs :: Cursor -> [EncodeCtx] -> ChunkStream (ExceptT HQError IO) ([EncodeCtx], Cursor)
         pairs stream ctx = do
           result <- lift (pullCursor stream)
           case result of
-            Nothing -> throwError "unexpected end of input while reading object"
+            Nothing -> throwError (HQRunnerError UnexpectedEndReadingObject)
             Just (JSONEndObject, rest) -> do
               ctx' <- emitChunk config JSONEndObject ctx
               pure (ctx', rest)
@@ -214,7 +219,7 @@ runRewrite rewriter (Optic optic) config = run optic
                   ctx' <- emitChunk config (JSONObjectKey key) ctx
                   (ctx'', after) <- takeValueChunks config rest ctx'
                   pairs after ctx''
-            Just _ -> throwError "invalid JSON object"
+            Just _ -> throwError (HQRunnerError InvalidObject)
 
     -- \| The @each@ traversal: rewrite every array element, or every
     -- object member value. Non-containers pass through.
@@ -231,11 +236,11 @@ runRewrite rewriter (Optic optic) config = run optic
           allMembers rest ctxs'
         Just (event, rest) -> takeValueChunks config (pushCursor event rest) ctxs
       where
-        allElements :: Cursor -> [EncodeCtx] -> ChunkStream (ExceptT Text IO) ([EncodeCtx], Cursor)
+        allElements :: Cursor -> [EncodeCtx] -> ChunkStream (ExceptT HQError IO) ([EncodeCtx], Cursor)
         allElements stream ctx = do
           result <- lift (pullCursor stream)
           case result of
-            Nothing -> throwError "unexpected end of input while reading array"
+            Nothing -> throwError (HQRunnerError UnexpectedEndReadingArray)
             Just (JSONEndArray, rest) -> do
               ctx' <- emitChunk config JSONEndArray ctx
               pure (ctx', rest)
@@ -243,17 +248,17 @@ runRewrite rewriter (Optic optic) config = run optic
               (ctx', after) <- run suffix (pushCursor event rest) ctx
               allElements after ctx'
 
-        allMembers :: Cursor -> [EncodeCtx] -> ChunkStream (ExceptT Text IO) ([EncodeCtx], Cursor)
+        allMembers :: Cursor -> [EncodeCtx] -> ChunkStream (ExceptT HQError IO) ([EncodeCtx], Cursor)
         allMembers stream ctx = do
           result <- lift (pullCursor stream)
           case result of
-            Nothing -> throwError "unexpected end of input while reading object"
+            Nothing -> throwError (HQRunnerError UnexpectedEndReadingObject)
             Just (JSONEndObject, rest) -> do
               ctx' <- emitChunk config JSONEndObject ctx
               pure (ctx', rest)
             Just (JSONObjectKey key, rest) ->
               rewriteMember suffix key rest allMembers ctx
-            Just _ -> throwError "invalid JSON object"
+            Just _ -> throwError (HQRunnerError InvalidObject)
 
     -- \| The @values@ traversal: rewrite every object member value.
     -- Arrays and scalars pass through unchanged (unlike 'rewriteEach').
@@ -267,17 +272,17 @@ runRewrite rewriter (Optic optic) config = run optic
           allMembers rest ctxs'
         Just (event, rest) -> takeValueChunks config (pushCursor event rest) ctxs
       where
-        allMembers :: Cursor -> [EncodeCtx] -> ChunkStream (ExceptT Text IO) ([EncodeCtx], Cursor)
+        allMembers :: Cursor -> [EncodeCtx] -> ChunkStream (ExceptT HQError IO) ([EncodeCtx], Cursor)
         allMembers stream ctx = do
           result <- lift (pullCursor stream)
           case result of
-            Nothing -> throwError "unexpected end of input while reading object"
+            Nothing -> throwError (HQRunnerError UnexpectedEndReadingObject)
             Just (JSONEndObject, rest) -> do
               ctx' <- emitChunk config JSONEndObject ctx
               pure (ctx', rest)
             Just (JSONObjectKey key, rest) ->
               rewriteMember suffix key rest allMembers ctx
-            Just _ -> throwError "invalid JSON object"
+            Just _ -> throwError (HQRunnerError InvalidObject)
 
     -- \| The @filter@ optic: gate the focused value as a whole, running
     -- the suffix on kept values and passing dropped values through
@@ -305,11 +310,11 @@ runRewrite rewriter (Optic optic) config = run optic
           allKeys rest ctxs'
         Just (event, rest) -> takeValueChunks config (pushCursor event rest) ctxs
       where
-        allKeys :: Cursor -> [EncodeCtx] -> ChunkStream (ExceptT Text IO) ([EncodeCtx], Cursor)
+        allKeys :: Cursor -> [EncodeCtx] -> ChunkStream (ExceptT HQError IO) ([EncodeCtx], Cursor)
         allKeys stream ctx = do
           result <- lift (pullCursor stream)
           case result of
-            Nothing -> throwError "unexpected end of input while reading object"
+            Nothing -> throwError (HQRunnerError UnexpectedEndReadingObject)
             Just (JSONEndObject, rest) -> do
               ctx' <- emitChunk config JSONEndObject ctx
               pure (ctx', rest)
@@ -327,23 +332,23 @@ runRewrite rewriter (Optic optic) config = run optic
                   ctx' <- emitChunk config (JSONObjectKey newKey) ctx
                   (ctx'', after) <- takeValueChunks config rest ctx'
                   allKeys after ctx''
-            Just _ -> throwError "invalid JSON object"
+            Just _ -> throwError (HQRunnerError InvalidObject)
 
     -- \| Apply the remainder of a @keys@ optic plus the enclosing
     -- 'Rewriter' to one object key. Keys are scalar strings, so the
     -- suffix either focuses the key as a whole (checked with
     -- 'focusesWhole', e.g. @Id@ or @_String@) or it matches nothing and
     -- the key is kept.
-    rewriteKeyText :: Fix OpticF -> Rewriter -> Text -> ExceptT Text IO KeyAction
+    rewriteKeyText :: Fix OpticF -> Rewriter -> Text -> ExceptT HQError IO KeyAction
     rewriteKeyText suffix rw key = case rw of
       RewriteDelete
         | focusesWhole suffix (JSONString key) -> pure DropKey
         | otherwise -> pure KeepKey
       RewriteTransform t
         | focusesWhole suffix (JSONString key) -> case runTransformation t (String key) of
-            Left err -> throwError err
+            Left err -> throwError (HQTransformationError err)
             Right (String next) -> pure (if next == key then KeepKey else RenameKey next)
-            Right _ -> throwError "key transformation must yield a string"
+            Right _ -> throwError (HQTransformationError KeyNotString)
         | otherwise -> pure KeepKey
 
     -- \| Rewrite one object member. The key survives unless a @delete@
@@ -351,11 +356,11 @@ runRewrite rewriter (Optic optic) config = run optic
     -- with @continue@. A leading @filter@ step gates the value first:
     -- dropped members pass through, and kept members deleted as a whole
     -- lose their key too.
-    rewriteMember :: Fix OpticF -> Text -> Cursor -> RewriteContinuation -> [EncodeCtx] -> ChunkStream (ExceptT Text IO) ([EncodeCtx], Cursor)
+    rewriteMember :: Fix OpticF -> Text -> Cursor -> RewriteContinuation -> [EncodeCtx] -> ChunkStream (ExceptT HQError IO) ([EncodeCtx], Cursor)
     rewriteMember suffix key stream continue ctxs = do
       result <- lift (pullCursor stream)
       case result of
-        Nothing -> throwError "unexpected end of input after object key"
+        Nothing -> throwError (HQRunnerError ExpectedMemberValue)
         Just (event, rest) -> case stripFilterGate suffix of
           Just (o, t, rest') -> do
             (keep, firstEv, valCursor, afterValue) <- lift (gateTake o t (pushCursor event rest))

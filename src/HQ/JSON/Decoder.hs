@@ -9,7 +9,9 @@
 -- "HQ.JSON.Decoder.Keyword". This module wires them together: stepping,
 -- structural dispatch, the decode pipeline and event pulling.
 module HQ.JSON.Decoder
-  ( module HQ.JSON.Decoder.Core,
+  ( module HQ.Error,
+    module HQ.JSON.Decoder.Core,
+    module HQ.JSON.Decoder.Error,
     module HQ.JSON.Decoder.Keyword,
     module HQ.JSON.Decoder.Number,
     module HQ.JSON.Decoder.String,
@@ -37,7 +39,9 @@ where
 import Control.Monad.Error.Class (MonadError (throwError))
 import Data.Char (isDigit)
 import qualified Data.Text as T
+import HQ.Error
 import HQ.JSON.Decoder.Core
+import HQ.JSON.Decoder.Error
 import HQ.JSON.Decoder.Keyword
 import HQ.JSON.Decoder.Number
 import HQ.JSON.Decoder.String
@@ -267,18 +271,19 @@ drainAtEnd decoder r = case finish decoder of
 -- but returns one event at a time with the advanced cursor instead of
 -- an event stream. Navigation peeks at events through this; bulk
 -- take/skip loops drive 'step' directly.
-pullEvent :: Decoder -> StreamIO Text () -> ExceptT Text IO Next
+pullEvent :: Decoder -> StreamIO Text () -> ExceptT HQError IO Next
 pullEvent decoder txtStream = case step decoder of
-  Left err -> throwError (show err)
+  Left err -> throwError (HQDecodeError err)
   Right (Emit event dec') -> pure $ NextEvent event dec' txtStream
   Right (NeedInput dec') -> pullMore dec' txtStream
   Right (Done dec') -> endCheck dec' txtStream
   where
+    pullMore :: Decoder -> StreamIO Text () -> ExceptT HQError IO Next
     pullMore dec txt
       -- Pending input takes precedence over pulling more text,
       -- mirroring drain: only a truly drained decoder may end.
       | not (T.null (decoderInput dec)) = case step dec of
-          Left err -> throwError (show err)
+          Left err -> throwError (HQDecodeError err)
           Right (Emit event dec') -> pure (NextEvent event dec' txt)
           Right (NeedInput dec') -> pullMore dec' txt
           Right (Done dec') -> endCheck dec' txt
@@ -289,10 +294,11 @@ pullEvent decoder txtStream = case step decoder of
               | isRootDone dec || dec == initialDecoder -> pure EndOfInput
               | otherwise -> finishEnd dec
             Right (chunk, rest) -> case feed chunk dec of
-              Left err -> throwError (show err)
+              Left err -> throwError (HQDecodeError err)
               Right (Emit event dec') -> pure (NextEvent event dec' rest)
               Right (NeedInput dec') -> pullMore dec' rest
               Right (Done dec') -> endCheck dec' rest
+    endCheck :: Decoder -> StreamIO Text () -> ExceptT HQError IO Next
     endCheck dec txt = do
       result <- S.next txt
       case result of
@@ -301,20 +307,21 @@ pullEvent decoder txtStream = case step decoder of
           | isRootDone dec ->
               if T.all isWhitespace chunk
                 then endCheck dec rest
-                else throwError $ show TrailingInput
-          | otherwise -> throwError $ show TrailingInput
+                else throwError (HQDecodeError TrailingInput)
+          | otherwise -> throwError (HQDecodeError TrailingInput)
+    finishEnd :: Decoder -> ExceptT HQError IO Next
     finishEnd dec = case finish dec of
       Left UnexpectedEnd
         | decoderState dec == DecoderStateValue && null (decoderStack dec) ->
             pure EndOfInput
-      Left err -> throwError (show err)
+      Left err -> throwError (HQDecodeError err)
       Right (Done _) -> pure EndOfInput
-      Right (NeedInput _) -> throwError (show UnexpectedEnd)
+      Right (NeedInput _) -> throwError (HQDecodeError UnexpectedEnd)
       Right (Emit event dec') -> pure $ NextEvent event dec' $ pure ()
 
 decodeIO :: StreamIO Text () -> StreamIO JSONEvent ()
 decodeIO input = do
   result <- decode input
   case result of
-    Left err -> throwError (show err)
+    Left err -> throwError (HQDecodeError err)
     Right () -> pure ()

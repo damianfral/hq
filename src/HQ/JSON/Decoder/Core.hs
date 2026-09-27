@@ -9,6 +9,8 @@
 module HQ.JSON.Decoder.Core where
 
 import qualified Data.Text as T
+import HQ.Error (HQError)
+import HQ.JSON.Decoder.Error (DecodeError)
 import HQ.JSON.Decoder.StringBuffer
 import HQ.JSON.Event (JSONEvent (..))
 import Relude hiding (Compose, id, many, some, state)
@@ -106,22 +108,6 @@ data DecoderResult
   | Done Decoder
   deriving (Eq, Show)
 
-data DecodeError
-  = UnexpectedEnd
-  | UnexpectedChar Char
-  | UnexpectedToken Text
-  | ExpectedColon
-  | ExpectedCommaOrEnd
-  | ExpectedObjectKey
-  | ExpectedValue
-  | InvalidEscape Char
-  | InvalidUnicodeEscape
-  | InvalidSurrogatePair
-  | InvalidNumber Text
-  | InvalidKeyword Text
-  | TrailingInput
-  deriving (Eq, Show)
-
 emitScalar :: JSONEvent -> Text -> Decoder -> Either DecodeError DecoderResult
 emitScalar event remaining decoder =
   let newDec = decoder {decoderInput = remaining}
@@ -158,8 +144,8 @@ isLowSurrogate x = x >= 0xDC00 && x <= 0xDFFF
 -- event with the decoder and text positioned immediately after it.
 data Next = EndOfInput | NextEvent JSONEvent Decoder (StreamIO Text ())
 
--- | The house stream: 'Stream' over 'ExceptT Text IO', i.e. a stream
--- that can fail with a 'Text' error. All streaming pipelines in hq
--- run in this stack; see also 'EventStream' in "HQ.Runner.Cursor" for
--- the 'JSONEvent' instantiation used by folding.
-type StreamIO s = Stream (Of s) (ExceptT Text IO)
+-- | The house stream: 'Stream' over 'ExceptT HQError IO', i.e. a
+-- stream that can fail with an 'HQError'. All streaming pipelines in
+-- hq run in this stack; see also 'EventStream' in "HQ.Runner.Cursor"
+-- for the 'JSONEvent' instantiation used by folding.
+type StreamIO s = Stream (Of s) (ExceptT HQError IO)

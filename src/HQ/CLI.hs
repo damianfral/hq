@@ -43,7 +43,8 @@ valueReader :: ReadM Value
 valueReader = eitherReader $ first errorBundlePretty . parseValue . toText
 
 transformationReader :: ReadM Transformation
-transformationReader = eitherReader $ first errorBundlePretty . parseTransformation . toText
+transformationReader =
+  eitherReader $ first errorBundlePretty . parseTransformation . toText
 
 queryParser :: Parser Query
 queryParser =

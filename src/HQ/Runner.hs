@@ -1,6 +1,5 @@
 {-# LANGUAGE DerivingStrategies #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
-{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE StrictData #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 
@@ -25,10 +24,12 @@ import Control.Monad.Error.Class (MonadError (throwError))
 import qualified Data.ByteString as BS
 import qualified Data.ByteString.Lazy as LBS
 import Data.Text.IO (hPutStrLn)
+import HQ.Error (HQError (..), renderHQError)
 import HQ.JSON.Decoder (StreamIO, initialDecoder)
 import HQ.JSON.Encoder (BSStream, EncodeStyle (..), EncoderConfig (..), Join (..), Raw (..), ValueOptions (..), encode, encodeChunks)
 import HQ.Query (Query (..))
 import HQ.Runner.Cursor
+import HQ.Runner.Error (RunnerError (..))
 import HQ.Runner.Fold
 import HQ.Runner.Rewrite
 import HQ.Runner.Take
@@ -42,19 +43,19 @@ data RunnerEnv = RunnerEnv
     runnerEnvConfig :: EncoderConfig
   }
 
-newtype RunnerF a = Runner {unRunner :: ReaderT RunnerEnv (ExceptT Text IO) a}
+newtype RunnerF a = Runner {unRunner :: ReaderT RunnerEnv (ExceptT HQError IO) a}
   deriving newtype
     ( Functor,
       Applicative,
       Monad,
       MonadIO,
       MonadReader RunnerEnv,
-      MonadError Text
+      MonadError HQError
     )
 
-type Runner = RunnerF (BSStream (ExceptT Text IO) ())
+type Runner = RunnerF (BSStream (ExceptT HQError IO) ())
 
-runRunner :: Runner -> Query -> EncoderConfig -> Handle -> ExceptT Text IO (BSStream (ExceptT Text IO) ())
+runRunner :: Runner -> Query -> EncoderConfig -> Handle -> ExceptT HQError IO (BSStream (ExceptT HQError IO) ())
 runRunner (Runner runner) query config handle = runReaderT runner env
   where
     env = RunnerEnv query (streamHandle 256 handle) config
@@ -79,7 +80,7 @@ runRunnerIOWith runner query encConfig handle = do
     byteStream <- runRunner runner query encConfig handle
     S.mapM_ write byteStream
   case r of
-    Left e -> hPutStrLn stderr e >> exitFailure
+    Left e -> hPutStrLn stderr (renderHQError e) >> exitFailure
     Right v -> pure v
   where
     write = liftIO . LBS.hPut stdout
@@ -129,7 +130,7 @@ decodeUtf8Stream = go mempty
 
     decodeAndYield :: ByteString -> StreamIO Text ()
     decodeAndYield bs = case decodeUtf8' bs of
-      Left _ -> throwError "invalid UTF-8 input"
+      Left _ -> throwError (HQRunnerError InvalidUtf8)
       Right text -> S.yield text
 
 -- | Compute the length of the longest prefix of a strict ByteString that

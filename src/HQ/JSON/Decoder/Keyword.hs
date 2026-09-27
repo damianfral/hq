@@ -7,6 +7,7 @@ module HQ.JSON.Decoder.Keyword where
 
 import qualified Data.Text as T
 import HQ.JSON.Decoder.Core
+import HQ.JSON.Decoder.Error (DecodeError (..))
 import HQ.JSON.Event (JSONEvent (..))
 import Relude hiding (Compose, id, many, some, state)
 

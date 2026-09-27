@@ -20,6 +20,7 @@ import qualified Data.Text as T
 import Data.Text.Lazy (toStrict)
 import Data.Vector (Vector)
 import GHC.Show (ShowS, appPrec)
+import HQ.Transformation.Error (TransformationError (..))
 import Relude hiding (Const, many, not, or, some, subtract, toStrict)
 import Prelude (Show (showsPrec), showParen, showString)
 
@@ -182,10 +183,10 @@ combine (Transformation a) (Transformation b) = Transformation (Fix (Combine a b
 -- value (for example adding to a string) fails with a description of the
 -- expected value type.  Composition applies right-to-left, matching the
 -- @a . b@ DSL syntax: @b@ runs first, then @a@ over its result.
-runTransformation :: Transformation -> Value -> Either Text Value
+runTransformation :: Transformation -> Value -> Either TransformationError Value
 runTransformation (Transformation transformation) = run transformation
   where
-    run :: Fix TransformationF -> Value -> Either Text Value
+    run :: Fix TransformationF -> Value -> Either TransformationError Value
     run (Fix step) value = case step of
       Add n -> withNumber (Number . (+ n)) value
       Multiply n -> withNumber (Number . (* n)) value
@@ -204,21 +205,21 @@ runTransformation (Transformation transformation) = run transformation
           Bool b
             | b -> pure result
             | otherwise -> run right value
-          _ -> Left "expected a boolean result from the left side of or"
+          _ -> Left OrBranchNotBoolean
       Combine left right -> run right value >>= run left
 
-    withNumber :: (Scientific -> Value) -> Value -> Either Text Value
+    withNumber :: (Scientific -> Value) -> Value -> Either TransformationError Value
     withNumber apply (Number n) = pure (apply n)
-    withNumber _ _ = Left "expected a number"
+    withNumber _ _ = Left ExpectedNumber
 
-    withString :: (Text -> Value) -> Value -> Either Text Value
+    withString :: (Text -> Value) -> Value -> Either TransformationError Value
     withString apply (String s) = pure (apply s)
-    withString _ _ = Left "expected a string"
+    withString _ _ = Left ExpectedString
 
-    withArray :: (Vector Value -> Value) -> Value -> Either Text Value
+    withArray :: (Vector Value -> Value) -> Value -> Either TransformationError Value
     withArray apply (Array a) = pure (apply a)
-    withArray _ _ = Left "expected an array"
+    withArray _ _ = Left ExpectedArray
 
-    withBool :: (Bool -> Value) -> Value -> Either Text Value
+    withBool :: (Bool -> Value) -> Value -> Either TransformationError Value
     withBool apply (Bool b) = pure (apply b)
-    withBool _ _ = Left "expected a boolean"
+    withBool _ _ = Left ExpectedBoolean

@@ -3,6 +3,7 @@
 
 module HQ.Runner.FoldSpec (spec) where
 
+import HQ.Error (renderHQError)
 import HQ.JSON.Decoder (StreamIO, initialDecoder)
 import HQ.JSON.Event (JSONEvent (..), valueToEvents)
 import HQ.JSON.Parser (parseValue)
@@ -10,6 +11,7 @@ import HQ.Optic (Optic)
 import HQ.Optic.Parser (parseOptic)
 import HQ.Runner.Cursor (Cursor (..))
 import HQ.Runner.Fold (focusMany, runFold, runPreview)
+import HQ.Transformation.Error (renderTransformationError)
 import Relude hiding (Compose, id, many, not, or, some, subtract, toStrict)
 import qualified Streaming.Prelude as S
 import Test.HQ (chunkSplits)
@@ -36,7 +38,9 @@ spec = describe "HQ.Runner.Fold" $ do
 -- and collects all yielded events into a list. Runs in IO because the
 -- streaming decoder and cursor use IO internally.
 runFoldTest :: Optic -> Text -> IO (Either Text [JSONEvent])
-runFoldTest optic input = runExceptT $ S.toList_ $ runFold optic cursor
+runFoldTest optic input = do
+  result <- runExceptT $ S.toList_ $ runFold optic cursor
+  pure (first renderHQError result)
   where
     textStream :: StreamIO Text ()
     textStream = S.yield input
@@ -51,7 +55,9 @@ runQueryTest opticStr jsonInput = case parseOptic opticStr of
 -- | Run a preview optic against a JSON text input and collect the
 -- (at most one) output value's events.
 runPreviewTest :: Optic -> Text -> IO (Either Text [JSONEvent])
-runPreviewTest optic input = runExceptT $ S.toList_ $ runPreview optic cursor
+runPreviewTest optic input = do
+  result <- runExceptT $ S.toList_ $ runPreview optic cursor
+  pure (first renderHQError result)
   where
     textStream :: StreamIO Text ()
     textStream = S.yield input
@@ -65,7 +71,9 @@ runQueryPreviewTest opticStr jsonInput = case parseOptic opticStr of
 
 -- | Run a fold optic against chunked JSON text.
 runFoldChunks :: Optic -> [Text] -> IO (Either Text [JSONEvent])
-runFoldChunks optic chunks = runExceptT $ S.toList_ $ runFold optic cursor
+runFoldChunks optic chunks = do
+  result <- runExceptT $ S.toList_ $ runFold optic cursor
+  pure (first renderHQError result)
   where
     textStream :: StreamIO Text ()
     textStream = S.each chunks
@@ -73,7 +81,9 @@ runFoldChunks optic chunks = runExceptT $ S.toList_ $ runFold optic cursor
 
 -- | Run a preview optic against chunked JSON text.
 runPreviewChunks :: Optic -> [Text] -> IO (Either Text [JSONEvent])
-runPreviewChunks optic chunks = runExceptT $ S.toList_ $ runPreview optic cursor
+runPreviewChunks optic chunks = do
+  result <- runExceptT $ S.toList_ $ runPreview optic cursor
+  pure (first renderHQError result)
   where
     textStream :: StreamIO Text ()
     textStream = S.each chunks
@@ -311,7 +321,7 @@ differentialSpec = describe "pure vs streaming folds" $ do
         case (parseOptic opticStr, parseValue doc) of
           (Right optic, Right value) -> do
             actual <- runFoldTest optic doc
-            let expected = concatMap valueToEvents <$> focusMany optic value
+            let expected = first renderTransformationError (concatMap valueToEvents <$> focusMany optic value)
             (sortOn (show :: JSONEvent -> String) <$> actual)
               `shouldBe` (sortOn (show :: JSONEvent -> String) <$> expected)
           (Left err, _) -> expectationFailure $ "bad optic: " <> show err

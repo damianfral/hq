@@ -1,5 +1,4 @@
 {-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE StrictData #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 
@@ -10,6 +9,7 @@ import qualified Data.Aeson.Key as Key
 import qualified Data.Aeson.KeyMap as KeyMap
 import Data.Scientific (Scientific)
 import qualified Data.Vector as Vector
+import HQ.Runner.Error (RunnerError (..))
 import Relude hiding (Compose, id, many, some, state)
 
 --------------------------------------------------------------------------------
@@ -67,14 +67,14 @@ isObject = \case
 -- The whole event list must form exactly one value: any trailing events
 -- are rejected.  The input is expected to come from the JSON parser, so
 -- the failure cases only guard against malformed event sequences.
-eventsToValue :: [JSONEvent] -> Either Text Value
+eventsToValue :: [JSONEvent] -> Either RunnerError Value
 eventsToValue events =
   case parseValue events of
     Left err -> Left err
     Right (value, []) -> Right value
-    Right _ -> Left "trailing events after a JSON value"
+    Right _ -> Left TrailingEventsAfterValue
   where
-    parseValue :: [JSONEvent] -> Either Text (Value, [JSONEvent])
+    parseValue :: [JSONEvent] -> Either RunnerError (Value, [JSONEvent])
     parseValue (JSONNull : rest) = Right (Null, rest)
     parseValue (JSONBool b : rest) = Right (Bool b, rest)
     parseValue (JSONNumber n : rest) = Right (Number n, rest)
@@ -83,22 +83,22 @@ eventsToValue events =
       first (Array . Vector.fromList) <$> parseElements rest
     parseValue (JSONBeginObject : rest) =
       first (Object . KeyMap.fromList) <$> parseMembers rest
-    parseValue _ = Left "expected a JSON value"
+    parseValue _ = Left ExpectedJSONValue
 
-    parseElements :: [JSONEvent] -> Either Text ([Value], [JSONEvent])
+    parseElements :: [JSONEvent] -> Either RunnerError ([Value], [JSONEvent])
     parseElements (JSONEndArray : rest) = Right ([], rest)
     parseElements input = do
       (value, rest) <- parseValue input
       (values, rest') <- parseElements rest
       Right (value : values, rest')
 
-    parseMembers :: [JSONEvent] -> Either Text ([(Key.Key, Value)], [JSONEvent])
+    parseMembers :: [JSONEvent] -> Either RunnerError ([(Key.Key, Value)], [JSONEvent])
     parseMembers (JSONEndObject : rest) = Right ([], rest)
     parseMembers (JSONObjectKey key : rest) = do
       (value, rest') <- parseValue rest
       (members, rest'') <- parseMembers rest'
       Right ((Key.fromText key, value) : members, rest'')
-    parseMembers _ = Left "expected an object key"
+    parseMembers _ = Left ExpectedObjectKeyEvent
 
 -- | Encode a JSON value as a sequence of events.
 valueToEvents :: Value -> [JSONEvent]

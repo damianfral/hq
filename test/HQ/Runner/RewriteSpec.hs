@@ -3,9 +3,9 @@
 
 module HQ.Runner.RewriteSpec (spec) where
 
-import Control.Monad.Error.Class (throwError)
 import Data.Aeson (Value (..))
 import qualified Data.Text as T
+import HQ.Error (HQError (..), renderHQError)
 import HQ.JSON.Decoder (StreamIO, initialDecoder)
 import HQ.JSON.Encoder (EncodeStyle (..), EncoderConfig (..), Join (..), Raw (..), ValueOptions (..), encodeChunks)
 import HQ.JSON.Event (JSONEvent (..), eventsToValue)
@@ -45,17 +45,20 @@ runRewriteTest run input = runRewriteChunks run [input]
 
 -- | Run a document-rewriting query against chunked JSON text.
 runRewriteChunks :: RewriteContinuation -> [Text] -> IO (Either Text [JSONEvent])
-runRewriteChunks run chunks = runExceptT $ do
-  (outChunks :> _) <- S.toList (run cursor [])
-  (byteChunks :> _) <- S.toList (encodeChunks 65536 (S.each outChunks))
-  let text = decodeUtf8 (mconcat byteChunks)
-  -- No output bytes means no values (e.g. deleting the whole
-  -- document): nothing to reparse.
-  if T.null (T.strip text)
-    then pure []
-    else case parseValueEvents text of
-      Left err -> throwError err
-      Right events -> pure events
+runRewriteChunks run chunks = do
+  result <- runExceptT $ do
+    (outChunks :> _) <- S.toList (run cursor [])
+    (byteChunks :> _) <- S.toList (encodeChunks 65536 (S.each outChunks))
+    pure (decodeUtf8 (mconcat byteChunks))
+  case first renderHQError result of
+    Left err -> pure (Left err)
+    Right text
+      -- No output bytes means no values (e.g. deleting the whole
+      -- document): nothing to reparse.
+      | T.null (T.strip text) -> pure (Right [])
+      | otherwise -> case parseValueEvents text of
+          Left err -> pure (Left err)
+          Right events -> pure (Right events)
   where
     textStream :: StreamIO Text ()
     textStream = S.each chunks
@@ -69,10 +72,12 @@ runRewriteChunks run chunks = runExceptT $ do
 runSetTest :: Text -> Text -> Text -> IO (Either Text [JSONEvent])
 runSetTest opticStr valueStr jsonInput = case parseOptic opticStr of
   Left err -> pure (Left (show err))
-  Right optic -> case parseValueEvents valueStr >>= eventsToValue of
+  Right optic -> case parseValueEvents valueStr of
     Left err -> pure (Left err)
-    Right value ->
-      runRewriteTest (runOver optic (constValue value) testConfig) jsonInput
+    Right events -> case eventsToValue events of
+      Left err -> pure (Left (renderHQError (HQRunnerError err)))
+      Right value ->
+        runRewriteTest (runOver optic (constValue value) testConfig) jsonInput
 
 -- | Parse an optic string and run @delete@ against JSON input,
 -- collecting the rewritten document's events.

@@ -11,6 +11,7 @@ import Data.Bits (Bits (..), shiftL)
 import Data.Char (digitToInt, isHexDigit)
 import qualified Data.Text as T
 import HQ.JSON.Decoder.Core
+import HQ.JSON.Decoder.Error (DecodeError (..))
 import HQ.JSON.Decoder.StringBuffer
 import HQ.JSON.Event (JSONEvent (..))
 import Relude hiding (Compose, id, many, some, state)

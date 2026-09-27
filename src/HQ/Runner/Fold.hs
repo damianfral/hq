@@ -1,4 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 
 module HQ.Runner.Fold where
@@ -9,12 +8,15 @@ import qualified Data.Aeson.Key as Key
 import qualified Data.Aeson.KeyMap as KeyMap
 import Data.Fix (Fix (..))
 import qualified Data.Vector as Vector
+import HQ.Error (HQError (..))
 import HQ.JSON.Decoder (initialDecoder)
 import HQ.JSON.Event
 import HQ.Optic (Optic (..), OpticF (..), PrismKind, prismPredicate)
 import HQ.Runner.Cursor (Continuation, Cursor (..), EventStream, pullCursor, pushCursor, skipMemberValue, skipValue)
+import HQ.Runner.Error (RunnerError (..))
 import HQ.Runner.Take (takeFirstValue, takeValue)
 import HQ.Transformation (Transformation, runTransformation)
+import HQ.Transformation.Error (TransformationError (..))
 import Relude hiding (Compose, id, many, some, state)
 import Streaming (Of (..))
 import qualified Streaming.Prelude as S
@@ -53,7 +55,7 @@ runFold (Optic optic) = run optic takeValue
         go input = do
           result <- lift (pullCursor input)
           case result of
-            Nothing -> throwError "unexpected end of input while reading object"
+            Nothing -> throwError (HQRunnerError UnexpectedEndReadingObject)
             Just (JSONEndObject, rest) -> pure rest
             Just (JSONObjectKey key, rest)
               | key == name -> do
@@ -62,19 +64,19 @@ runFold (Optic optic) = run optic takeValue
               | otherwise -> do
                   afterValue <- skipMemberValue rest
                   go afterValue
-            Just _ -> throwError "invalid JSON object"
+            Just _ -> throwError (HQRunnerError InvalidObject)
 
     -- \| Consume the rest of an object after a matched member value.
     skipRestOfObject :: Cursor -> EventStream Cursor
     skipRestOfObject input = do
       result <- lift (pullCursor input)
       case result of
-        Nothing -> throwError "unexpected end of input while reading object"
+        Nothing -> throwError (HQRunnerError UnexpectedEndReadingObject)
         Just (JSONEndObject, rest) -> pure rest
         Just (JSONObjectKey _, rest) -> do
           afterValue <- skipMemberValue rest
           skipRestOfObject afterValue
-        Just _ -> throwError "invalid JSON object"
+        Just _ -> throwError (HQRunnerError InvalidObject)
 
     ----------------------------------------------------------------
     -- Each
@@ -92,7 +94,7 @@ runFold (Optic optic) = run optic takeValue
         eachArray stream = do
           result <- lift (pullCursor stream)
           case result of
-            Nothing -> throwError "unexpected end of input while reading array"
+            Nothing -> throwError (HQRunnerError UnexpectedEndReadingArray)
             Just (JSONEndArray, rest) -> pure rest
             Just (event, rest) -> do
               afterElement <- k (pushCursor event rest)
@@ -101,12 +103,12 @@ runFold (Optic optic) = run optic takeValue
         eachObject stream = do
           result <- lift (pullCursor stream)
           case result of
-            Nothing -> throwError "unexpected end of input while reading object"
+            Nothing -> throwError (HQRunnerError UnexpectedEndReadingObject)
             Just (JSONEndObject, rest) -> pure rest
             Just (JSONObjectKey _, rest) -> do
               afterValue <- k rest -- cursor is already at the value
               eachObject afterValue
-            Just _ -> throwError "invalid JSON object"
+            Just _ -> throwError (HQRunnerError InvalidObject)
 
     ----------------------------------------------------------------
     -- Keys: object keys as strings (objects only)
@@ -124,13 +126,13 @@ runFold (Optic optic) = run optic takeValue
         keysObject stream = do
           result <- lift (pullCursor stream)
           case result of
-            Nothing -> throwError "unexpected end of input while reading object"
+            Nothing -> throwError (HQRunnerError UnexpectedEndReadingObject)
             Just (JSONEndObject, rest) -> pure rest
             Just (JSONObjectKey key, rest) -> do
               _ <- k (Cursor [JSONString key] initialDecoder (pure ()))
               afterValue <- skipMemberValue rest
               keysObject afterValue
-            Just _ -> throwError "invalid JSON object"
+            Just _ -> throwError (HQRunnerError InvalidObject)
 
     ----------------------------------------------------------------
     -- Values: object member values only (arrays focus on nothing)
@@ -147,12 +149,12 @@ runFold (Optic optic) = run optic takeValue
         valuesObject stream = do
           result <- lift (pullCursor stream)
           case result of
-            Nothing -> throwError "unexpected end of input while reading object"
+            Nothing -> throwError (HQRunnerError UnexpectedEndReadingObject)
             Just (JSONEndObject, rest) -> pure rest
             Just (JSONObjectKey _, rest) -> do
               afterValue <- k rest -- cursor is already at the value
               valuesObject afterValue
-            Just _ -> throwError "invalid JSON object"
+            Just _ -> throwError (HQRunnerError InvalidObject)
 
     ----------------------------------------------------------------
     -- Filter: keep the value when the predicate holds of the
@@ -167,9 +169,9 @@ runFold (Optic optic) = run optic takeValue
         Just (event, rest0) -> do
           events :> rest <- lift (S.toList (takeValue (pushCursor event rest0)))
           keep <- case eventsToValue events of
-            Left err -> throwError err
+            Left err -> throwError (HQRunnerError err)
             Right v -> case evalFilterGate o t v of
-              Left err -> throwError err
+              Left err -> throwError (HQTransformationError err)
               Right b -> pure b
           if keep
             then k (Cursor events (cursorDecoder rest) (cursorText rest))
@@ -220,7 +222,7 @@ runFold (Optic optic) = run optic takeValue
           | otherwise = do
               result <- lift (pullCursor stream)
               case result of
-                Nothing -> throwError "unexpected end of input while reading array"
+                Nothing -> throwError (HQRunnerError UnexpectedEndReadingArray)
                 Just (JSONEndArray, rest) -> pure rest
                 Just (event, rest) -> case n of
                   0 -> do
@@ -235,7 +237,7 @@ runFold (Optic optic) = run optic takeValue
     skipRestOfArray input = do
       result <- lift (pullCursor input)
       case result of
-        Nothing -> throwError "unexpected end of input while reading array"
+        Nothing -> throwError (HQRunnerError UnexpectedEndReadingArray)
         Just (JSONEndArray, rest) -> pure rest
         Just (event, rest) -> do
           afterValue <- skipValue (pushCursor event rest)
@@ -253,10 +255,10 @@ runFold (Optic optic) = run optic takeValue
 -- | Focus an optic on an in-memory value, collecting every focused
 -- value. Used to evaluate @filter@ gates without re-driving the
 -- streaming decoder.
-focusMany :: Optic -> Value -> Either Text [Value]
+focusMany :: Optic -> Value -> Either TransformationError [Value]
 focusMany (Optic optic) = focusFix optic
   where
-    focusFix :: Fix OpticF -> Value -> Either Text [Value]
+    focusFix :: Fix OpticF -> Value -> Either TransformationError [Value]
     focusFix (Fix f) v = case f of
       Field name -> pure (lookupField name v)
       Each -> pure (eachValues v)
@@ -275,19 +277,19 @@ focusMany (Optic optic) = focusFix optic
 
 -- | Evaluate a @filter@ gate on an in-memory value: true when the
 -- transformation maps some focused sub-value to true.
-evalFilterGate :: Fix OpticF -> Transformation -> Value -> Either Text Bool
+evalFilterGate :: Fix OpticF -> Transformation -> Value -> Either TransformationError Bool
 evalFilterGate o t v = focusMany (Optic o) v >>= anyMatch t
   where
-    anyMatch :: Transformation -> [Value] -> Either Text Bool
+    anyMatch :: Transformation -> [Value] -> Either TransformationError Bool
     anyMatch _ [] = pure False
     anyMatch t' (w : ws) = do
       b <- testValue t' w
       if b then pure True else anyMatch t' ws
-    testValue :: Transformation -> Value -> Either Text Bool
+    testValue :: Transformation -> Value -> Either TransformationError Bool
     testValue t' w = case runTransformation t' w of
       Left err -> Left err
       Right (Bool b) -> pure b
-      Right _ -> Left "filter transformation must produce a boolean"
+      Right _ -> Left FilterNotBoolean
 
 -- | Object member lookup: missing members and non-objects focus on
 -- nothing.

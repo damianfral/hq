@@ -1029,7 +1029,9 @@ adversarialSpec = describe "malformed input" $ do
 
 -- | Pull every event through pullEvent.
 pullAllChunks :: [Text] -> IO (Either Text [JSONEvent])
-pullAllChunks chunks = runExceptT (collect initialDecoder stream)
+pullAllChunks chunks = do
+  result <- runExceptT (collect initialDecoder stream)
+  pure (first renderHQError result)
   where
     stream :: StreamIO Text ()
     stream = S.each chunks

@@ -30,21 +30,23 @@ firstShown (Right _) = Right (mempty, [])
 
 -- | Skip one value over chunks; collect remainder text and chunks.
 runSkipValue :: [Text] -> IO (Either Text (Text, [Text]))
-runSkipValue chunks = runExceptT $ case chunks of
-  [] -> throwError ("empty chunk list" :: Text)
-  c : cs -> do
+runSkipValue [] = pure (Left "empty chunk list")
+runSkipValue (c : cs) = do
+  result <- runExceptT $ do
     (remText, rest) <- skipValueText [] c (S.each cs)
     remaining <- S.toList_ rest
     pure (remText, remaining)
+  pure (first renderHQError result)
 
 -- | Skip an object member value over chunks starting after the key.
 runSkipMember :: [Text] -> IO (Either Text (Text, [Text]))
-runSkipMember chunks = runExceptT $ case chunks of
-  [] -> throwError ("empty chunk list" :: Text)
-  c : cs -> do
+runSkipMember [] = pure (Left "empty chunk list")
+runSkipMember (c : cs) = do
+  result <- runExceptT $ do
     (remText, rest) <- skipMemberValueText [ContextObject] c (S.each cs)
     remaining <- S.toList_ rest
     pure (remText, remaining)
+  pure (first renderHQError result)
 
 -- | Drain a hand-positioned mid-object decoder: after skipping member
 -- @a@, the rest must decode to the remaining members.
@@ -152,7 +154,7 @@ memberMalformed =
   ]
 
 -- | Pull every remaining event through pullEvent.
-pullRemaining :: Decoder -> StreamIO Text () -> ExceptT Text IO [JSONEvent]
+pullRemaining :: Decoder -> StreamIO Text () -> ExceptT HQError IO [JSONEvent]
 pullRemaining decoder text = do
   pulled <- pullEvent decoder text
   case pulled of
@@ -176,8 +178,8 @@ skipContainerTextSpec = describe "skipContainerText" $ do
                     NextEvent open decoder2 text2 -> do
                       (decoder3, text3) <- skipContainerText open decoder2 text2
                       pullRemaining decoder3 text3
-                    _ -> throwError ("expected a member opener" :: Text)
-                _ -> throwError ("expected an array opener" :: Text)
+                    _ -> throwError (HQDecodeError (UnexpectedToken "expected a member opener"))
+                _ -> throwError (HQDecodeError (UnexpectedToken "expected an array opener"))
             let reference = drop (1 + length (runStreaming [value])) (runStreaming [full])
             result `shouldBe` Right reference
   where
