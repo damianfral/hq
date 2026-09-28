@@ -79,3 +79,13 @@ echo '{"a":1}' | hq over '#a' '+1' -c
 echo '{"a":1,"b":2}' | hq delete '#b' -c
 # {"a":1}
 ```
+
+## Performance
+
+On the 100 MB `hq-bench-data` benchmark (`bench/bench.sh`), reads
+(`fold`) run at ~0.4x jq's runtime and rewrites (`over`/`set`/`delete`)
+at \~1.2x, at \~12 MB peak RSS versus jq's \~600 MB.
+
+![screenshot](bench/bench_runtime.svg)
+
+![screenshot](bench/bench_memory.svg)

@@ -6,9 +6,9 @@
   },
   "vconcat": [
     {
-      "width": 800,
+      "width": 400,
       "height": {
-        "step": 40
+        "step": 24
       },
       "transform": [
         {
@@ -37,7 +37,7 @@
           "title": null,
           "sort": null,
           "axis": {
-            "labelLimit": 600
+            "labelLimit": 0
           }
         },
         "x": {
@@ -77,7 +77,7 @@
       "title": "Average (mean of medians)",
       "width": 800,
       "height": {
-        "step": 40
+        "step": 24
       },
       "transform": [
         {
@@ -125,7 +125,7 @@
             "jq"
           ],
           "axis": {
-            "labelLimit": 600
+            "labelLimit": 0
           }
         },
         "x": {

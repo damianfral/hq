@@ -1,5 +1,5 @@
 {
-  description = "Haskell CLI flake template";
+  description = "A JSON processor inspired by jq, with a lens-inspired query language.";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-26.05";
@@ -151,14 +151,14 @@
           name = "hq-bench";
           pname = "hq-bench";
           version = "0.0.0.1";
-          src = ./bench;
+          src = ./bench/bench.sh;
           dontUnpack = true;
           nativeBuildInputs = [pkgs.makeWrapper];
           buildInputs = [pkgs.hq pkgs.jq pkgs.time];
           buildPhase = ''
             set -xue
             mkdir -p "$out/bin"
-            cp "$src/bench.sh" "$out/bin/hq-bench"
+            cp $src "$out/bin/hq-bench"
             chmod +x "$out/bin/hq-bench"
             wrapProgram "$out/bin/hq-bench" \
               --prefix PATH : ${pkgs.lib.makeBinPath [pkgs.bash pkgs.time pkgs.hq pkgs.jq pkgs.coreutils]}
@@ -182,7 +182,7 @@
           pname = "hq-bench-charts";
           version = "0.0.0.1";
           dontUnpack = true;
-          nativeBuildInputs = [pkgs.vega-lite];
+          nativeBuildInputs = [pkgs.vega-lite pkgs.svgo];
           buildPhase = ''
             set -xue
             cp ${packages.hq-bench-data}/hq-bench.csv hq-bench.csv
@@ -190,6 +190,8 @@
             cp ${./bench/bench_memory.vl.json} bench_memory.vl.json
             vl2svg bench_runtime.vl.json bench_runtime.svg
             vl2svg bench_memory.vl.json bench_memory.svg
+            svgo --multipass bench_runtime.svg
+            svgo --multipass bench_memory.svg
           '';
           installPhase = "mkdir $out && cp -t $out bench_runtime.svg bench_memory.svg";
         };
