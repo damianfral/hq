@@ -1,3 +1,4 @@
+{-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE StrictData #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 
@@ -48,6 +49,31 @@ pullCursor (Cursor [] decoder text) = do
 pushCursor :: JSONEvent -> Cursor -> Cursor
 pushCursor event (Cursor buffered decoder text) = Cursor (event : buffered) decoder text
 
+-- | Pull one event inside an object body: 'Left' rest on 'JSONEndObject',
+-- 'Right' key and cursor after it on 'JSONObjectKey'. Throws
+-- 'UnexpectedEndReadingObject' on end of input and 'InvalidObject' on
+-- anything else. Shared by every object walk in folding and rewriting.
+expectObjectStep :: Cursor -> ExceptT HQError IO (Either Cursor (Text, Cursor))
+expectObjectStep input = do
+  result <- pullCursor input
+  case result of
+    Nothing -> throwError $ HQRunnerError UnexpectedEndReadingObject
+    Just (JSONEndObject, rest) -> pure (Left rest)
+    Just (JSONObjectKey key, rest) -> pure (Right (key, rest))
+    Just _ -> throwError $ HQRunnerError InvalidObject
+
+-- | Pull one event inside an array body: 'Left' rest on 'JSONEndArray',
+-- 'Right' event and cursor after it otherwise. Throws
+-- 'UnexpectedEndReadingArray' on end of input. Shared by every array
+-- walk in folding and rewriting.
+expectArrayStep :: Cursor -> ExceptT HQError IO (Either Cursor (JSONEvent, Cursor))
+expectArrayStep input = do
+  result <- pullCursor input
+  case result of
+    Nothing -> throwError $ HQRunnerError UnexpectedEndReadingArray
+    Just (JSONEndArray, rest) -> pure (Left rest)
+    Just (event, rest) -> pure (Right (event, rest))
+
 -- | Consume one complete value without yielding its events.
 --
 -- The value's first event is pulled to dispatch on, then containers
@@ -67,8 +93,9 @@ skipValueE :: Cursor -> ExceptT HQError IO Cursor
 skipValueE input = do
   result <- pullCursor input
   case result of
-    Nothing -> throwError (HQRunnerError UnexpectedEndOfInput)
-    Just (event, Cursor buffered decoder text) -> skipEvent event buffered decoder text
+    Nothing -> throwError $ HQRunnerError UnexpectedEndOfInput
+    Just (event, Cursor buffered decoder text) ->
+      skipEvent event buffered decoder text
   where
     skipEvent event buffered decoder text = case event of
       JSONBeginArray
@@ -77,9 +104,9 @@ skipValueE input = do
       JSONBeginObject
         | null buffered -> skipOpened event decoder text buffered
         | otherwise -> drainNested JSONEndObject (Cursor buffered decoder text)
-      JSONEndArray -> throwError (HQRunnerError UnexpectedEndOfArray)
-      JSONEndObject -> throwError (HQRunnerError UnexpectedEndOfObject)
-      JSONObjectKey _ -> throwError (HQRunnerError UnexpectedObjectKey)
+      JSONEndArray -> throwError $ HQRunnerError UnexpectedEndOfArray
+      JSONEndObject -> throwError $ HQRunnerError UnexpectedEndOfObject
+      JSONObjectKey _ -> throwError $ HQRunnerError UnexpectedObjectKey
       _ -> pure (Cursor buffered decoder text)
     skipOpened event decoder text buffered = do
       (decoder', rest) <- skipContainerText event decoder text
@@ -89,19 +116,22 @@ skipValueE input = do
     drainValue stream = do
       result <- pullCursor stream
       case result of
-        Nothing -> throwError (HQRunnerError UnexpectedEndOfInput)
+        Nothing -> throwError $ HQRunnerError UnexpectedEndOfInput
         Just (JSONBeginArray, rest) -> drainNested JSONEndArray rest
         Just (JSONBeginObject, rest) -> drainNested JSONEndObject rest
-        Just (JSONEndArray, _) -> throwError (HQRunnerError UnexpectedEndOfArray)
-        Just (JSONEndObject, _) -> throwError (HQRunnerError UnexpectedEndOfObject)
-        Just (JSONObjectKey _, _) -> throwError (HQRunnerError UnexpectedObjectKey)
+        Just (JSONEndArray, _) ->
+          throwError $ HQRunnerError UnexpectedEndOfArray
+        Just (JSONEndObject, _) ->
+          throwError $ HQRunnerError UnexpectedEndOfObject
+        Just (JSONObjectKey _, _) ->
+          throwError $ HQRunnerError UnexpectedObjectKey
         Just (_, rest) -> pure rest
     -- \| Consume a container body event by event up to its closing event.
     drainNested :: JSONEvent -> Cursor -> ExceptT HQError IO Cursor
     drainNested closing stream = do
       result <- pullCursor stream
       case result of
-        Nothing -> throwError (HQRunnerError UnexpectedEndOfInput)
+        Nothing -> throwError $ HQRunnerError UnexpectedEndOfInput
         Just (event, rest)
           | event == closing -> pure rest
           | otherwise -> case event of
@@ -109,7 +139,7 @@ skipValueE input = do
                 | closing == JSONEndObject -> do
                     after <- drainValue rest
                     drainNested closing after
-                | otherwise -> throwError (HQRunnerError UnexpectedObjectKey)
+                | otherwise -> throwError $ HQRunnerError UnexpectedObjectKey
               _ -> do
                 after <- drainValue (pushCursor event rest)
                 drainNested closing after
@@ -123,6 +153,7 @@ skipMemberValue = lift . skipMemberValueE
 skipMemberValueE :: Cursor -> ExceptT HQError IO Cursor
 skipMemberValueE (Cursor buffered decoder text)
   | null buffered = do
-      (remainder, rest) <- skipMemberValueText (decoderStack decoder) (decoderInput decoder) text
-      pure (Cursor [] (finishValue decoder {decoderInput = remainder}) rest)
+      (remainder, rest) <-
+        skipMemberValueText (decoderStack decoder) (decoderInput decoder) text
+      pure $ Cursor [] (finishValue decoder {decoderInput = remainder}) rest
   | otherwise = skipValueE (Cursor buffered decoder text)

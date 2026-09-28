@@ -2,7 +2,7 @@
 
 module HQ.Runner.Fold where
 
-import Control.Monad.Error.Class (MonadError (throwError))
+import Control.Monad.Except (MonadError (..))
 import Data.Aeson (Value (..))
 import qualified Data.Aeson.Key as Key
 import qualified Data.Aeson.KeyMap as KeyMap
@@ -12,7 +12,7 @@ import HQ.Error (HQError (..))
 import HQ.JSON.Decoder (initialDecoder)
 import HQ.JSON.Event
 import HQ.Optic (Optic (..), OpticF (..), PrismKind, prismPredicate)
-import HQ.Runner.Cursor (Continuation, Cursor (..), EventStream, pullCursor, pushCursor, skipMemberValue, skipValue)
+import HQ.Runner.Cursor (Continuation, Cursor (..), EventStream, expectArrayStep, expectObjectStep, pullCursor, pushCursor, skipMemberValue, skipValue)
 import HQ.Runner.Error (RunnerError (..))
 import HQ.Runner.Take (takeFirstValue, takeValue)
 import HQ.Transformation (Transformation, runTransformation)
@@ -30,7 +30,7 @@ materializeValue cur = do
   events :> afterValue <- S.toList (takeValue cur)
   v <- hoistEither $ first HQRunnerError $ eventsToValue events
   case events of
-    [] -> throwError (HQRunnerError EmptyValue)
+    [] -> throwError $ HQRunnerError EmptyValue
     _ -> pure (v, events, afterValue)
 
 -- | Test a @filter@ gate, mapping failures to 'HQError'.
@@ -77,30 +77,26 @@ runFold (Optic optic) = run optic takeValue
     findField name k = go
       where
         go input = do
-          result <- lift (pullCursor input)
-          case result of
-            Nothing -> throwError (HQRunnerError UnexpectedEndReadingObject)
-            Just (JSONEndObject, rest) -> pure rest
-            Just (JSONObjectKey key, rest)
+          step <- lift (expectObjectStep input)
+          case step of
+            Left rest -> pure rest
+            Right (key, rest)
               | key == name -> do
                   afterField <- k rest
                   skipRestOfObject afterField
               | otherwise -> do
                   afterValue <- skipMemberValue rest
                   go afterValue
-            Just _ -> throwError (HQRunnerError InvalidObject)
 
     -- \| Consume the rest of an object after a matched member value.
     skipRestOfObject :: Cursor -> EventStream Cursor
     skipRestOfObject input = do
-      result <- lift (pullCursor input)
-      case result of
-        Nothing -> throwError (HQRunnerError UnexpectedEndReadingObject)
-        Just (JSONEndObject, rest) -> pure rest
-        Just (JSONObjectKey _, rest) -> do
+      step <- lift (expectObjectStep input)
+      case step of
+        Left rest -> pure rest
+        Right (_, rest) -> do
           afterValue <- skipMemberValue rest
           skipRestOfObject afterValue
-        Just _ -> throwError (HQRunnerError InvalidObject)
 
     ----------------------------------------------------------------
     -- Each
@@ -116,23 +112,20 @@ runFold (Optic optic) = run optic takeValue
         Just (event, rest) -> skipValue (pushCursor event rest)
       where
         eachArray stream = do
-          result <- lift (pullCursor stream)
-          case result of
-            Nothing -> throwError (HQRunnerError UnexpectedEndReadingArray)
-            Just (JSONEndArray, rest) -> pure rest
-            Just (event, rest) -> do
+          step <- lift (expectArrayStep stream)
+          case step of
+            Left rest -> pure rest
+            Right (event, rest) -> do
               afterElement <- k (pushCursor event rest)
               eachArray afterElement
 
         eachObject stream = do
-          result <- lift (pullCursor stream)
-          case result of
-            Nothing -> throwError (HQRunnerError UnexpectedEndReadingObject)
-            Just (JSONEndObject, rest) -> pure rest
-            Just (JSONObjectKey _, rest) -> do
+          step <- lift (expectObjectStep stream)
+          case step of
+            Left rest -> pure rest
+            Right (_, rest) -> do
               afterValue <- k rest -- cursor is already at the value
               eachObject afterValue
-            Just _ -> throwError (HQRunnerError InvalidObject)
 
     ----------------------------------------------------------------
     -- Keys: object keys as strings (objects only)
@@ -148,15 +141,13 @@ runFold (Optic optic) = run optic takeValue
       where
         keysObject :: Cursor -> EventStream Cursor
         keysObject stream = do
-          result <- lift (pullCursor stream)
-          case result of
-            Nothing -> throwError (HQRunnerError UnexpectedEndReadingObject)
-            Just (JSONEndObject, rest) -> pure rest
-            Just (JSONObjectKey key, rest) -> do
+          step <- lift (expectObjectStep stream)
+          case step of
+            Left rest -> pure rest
+            Right (key, rest) -> do
               _ <- k (Cursor [JSONString key] initialDecoder (pure ()))
               afterValue <- skipMemberValue rest
               keysObject afterValue
-            Just _ -> throwError (HQRunnerError InvalidObject)
 
     ----------------------------------------------------------------
     -- Values: object member values only (arrays focus on nothing)
@@ -171,14 +162,12 @@ runFold (Optic optic) = run optic takeValue
         Just (event, rest) -> skipValue (pushCursor event rest)
       where
         valuesObject stream = do
-          result <- lift (pullCursor stream)
-          case result of
-            Nothing -> throwError (HQRunnerError UnexpectedEndReadingObject)
-            Just (JSONEndObject, rest) -> pure rest
-            Just (JSONObjectKey _, rest) -> do
+          step <- lift (expectObjectStep stream)
+          case step of
+            Left rest -> pure rest
+            Right (_, rest) -> do
               afterValue <- k rest -- cursor is already at the value
               valuesObject afterValue
-            Just _ -> throwError (HQRunnerError InvalidObject)
 
     ----------------------------------------------------------------
     -- Filter: keep the value when the predicate holds of the
@@ -240,11 +229,10 @@ runFold (Optic optic) = run optic takeValue
         findIndex n stream
           | n < 0 = skipRestOfArray stream
           | otherwise = do
-              result <- lift (pullCursor stream)
-              case result of
-                Nothing -> throwError (HQRunnerError UnexpectedEndReadingArray)
-                Just (JSONEndArray, rest) -> pure rest
-                Just (event, rest) -> case n of
+              step <- lift (expectArrayStep stream)
+              case step of
+                Left rest -> pure rest
+                Right (event, rest) -> case n of
                   0 -> do
                     afterField <- k (pushCursor event rest)
                     skipRestOfArray afterField
@@ -255,11 +243,10 @@ runFold (Optic optic) = run optic takeValue
     -- \| Consume the rest of an array after a matched element.
     skipRestOfArray :: Cursor -> EventStream Cursor
     skipRestOfArray input = do
-      result <- lift (pullCursor input)
-      case result of
-        Nothing -> throwError (HQRunnerError UnexpectedEndReadingArray)
-        Just (JSONEndArray, rest) -> pure rest
-        Just (event, rest) -> do
+      step <- lift (expectArrayStep input)
+      case step of
+        Left rest -> pure rest
+        Right (event, rest) -> do
           afterValue <- skipValue (pushCursor event rest)
           skipRestOfArray afterValue
 

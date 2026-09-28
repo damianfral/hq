@@ -20,7 +20,7 @@ pullOne (Cursor (event : buffered) decoder text) = pure (event, Cursor buffered 
 pullOne (Cursor [] decoder text) = do
   pulled <- pullEvent decoder text
   case pulled of
-    EndOfInput -> throwError (HQRunnerError UnexpectedEndOfInput)
+    EndOfInput -> throwError $ HQRunnerError UnexpectedEndOfInput
     NextEvent event decoder' rest -> pure (event, Cursor [] decoder' rest)
 
 -- | Stream the events of exactly one complete JSON value, returning the
@@ -91,16 +91,16 @@ takeContainerFrom closing = go
           Left err -> throwError (HQDecodeError err)
           Right (Emit event dec') -> emit event $ Cursor [] dec' rest
           Right (NeedInput dec') -> pullMore dec' rest
-          Right (Done _) -> throwError (HQRunnerError UnexpectedEndOfInput)
+          Right (Done _) -> throwError $ HQRunnerError UnexpectedEndOfInput
     -- Mirror 'drainAtEnd': a value completed exactly at end of input
     -- still yields its final event; anything else ends the take the
     -- same way the event-stream takes did.
     finishTake dec = case finish dec of
       Left UnexpectedEnd
         | decoderPhase dec == DecoderPhaseValue && null (decoderStack dec) ->
-            throwError (HQRunnerError UnexpectedEndOfInput)
+            throwError $ HQRunnerError UnexpectedEndOfInput
       Left err -> throwError (HQDecodeError err)
-      Right (Done _) -> throwError (HQRunnerError UnexpectedEndOfInput)
+      Right (Done _) -> throwError $ HQRunnerError UnexpectedEndOfInput
       Right (NeedInput _) -> throwError (HQDecodeError UnexpectedEnd)
       Right (Emit event dec') -> emit event $ Cursor [] dec' (pure ())
 
@@ -127,9 +127,9 @@ takeValueChunks config cursor st = do
   case event of
     JSONBeginArray -> takeContainerChunks config JSONEndArray cursor' st'
     JSONBeginObject -> takeContainerChunks config JSONEndObject cursor' st'
-    JSONEndArray -> throwError (HQRunnerError UnexpectedEndOfArray)
-    JSONEndObject -> throwError (HQRunnerError UnexpectedEndOfObject)
-    JSONObjectKey _ -> throwError (HQRunnerError UnexpectedObjectKey)
+    JSONEndArray -> throwError $ HQRunnerError UnexpectedEndOfArray
+    JSONEndObject -> throwError $ HQRunnerError UnexpectedEndOfObject
+    JSONObjectKey _ -> throwError $ HQRunnerError UnexpectedObjectKey
     _ -> pure (st', cursor')
 
 -- | Batch threshold for transcribed chunks, in estimated chars: past
