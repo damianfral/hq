@@ -94,6 +94,14 @@ data StringState
   | AfterEscape BufferedStringTarget
   | InUnicodeEscape BufferedStringTarget Unicode
   | AfterHighSurrogate BufferedStringTarget Int
+  | -- | Mid low-surrogate digits: high half plus partial value and
+    -- digit count. Separate from 'InUnicodeEscape' so split escapes
+    -- resume in the low half instead of restarting as a fresh codepoint.
+    InLowSurrogateEscape BufferedStringTarget Int Unicode
+  | -- | Low escape's backslash arrived at a chunk end; the next chunk
+    -- must start with @u@. Separate from 'AfterHighSurrogate' (which
+    -- requires the backslash too) so split @\\u@ resumes correctly.
+    AfterLowBackslash BufferedStringTarget Int
   deriving (Eq, Show)
 
 data KeywordState

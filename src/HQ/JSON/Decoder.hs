@@ -64,6 +64,8 @@ feed input decoder = step decoder {decoderInput = decoderInput decoder <> input}
 finish :: DecoderState -> Either DecodeError DecoderResult
 finish decoder = case decoderPhase decoder of
   DecoderPhaseString (AfterHighSurrogate _ _) -> Left InvalidSurrogatePair
+  DecoderPhaseString (AfterLowBackslash _ _) -> Left InvalidSurrogatePair
+  DecoderPhaseString (InLowSurrogateEscape {}) -> Left InvalidSurrogatePair
   DecoderPhaseString _ -> Left UnexpectedEnd
   DecoderPhaseNumber numState
     | isValidNumberFinal (numberPhase numState) -> finalizeNumber decoder

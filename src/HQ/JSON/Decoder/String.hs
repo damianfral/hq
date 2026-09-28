@@ -112,6 +112,10 @@ stepString decoder state =
       consumeUnicode' target (decoderInput decoder) buffer value digits decoder
     AfterHighSurrogate (BufferedStringTarget target buffer) high ->
       consumeLowSurrogate target (decoderInput decoder) buffer high decoder
+    AfterLowBackslash (BufferedStringTarget target buffer) high ->
+      consumeLowBackslash target (decoderInput decoder) buffer high decoder
+    InLowSurrogateEscape (BufferedStringTarget target buffer) high (Unicode value digits) ->
+      consumeLowSurrogateDigits target (decoderInput decoder) buffer high value digits decoder
 
 consumeLowSurrogate ::
   StringTarget -> Text -> StringBuffer -> Int -> DecoderState -> Either DecodeError DecoderResult
@@ -119,17 +123,22 @@ consumeLowSurrogate target input buffer high decoder = case T.uncons input of
   Nothing -> Right $ NeedInput decoder {decoderInput = mempty}
   Just ('\\', rest) -> case T.uncons rest of
     Nothing ->
-      Right
-        $ NeedInput
-          decoder
-            { decoderInput = mempty,
-              decoderPhase =
-                DecoderPhaseString
-                  $ AfterHighSurrogate (BufferedStringTarget target buffer) high
-            }
+      let parserString = DecoderPhaseString $ AfterLowBackslash (BufferedStringTarget target buffer) high
+       in Right $ NeedInput decoder {decoderInput = mempty, decoderPhase = parserString}
     Just ('u', rest') ->
       consumeLowSurrogateDigits target rest' buffer high 0 0 decoder
     _ -> Left InvalidSurrogatePair
+  _ -> Left InvalidSurrogatePair
+
+-- | Resume after a chunk split between the low escape's backslash and
+-- @u@: only @u@ may follow, continuing into the low hex digits.
+consumeLowBackslash ::
+  StringTarget -> Text -> StringBuffer -> Int -> DecoderState -> Either DecodeError DecoderResult
+consumeLowBackslash target input buffer high decoder = case T.uncons input of
+  Nothing ->
+    Right $ NeedInput decoder {decoderInput = mempty}
+  Just ('u', rest) ->
+    consumeLowSurrogateDigits target rest buffer high 0 0 decoder
   _ -> Left InvalidSurrogatePair
 
 consumeLowSurrogateDigits ::
@@ -180,8 +189,9 @@ consumeLowSurrogateDigits target input buffer high value digits decoder
                         { decoderInput = mempty,
                           decoderPhase =
                             DecoderPhaseString
-                              $ InUnicodeEscape
+                              $ InLowSurrogateEscape
                                 (BufferedStringTarget target buffer)
+                                high
                                 (Unicode newValue newDigits)
                         }
                 else

@@ -7,6 +7,7 @@ module HQ.JSON.Parser where
 
 import Data.Aeson (Value (..))
 import Data.Aeson.Key (fromText)
+import Data.Char (digitToInt)
 import Data.Scientific (Scientific)
 import qualified Data.Vector as V
 import qualified HQ.JSON.Decoder as Decoder
@@ -16,7 +17,7 @@ import Relude hiding (Compose, id, many, some)
 import Streaming (Of (..))
 import qualified Streaming.Prelude as S
 import Text.Megaparsec
-import Text.Megaparsec.Char (char)
+import Text.Megaparsec.Char (char, hexDigitChar)
 import Text.Megaparsec.Char.Lexer (scientific, signed)
 
 parseValue :: Text -> Either (ParseErrorBundle Text Void) Value
@@ -57,19 +58,39 @@ numberParser :: Parser Value
 numberParser = lexeme $ Number <$> signed sc scientific
 
 -- | Raw string contents without quotes, shared by values and object keys.
+-- Mirrors the streaming decoder ("HQ.JSON.Decoder.String"): the full
+-- JSON escape table plus @\uXXXX@ with surrogate pairs. Anything else,
+-- including invalid escapes and raw control characters, fails.
 jsonStringContent :: Parser Text
 jsonStringContent = toText <$> many (escapedChar <|> nonEscapeChar)
   where
-    escapedChar = do
-      void $ char '\\'
-      c <- anySingle
-      pure $ case c of
-        '"' -> '"'
-        '\\' -> '\\'
-        'n' -> '\n'
-        't' -> '\t'
-        _ -> c
-    nonEscapeChar = satisfy (\c -> c /= '"' && c /= '\\')
+    escapedChar = char '\\' *> escapeCode
+    escapeCode =
+      choice
+        [ char '"' $> '"',
+          char '\\' $> '\\',
+          char '/' $> '/',
+          char 'b' $> '\b',
+          char 'f' $> '\f',
+          char 'n' $> '\n',
+          char 'r' $> '\r',
+          char 't' $> '\t',
+          char 'u' *> unicodeEscape
+        ]
+    unicodeEscape = do
+      high <- hex4
+      if Decoder.isHighSurrogate high
+        then do
+          low <- chunk "\\u" *> hex4
+          if Decoder.isLowSurrogate low
+            then pure (chr (0x10000 + ((high - 0xD800) * 1024) + (low - 0xDC00)))
+            else fail "invalid surrogate pair"
+        else
+          if Decoder.isLowSurrogate high
+            then fail "invalid surrogate pair"
+            else pure (chr high)
+    hex4 = foldl' (\v c -> v * 16 + digitToInt c) 0 <$> count 4 hexDigitChar
+    nonEscapeChar = satisfy (\c -> c /= '"' && c /= '\\' && c >= '\x20')
 
 stringParser :: Parser Value
 stringParser = lexeme $ do

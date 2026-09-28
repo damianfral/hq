@@ -3,6 +3,7 @@
 module HQ.Runner.Take where
 
 import Control.Monad.Error.Class (MonadError (throwError))
+import qualified Data.Text as T
 import HQ.Error (HQError (..))
 import HQ.JSON.Decoder (DecodeError (..), DecoderPhase (..), DecoderResult (..), DecoderState (..), Next (..), StreamIO, finish, pullEvent)
 import qualified HQ.JSON.Decoder as Decoder
@@ -69,11 +70,19 @@ takeContainerFrom closing = go
     go :: Cursor -> EventStream Cursor
     go (Cursor buf dec txt) = case buf of
       event : rest -> emit event $ Cursor rest dec txt
-      [] -> case Decoder.step dec of
-        Left err -> throwError $ HQDecodeError err
-        Right (Emit event dec') -> emit event $ Cursor [] dec' txt
-        Right (NeedInput dec') -> pullMore dec' txt
-        Right (Done _) -> throwError $ HQRunnerError UnexpectedEndOfInput
+      [] -> stepMore dec txt
+    -- Step while the decoder holds pending input: mid-value pauses
+    -- (e.g. a high surrogate awaiting its low half) must be stepped,
+    -- not finished. Only a truly drained decoder may pull more text.
+    -- Mirrors 'pullMore' in "HQ.Runner.Cursor".
+    stepMore :: DecoderState -> StreamIO Text () -> EventStream Cursor
+    stepMore dec txt = case Decoder.step dec of
+      Left err -> throwError $ HQDecodeError err
+      Right (Emit event dec') -> emit event $ Cursor [] dec' txt
+      Right (NeedInput dec')
+        | not (T.null (decoderInput dec')) -> stepMore dec' txt
+        | otherwise -> pullMore dec' txt
+      Right (Done _) -> throwError $ HQRunnerError UnexpectedEndOfInput
     emit event cursor = do
       S.yield event
       if event == closing
@@ -90,7 +99,7 @@ takeContainerFrom closing = go
         Right (chunk, rest) -> case Decoder.feed chunk dec of
           Left err -> throwError (HQDecodeError err)
           Right (Emit event dec') -> emit event $ Cursor [] dec' rest
-          Right (NeedInput dec') -> pullMore dec' rest
+          Right (NeedInput dec') -> stepMore dec' rest
           Right (Done _) -> throwError $ HQRunnerError UnexpectedEndOfInput
     -- Mirror 'drainAtEnd': a value completed exactly at end of input
     -- still yields its final event; anything else ends the take the
@@ -161,13 +170,23 @@ takeContainerChunks config closing c st0 = go c st0 mempty 0
       ChunkStream (ExceptT HQError IO) (EncoderState, Cursor)
     go (Cursor buf dec txt) st pend pendSize = case buf of
       event : rest -> emit event (Cursor rest dec txt) st pend pendSize
-      [] -> case Decoder.step dec of
-        Left err -> throwError (HQDecodeError err)
-        Right (Emit event dec') ->
-          let newCursor = Cursor [] dec' txt
-           in emit event newCursor st pend pendSize
-        Right (NeedInput dec') -> pullMore dec' txt st pend pendSize
-        Right (Done _) -> throwError $ HQRunnerError UnexpectedEndOfInput
+      [] -> stepMore dec txt st pend pendSize
+    stepMore ::
+      DecoderState ->
+      StreamIO Text () ->
+      EncoderState ->
+      Builder ->
+      Int ->
+      ChunkStream (ExceptT HQError IO) (EncoderState, Cursor)
+    stepMore dec txt st pend pendSize = case Decoder.step dec of
+      Left err -> throwError (HQDecodeError err)
+      Right (Emit event dec') ->
+        let newCursor = Cursor [] dec' txt
+         in emit event newCursor st pend pendSize
+      Right (NeedInput dec')
+        | not (T.null (decoderInput dec')) -> stepMore dec' txt st pend pendSize
+        | otherwise -> pullMore dec' txt st pend pendSize
+      Right (Done _) -> throwError $ HQRunnerError UnexpectedEndOfInput
     emit ::
       JSONEvent ->
       Cursor ->
@@ -216,7 +235,7 @@ takeContainerChunks config closing c st0 = go c st0 mempty 0
           Right (Emit event dec') ->
             let newCursor = Cursor [] dec' rest
              in emit event newCursor st pend pendSize
-          Right (NeedInput dec') -> pullMore dec' rest st pend pendSize
+          Right (NeedInput dec') -> stepMore dec' rest st pend pendSize
           Right (Done _) -> throwError $ HQRunnerError UnexpectedEndOfInput
     -- Mirror 'drainAtEnd', emitting the final event as a chunk.
     finishTake ::

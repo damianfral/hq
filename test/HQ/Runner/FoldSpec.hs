@@ -523,7 +523,12 @@ foldChunkCases =
     ("ix 0", "{\"a\":1}"),
     ("each . filter #age == 30", "[{\"age\":30},{\"age\":20}]"),
     ("filter each == 1", "[1,2,1]"),
-    ("each . filter #age == 30 . #name", "[{\"age\":30,\"name\":\"a\"}]")
+    ("each . filter #age == 30 . #name", "[{\"age\":30,\"name\":\"a\"}]"),
+    -- Surrogate pairs inside containers: the take loops must step
+    -- mid-value pauses (high surrogate) instead of finishing early.
+    ("id", "[\"\\uD83D\\uDE00\"]"),
+    ("id", "{\"u\":\"caf\\u00e9 \\uD83D\\uDE00\",\"s\":\"a/b\"}"),
+    ("each", "[\"\\uD83D\\uDE00\",\"x\"]")
   ]
 
 malformedChunkCases :: [(Text, Text)]
@@ -534,5 +539,7 @@ malformedChunkCases =
     ("#a", "{\"a\":01}"),
     ("keys", "[1,,2]"),
     ("values", "{\"a\":tru}"),
-    ("filter #a == 1", "{\"a\":1,\"b\":tru}")
+    ("filter #a == 1", "{\"a\":1,\"b\":tru}"),
+    ("id", "[\"\\uD83D\"]"),
+    ("id", "[\"\\uD83D\\uxyz\"]")
   ]
