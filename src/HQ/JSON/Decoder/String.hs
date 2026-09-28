@@ -118,7 +118,12 @@ stepString decoder state =
       consumeLowSurrogateDigits target (decoderInput decoder) buffer high value digits decoder
 
 consumeLowSurrogate ::
-  StringTarget -> Text -> StringBuffer -> Int -> DecoderState -> Either DecodeError DecoderResult
+  StringTarget ->
+  Text ->
+  StringBuffer ->
+  Int ->
+  DecoderState ->
+  Either DecodeError DecoderResult
 consumeLowSurrogate target input buffer high decoder = case T.uncons input of
   Nothing -> Right $ NeedInput decoder {decoderInput = mempty}
   Just ('\\', rest) -> case T.uncons rest of
@@ -133,10 +138,14 @@ consumeLowSurrogate target input buffer high decoder = case T.uncons input of
 -- | Resume after a chunk split between the low escape's backslash and
 -- @u@: only @u@ may follow, continuing into the low hex digits.
 consumeLowBackslash ::
-  StringTarget -> Text -> StringBuffer -> Int -> DecoderState -> Either DecodeError DecoderResult
+  StringTarget ->
+  Text ->
+  StringBuffer ->
+  Int ->
+  DecoderState ->
+  Either DecodeError DecoderResult
 consumeLowBackslash target input buffer high decoder = case T.uncons input of
-  Nothing ->
-    Right $ NeedInput decoder {decoderInput = mempty}
+  Nothing -> Right $ NeedInput decoder {decoderInput = mempty}
   Just ('u', rest) ->
     consumeLowSurrogateDigits target rest buffer high 0 0 decoder
   _ -> Left InvalidSurrogatePair
