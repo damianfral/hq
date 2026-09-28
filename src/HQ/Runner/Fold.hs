@@ -21,6 +21,30 @@ import Relude hiding (Compose, id, many, some, state)
 import Streaming (Of (..))
 import qualified Streaming.Prelude as S
 
+-- | Materialize the value at the cursor into events and a 'Value',
+-- returning the value, its events and the cursor after it.
+-- Shared by folding and rewriting so @filter@ gates and @over@
+-- replacements agree on error mapping.
+materializeValue :: Cursor -> ExceptT HQError IO (Value, [JSONEvent], Cursor)
+materializeValue cur = do
+  events :> afterValue <- S.toList (takeValue cur)
+  v <- hoistEither $ first HQRunnerError $ eventsToValue events
+  case events of
+    [] -> throwError (HQRunnerError EmptyValue)
+    _ -> pure (v, events, afterValue)
+
+-- | Test a @filter@ gate, mapping failures to 'HQError'.
+-- Shared by 'runFold' and 'runRewrite'.
+gateValue :: Fix OpticF -> Transformation -> Value -> ExceptT HQError IO Bool
+gateValue o t v =
+  hoistEither $ first HQTransformationError $ evalFilterGate o t v
+
+-- | Apply a transformation, mapping failures to 'HQError'.
+-- Shared by rewriting (@over@) replacements.
+applyTransformation :: Transformation -> Value -> ExceptT HQError IO Value
+applyTransformation t v =
+  hoistEither $ first HQTransformationError $ runTransformation t v
+
 -- | Interpret an optic against the JSON value at the cursor.
 --
 -- The continuation receives the cursor positioned immediately after
@@ -167,12 +191,8 @@ runFold (Optic optic) = run optic takeValue
       case result of
         Nothing -> pure input
         Just (event, rest0) -> do
-          events :> rest <- lift (S.toList (takeValue (pushCursor event rest0)))
-          keep <- case eventsToValue events of
-            Left err -> throwError (HQRunnerError err)
-            Right v -> case evalFilterGate o t v of
-              Left err -> throwError (HQTransformationError err)
-              Right b -> pure b
+          (v, events, rest) <- lift (materializeValue (pushCursor event rest0))
+          keep <- lift (gateValue o t v)
           if keep
             then k (Cursor events (cursorDecoder rest) (cursorText rest))
             else pure rest
@@ -298,11 +318,17 @@ lookupField name v = case v of
   Object o -> maybeToList (KeyMap.lookup (Key.fromText name) o)
   _ -> []
 
+-- | Object member values; arrays and scalars focus on nothing.
+objectValues :: Value -> [Value]
+objectValues v = case v of
+  Object o -> KeyMap.elems o
+  _ -> []
+
 -- | Array elements plus object member values.
 eachValues :: Value -> [Value]
 eachValues v = case v of
   Array a -> Vector.toList a
-  Object o -> KeyMap.elems o
+  Object _ -> objectValues v
   _ -> []
 
 -- | Object keys as strings; arrays focus on nothing.
@@ -313,9 +339,7 @@ keyValues v = case v of
 
 -- | Object member values only; arrays focus on nothing.
 valuesValues :: Value -> [Value]
-valuesValues v = case v of
-  Object o -> KeyMap.elems o
-  _ -> []
+valuesValues = objectValues
 
 -- | Match a type prism against an in-memory value, reusing the shared
 -- 'prismPredicate' on the value's first event (every value yields at

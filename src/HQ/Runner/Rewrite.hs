@@ -5,19 +5,17 @@ module HQ.Runner.Rewrite where
 import Control.Monad.Error.Class (MonadError (throwError))
 import Data.Aeson (Value (..))
 import Data.Fix (Fix (..))
-import Data.Functor.Of (Of ((:>)))
 import HQ.Error (HQError (..))
 import HQ.JSON.Encoder (ChunkStream, EncoderConfig, EncoderState)
 import HQ.JSON.Event
-import HQ.Optic (Optic (..), OpticF (..), prismPredicate)
+import HQ.Optic (Optic (..), OpticF (..), appendOptic, focusesWhole, prismPredicate)
 import HQ.Runner.Cursor (Cursor (..), RewriteContinuation, pullCursor, pushCursor, skipValueE)
 import HQ.Runner.Error (RunnerError (..))
-import HQ.Runner.Fold (evalFilterGate)
-import HQ.Runner.Take (emitChunk, takeValue, takeValueChunks)
+import HQ.Runner.Fold (applyTransformation, gateValue, materializeValue)
+import HQ.Runner.Take (emitChunk, takeValueChunks)
 import HQ.Transformation (Transformation (..), TransformationF (..), runTransformation)
 import HQ.Transformation.Error (TransformationError (..))
 import Relude hiding (Compose, Const)
-import qualified Streaming.Prelude as S
 
 --------------------------------------------------------------------------------
 -- Over and delete: document rewriting
@@ -62,7 +60,7 @@ runRewrite rewriter (Optic optic) config = run optic
     navigate :: Fix OpticF -> Fix OpticF -> RewriteContinuation
     navigate step suffix input st = case unFix step of
       Id -> run suffix input st
-      Compose left right -> navigate left (composeStep right suffix) input st
+      Compose left right -> navigate left (appendOptic right suffix) input st
       Field name -> rewriteField name suffix input st
       Each -> rewriteEach suffix input st
       Keys -> rewriteKeys suffix input st
@@ -72,22 +70,18 @@ runRewrite rewriter (Optic optic) config = run optic
       Ix i -> rewriteIndex i suffix input st
       Filter o t -> rewriteFilter o t suffix input st
 
-    composeStep :: Fix OpticF -> Fix OpticF -> Fix OpticF
-    composeStep (Fix Id) rest = rest
-    composeStep step rest = Fix (Compose step rest)
-
     -- \| Materialize one value and test a @filter@ gate, returning
     -- whether it is kept, its first event, a cursor replaying it, and
-    -- the cursor after it.
+    -- the cursor after it. Materialization and gating are shared with
+    -- 'HQ.Runner.Fold' ('materializeValue', 'gateValue').
     gateTake ::
       Fix OpticF ->
       Transformation ->
       Cursor ->
       ExceptT HQError IO (Bool, JSONEvent, Cursor, Cursor)
     gateTake o t cur = do
-      (events :> afterValue) <- S.toList (takeValue cur)
-      v <- hoistEither $ first HQRunnerError $ eventsToValue events
-      keep <- hoistEither $ first HQTransformationError $ evalFilterGate o t v
+      (v, events, afterValue) <- materializeValue cur
+      keep <- gateValue o t v
       case events of
         [] -> throwError (HQRunnerError EmptyValue)
         (firstEv : _) ->
@@ -112,12 +106,8 @@ runRewrite rewriter (Optic optic) config = run optic
       after <- lift (skipValueE input)
       emitValueChunks value st after
     rewriteValue (RewriteTransform t) input st = do
-      events :> rest <- lift (S.toList (takeValue input))
-      value <- case eventsToValue events of
-        Left err -> throwError (HQRunnerError err)
-        Right v -> case runTransformation t v of
-          Left err -> throwError (HQTransformationError err)
-          Right value -> pure value
+      (v, _, rest) <- lift (materializeValue input)
+      value <- lift (applyTransformation t v)
       emitValueChunks value st rest
 
     -- \| Emit a transformed value's events as chunks.
@@ -128,19 +118,6 @@ runRewrite rewriter (Optic optic) config = run optic
         go s (event : events) = do
           s' <- emitChunk config event s
           go s' events
-
-    focusesWhole :: Fix OpticF -> JSONEvent -> Bool
-    focusesWhole (Fix opticF) event = case opticF of
-      Id -> True
-      Field _ -> False
-      Each -> False
-      Keys -> False
-      Values -> False
-      Ix _ -> False
-      Prism kind -> prismPredicate kind event
-      PrismJust -> not (isNull event)
-      Filter _ _ -> False
-      Compose l r -> focusesWhole l event && focusesWhole r event
 
     -- \| Prism: value whose first event satisfies the predicate goes
     -- through the suffix; everything else passes through unchanged.

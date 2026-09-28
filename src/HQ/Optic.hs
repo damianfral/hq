@@ -214,6 +214,30 @@ prismPredicate PNull = isNull
 prismPredicate PArray = isArray
 prismPredicate PObject = isObject
 
+-- | Compose with 'Id' elimination: @appendOptic Id r = r@, otherwise
+-- @Compose step rest@. Single place for the ad-hoc @Id@ handling
+-- previously repeated in runners and typechecking.
+appendOptic :: Fix OpticF -> Fix OpticF -> Fix OpticF
+appendOptic (Fix Id) rest = rest
+appendOptic step rest = Fix (Compose step rest)
+
+-- | Whether a suffix focuses the whole value whose first event is @event@.
+-- Used by rewriting to decide if a key/member is dropped as a whole.
+-- Total over 'OpticF', so new shapes extend this table and every
+-- dispatch follows.
+focusesWhole :: Fix OpticF -> JSONEvent -> Bool
+focusesWhole (Fix opticF) event = case opticF of
+  Id -> True
+  Field _ -> False
+  Each -> False
+  Keys -> False
+  Values -> False
+  Ix _ -> False
+  Prism kind -> prismPredicate kind event
+  PrismJust -> not (isNull event)
+  Filter _ _ -> False
+  Compose l r -> focusesWhole l event && focusesWhole r event
+
 -- | DSL name of each type prism (@_String@, …).
 prismName :: PrismKind -> String
 prismName PString = "_String"
