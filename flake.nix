@@ -12,6 +12,11 @@
       url = "https://github.com/antonmedv/json-examples/raw/master/data_100mb.json";
       flake = false;
     };
+    weeder-nix.url = "github:NorfairKing/weeder-nix";
+    weeder-nix.inputs = {
+      nixpkgs.follows = "nixpkgs";
+      pre-commit-hooks.follows = "pre-commit-hooks";
+    };
   };
 
   outputs = {
@@ -22,6 +27,7 @@
     pre-commit-hooks,
     feedback,
     json-data,
+    weeder-nix,
     ...
   }: let
     pkgsFor = system:
@@ -110,7 +116,7 @@
             ormolu.enable = true;
             ripsecrets.enable = true;
             shellcheck.enable = true;
-            statix.enable = true;
+            # statix.enable = true;
           };
         };
       in rec {
@@ -212,7 +218,14 @@
           inherit (precommitCheck) shellHook;
         };
 
-        checks = {pre-commit-check = precommitCheck;};
+        checks = {
+          pre-commit-check = precommitCheck;
+          weeder-check = weeder-nix.lib.${system}.makeWeederCheck {
+            haskellPackages = pkgs.haskellPackages;
+            packages = ["hq"];
+            reportOnly = true;
+          };
+        };
       }
     );
   nixConfig = {
