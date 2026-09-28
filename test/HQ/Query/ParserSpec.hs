@@ -100,6 +100,20 @@ parserSpec = describe "parseQuery" $ do
           expected = Over (compose each inner) (add 1)
       parseQuery "over each.filter #age == 30 +1" `shouldBe` Right expected
 
+    it "tolerates redundant parentheses around optics" $ do
+      parseQuery "fold (#foo)" `shouldBe` Right (Fold (field "foo"))
+      parseQuery "fold ((#foo))" `shouldBe` Right (Fold (field "foo"))
+      parseQuery "fold (#foo . #bar)"
+        `shouldBe` Right (Fold (compose (field "foo") (field "bar")))
+
+    it "tolerates redundant parentheses around filter sides" $ do
+      let expected = Fold (filter (field "age") (equal (Number 30)))
+      parseQuery "fold filter (#age) (== 30)" `shouldBe` Right expected
+
+    it "rejects empty parentheses" $ case parseQuery "fold ()" of
+      Left _ -> pure ()
+      Right q -> expectationFailure $ "Expected parse error, got: " <> show q
+
     it "parses over with keys" $ do
       parseQuery "over keys trim" `shouldBe` Right (Over keys trim)
 

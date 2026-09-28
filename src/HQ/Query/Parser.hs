@@ -31,9 +31,7 @@ overParser :: Parser Query
 overParser = symbol "over" >> Over <$> opticParser <*> transformationParser
 
 foldParser :: Parser Query
-foldParser = do
-  void $ symbol "fold" <|> symbol "view"
-  Fold <$> opticParser
+foldParser = symbol "fold" >> Fold <$> opticParser
 
 previewParser :: Parser Query
 previewParser = symbol "preview" >> Preview <$> opticParser

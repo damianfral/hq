@@ -22,7 +22,12 @@ opticParser = dotChain opticAtomParser compose
 
 opticAtomParser :: Parser Optic
 opticAtomParser =
-  fieldParser <|> eachParser <|> keysParser <|> valuesParser <|> filterParser <|> idParser <|> prismParser <|> ixParser
+  fieldParser <|> eachParser <|> keysParser <|> valuesParser <|> filterParser <|> idParser <|> prismParser <|> ixParser <|> groupedOptic
+
+-- | A parenthesized optic, e.g. @(#a)@ or @(#a . #b)@: tolerates
+-- redundant parentheses anywhere an optic atom is accepted.
+groupedOptic :: Parser Optic
+groupedOptic = parens opticParser
 
 fieldParser :: Parser Optic
 fieldParser = char '#' >> field <$> identifier
@@ -45,7 +50,7 @@ valuesParser = keyword "values" values
 -- bare optic starts an outer composition (@filter #a ... . #b@), so
 -- dotted optics need the group form.
 filterParser :: Parser Optic
-filterParser = symbol "filter" >> (grouped <|> bare)
+filterParser = symbol "filter" >> (try grouped <|> bare)
   where
     grouped = do
       (o, t) <- parens ((,) <$> opticParser <*> transformationParser)
