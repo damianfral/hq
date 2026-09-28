@@ -12,6 +12,7 @@ import qualified Data.Text as T
 import HQ.Error (HQError)
 import HQ.JSON.Decoder.Error (DecodeError)
 import HQ.JSON.Decoder.StringBuffer
+import HQ.JSON.Depth (NestDepth)
 import HQ.JSON.Event (JSONEvent (..))
 import Relude hiding (Compose, id, many, some, state)
 import Streaming (Of, Stream)
@@ -19,6 +20,7 @@ import Streaming (Of, Stream)
 data DecoderState = DecoderState
   { decoderInput :: Text,
     decoderStack :: [DecodeContext],
+    decoderNestDepth :: NestDepth,
     decoderPhase :: DecoderPhase
   }
   deriving (Show, Eq)

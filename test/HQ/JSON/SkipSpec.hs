@@ -6,6 +6,7 @@ module HQ.JSON.SkipSpec (spec) where
 import Control.Monad.Error.Class (throwError)
 import qualified Data.Text as T
 import HQ.JSON.Decoder
+import HQ.JSON.Depth (NestDepth (NestDepth), initialDepth)
 import HQ.JSON.Event (JSONEvent (..))
 import HQ.JSON.Skip
 import Relude hiding (Compose, id)
@@ -43,7 +44,7 @@ runSkipMember :: [Text] -> IO (Either Text (Text, [Text]))
 runSkipMember [] = pure (Left "empty chunk list")
 runSkipMember (c : cs) = do
   result <- runExceptT $ do
-    (remText, rest) <- skipMemberValueText [DecodeObject] c (S.each cs)
+    (remText, rest) <- skipMemberValueText (NestDepth 0) [DecodeObject] c (S.each cs)
     remaining <- S.toList_ rest
     pure (remText, remaining)
   pure (first renderHQError result)
@@ -56,6 +57,7 @@ drainAfterSkippedMember remainder =
         DecoderState
           { decoderInput = remainder,
             decoderStack = [DecodeObject],
+            decoderNestDepth = initialDepth,
             decoderPhase = DecoderPhaseObjectComma
           }
    in case step decoder of

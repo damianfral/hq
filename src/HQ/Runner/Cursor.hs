@@ -1,4 +1,5 @@
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE StrictData #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 
@@ -151,9 +152,9 @@ skipMemberValue = lift . skipMemberValueE
 
 -- | 'skipMemberValue' in 'ExceptT': shared by both pipelines.
 skipMemberValueE :: Cursor -> ExceptT HQError IO Cursor
-skipMemberValueE (Cursor buffered decoder text)
+skipMemberValueE (Cursor buffered decoder@DecoderState {..} text)
   | null buffered = do
       (remainder, rest) <-
-        skipMemberValueText (decoderStack decoder) (decoderInput decoder) text
+        skipMemberValueText decoderNestDepth decoderStack decoderInput text
       pure $ Cursor [] (finishValue decoder {decoderInput = remainder}) rest
   | otherwise = skipValueE (Cursor buffered decoder text)

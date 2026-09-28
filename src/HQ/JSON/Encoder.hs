@@ -16,8 +16,6 @@ module HQ.JSON.Encoder
     ChunkStream,
     BSStream,
     EncodeContext (..),
-    NestDepth,
-    initialDepth,
     EncoderState,
     initialEncoderState,
     Raw (..),
@@ -32,6 +30,7 @@ import Data.ByteString.Builder (Builder, byteString, char7, charUtf8, integerDec
 import Data.Scientific (Scientific, base10Exponent, coefficient)
 import qualified Data.Text as Text
 import Data.Text.Encoding (encodeUtf8Builder)
+import HQ.JSON.Depth (NestDepth (..), deeper, initialDepth, shallower)
 import HQ.JSON.Event (JSONEvent (..))
 import Relude hiding (Compose, id, many, some, state)
 import Streaming (Of, Stream)
@@ -86,24 +85,6 @@ data EncodeContext
   | -- | A key was just emitted; the next event is its value.
     EncodeObjectAfterKey
   deriving (Eq, Show)
-
--- | Nesting depth: the number of enclosing containers, tracking
--- 'length' of the '[EncodeContext]' stack without traversing it.
--- Constructed once at 'initialDepth'; pushed with 'deeper', popped
--- with 'shallower'.
-newtype NestDepth = NestDepth Int deriving (Eq, Ord, Show)
-
--- | The depth outside all containers.
-initialDepth :: NestDepth
-initialDepth = NestDepth 0
-
--- | Descend into a container.
-deeper :: NestDepth -> NestDepth
-deeper (NestDepth n) = NestDepth (n + 1)
-
--- | Ascend out of a container.
-shallower :: NestDepth -> NestDepth
-shallower (NestDepth n) = NestDepth (n - 1)
 
 -- | Encoder state threaded through transcription: container contexts
 -- plus their depth, kept in sync by construction (only 'formatEvent'

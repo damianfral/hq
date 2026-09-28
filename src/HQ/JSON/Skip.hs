@@ -9,6 +9,7 @@ import Control.Monad.Error.Class (MonadError (throwError))
 import Data.Char (digitToInt, isDigit, isHexDigit)
 import qualified Data.Text as T
 import HQ.JSON.Decoder
+import HQ.JSON.Depth (NestDepth (..), deeper, shallower)
 import HQ.JSON.Event (JSONEvent (..))
 import Relude hiding (Compose, id, many, some, state)
 import qualified Streaming.Prelude as S
@@ -59,26 +60,31 @@ nextSkipChar input text = case T.uncons (T.dropWhile isWhitespace input) of
 -- | Skip exactly one JSON value starting at the head of the text
 -- (leading whitespace is allowed). The stack is the enclosing
 -- context, used for error categories and for detecting completion:
--- the skip ends when the stack is back at its entry depth. Returns
--- the unconsumed remainder and the rest of the stream.
+-- the skip ends when the depth is back at its entry level. The depth
+-- tracks 'length' of the stack without traversing it; callers compute
+-- it once and every push/pop adjusts it by one. Returns the
+-- unconsumed remainder and the rest of the stream.
 skipValueText ::
   [DecodeContext] ->
   Text ->
   StreamIO Text () ->
   ExceptT HQError IO (Text, StreamIO Text ())
-skipValueText stack = skipExpect (length stack) stack ExpectValue
+skipValueText stack =
+  let depth = NestDepth (length stack)
+   in skipExpect depth depth stack ExpectValue
 
 -- | Skip an object member value: the text starts where the key ended,
 -- so a colon is required first (mirroring 'ParserStateObjectColon').
 skipMemberValueText ::
+  NestDepth ->
   [DecodeContext] ->
   Text ->
   StreamIO Text () ->
   ExceptT HQError IO (Text, StreamIO Text ())
-skipMemberValueText stack input text = do
+skipMemberValueText depth stack input text = do
   (c, rest, text') <- nextSkipChar input text
   case c of
-    ':' -> skipExpect (length stack) stack ExpectValue rest text'
+    ':' -> skipExpect depth depth stack ExpectValue rest text'
     _ -> throwError (HQDecodeError ExpectedColon)
 
 -- | Skip the rest of the container whose opening event was just
@@ -95,96 +101,101 @@ skipContainerText open decoder text = case open of
   JSONBeginObject -> skipRest ExpectKey
   _ -> pure (decoder, text)
   where
-    -- The opener is already consumed, so the skip ends when the stack
-    -- pops back below its entry depth.
+    -- The opener is already consumed, so the skip ends when the depth
+    -- pops back below its entry level.
     skipRest expect = do
-      let base = length (decoderStack decoder) - 1
+      let depth = decoderNestDepth decoder
+          base = shallower depth
       (remainder, rest) <-
-        skipExpect base (decoderStack decoder) expect (decoderInput decoder) text
+        skipExpect base depth (decoderStack decoder) expect (decoderInput decoder) text
       case decoderStack decoder of
         _ : ctxs ->
           let newDecoder = decoder {decoderInput = remainder, decoderStack = ctxs}
            in pure (finishValue newDecoder, rest)
         [] -> pure (finishValue decoder {decoderInput = remainder}, rest)
 
--- | Structural skip loop. A value completing when the stack is back at
--- its entry depth ends the skip and returns the remainder.
+-- | Structural skip loop. A value completing when the depth is back at
+-- its entry level ends the skip and returns the remainder. The depth
+-- mirrors 'length' of the stack; pushes add one, pops subtract one,
+-- and every other step threads it unchanged.
 skipExpect ::
-  Int ->
+  NestDepth ->
+  NestDepth ->
   [DecodeContext] ->
   SkipExpect ->
   Text ->
   StreamIO Text () ->
   ExceptT HQError IO (Text, StreamIO Text ())
-skipExpect base stack ExpectValue input text = do
+skipExpect base depth stack ExpectValue input text = do
   (c, rest, text') <- nextSkipChar input text
   case c of
-    '{' -> skipExpect base (DecodeObject : stack) ExpectKey rest text'
-    '[' -> skipExpect base (DecodeArray : stack) ExpectValue rest text'
+    '{' -> skipExpect base (deeper depth) (DecodeObject : stack) ExpectKey rest text'
+    '[' -> skipExpect base (deeper depth) (DecodeArray : stack) ExpectValue rest text'
     '"' -> do
       (rest', text'') <- skipStringText rest text'
-      afterValue base stack rest' text''
+      afterValue base depth stack rest' text''
     't' -> skipKeywordCont "true" 1 rest text'
     'f' -> skipKeywordCont "false" 1 rest text'
     'n' -> skipKeywordCont "null" 1 rest text'
     _
       | c == '-' || isDigit c -> do
           (rest', text'') <- skipNumberText (startNumberState c) rest text'
-          afterValue base stack rest' text''
+          afterValue base depth stack rest' text''
       | c == ']' -> case stack of
-          DecodeArray : ctxs -> afterValue base ctxs rest text'
+          DecodeArray : ctxs -> afterValue base (shallower depth) ctxs rest text'
           _ -> throwError (HQDecodeError (UnexpectedChar c))
       | otherwise -> throwError (HQDecodeError (UnexpectedChar c))
   where
     skipKeywordCont keyword consumed rest' text'' = do
       (rest'', text''') <-
         skipKeywordText (keywordState keyword consumed) rest' text''
-      afterValue base stack rest'' text'''
-skipExpect base stack ExpectKey input text = do
+      afterValue base depth stack rest'' text'''
+skipExpect base depth stack ExpectKey input text = do
   (c, rest, text') <- nextSkipChar input text
   case c of
     '}' -> case stack of
-      _ : ctxs -> afterValue base ctxs rest text'
+      _ : ctxs -> afterValue base (shallower depth) ctxs rest text'
       [] -> throwError (HQDecodeError ExpectedObjectKey)
     '"' -> do
       (rest', text'') <- skipStringText rest text'
-      skipExpect base stack ExpectColon rest' text''
+      skipExpect base depth stack ExpectColon rest' text''
     _ -> throwError (HQDecodeError ExpectedObjectKey)
-skipExpect base stack ExpectColon input text = do
+skipExpect base depth stack ExpectColon input text = do
   (c, rest, text') <- nextSkipChar input text
   case c of
-    ':' -> skipExpect base stack ExpectValue rest text'
+    ':' -> skipExpect base depth stack ExpectValue rest text'
     _ -> throwError (HQDecodeError ExpectedColon)
-skipExpect base stack ExpectObjComma input text = do
+skipExpect base depth stack ExpectObjComma input text = do
   (c, rest, text') <- nextSkipChar input text
   case c of
-    ',' -> skipExpect base stack ExpectKey rest text'
+    ',' -> skipExpect base depth stack ExpectKey rest text'
     '}' -> case stack of
-      _ : ctxs -> afterValue base ctxs rest text'
+      _ : ctxs -> afterValue base (shallower depth) ctxs rest text'
       [] -> throwError (HQDecodeError ExpectedCommaOrEnd)
     _ -> throwError (HQDecodeError ExpectedCommaOrEnd)
-skipExpect base stack ExpectArrComma input text = do
+skipExpect base depth stack ExpectArrComma input text = do
   (c, rest, text') <- nextSkipChar input text
   case c of
-    ',' -> skipExpect base stack ExpectValue rest text'
+    ',' -> skipExpect base depth stack ExpectValue rest text'
     ']' -> case stack of
-      _ : ctxs -> afterValue base ctxs rest text'
+      _ : ctxs -> afterValue base (shallower depth) ctxs rest text'
       [] -> throwError (HQDecodeError ExpectedCommaOrEnd)
     _ -> throwError (HQDecodeError ExpectedCommaOrEnd)
 
 -- | A value just completed: return when back at the entry depth,
 -- otherwise expect the enclosing container's separator.
 afterValue ::
-  Int ->
+  NestDepth ->
+  NestDepth ->
   [DecodeContext] ->
   Text ->
   StreamIO Text () ->
   ExceptT HQError IO (Text, StreamIO Text ())
-afterValue base stack rest text'
-  | length stack <= base = pure (rest, text')
+afterValue base depth stack rest text'
+  | depth <= base = pure (rest, text')
   | otherwise = case stack of
-      DecodeArray : _ -> skipExpect base stack ExpectArrComma rest text'
-      DecodeObject : _ -> skipExpect base stack ExpectObjComma rest text'
+      DecodeArray : _ -> skipExpect base depth stack ExpectArrComma rest text'
+      DecodeObject : _ -> skipExpect base depth stack ExpectObjComma rest text'
       [] -> pure (rest, text')
 
 -- | Skip a string starting after its opening quote. Returns the text
