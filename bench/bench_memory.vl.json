@@ -1,13 +1,12 @@
 {
   "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
   "title": "Peak RSS (100 MB input)",
-  "width": 1000,
   "data": {
     "url": "hq-bench.csv"
   },
   "vconcat": [
     {
-      "width": 1000,
+      "width": 800,
       "height": {
         "step": 40
       },
@@ -17,8 +16,17 @@
           "as": "backend"
         },
         {
-          "aggregate": [{ "op": "median", "field": "peak_rss_mb", "as": "peak_rss_mb_median" }],
-          "groupby": ["command", "backend"]
+          "aggregate": [
+            {
+              "op": "median",
+              "field": "peak_rss_mb",
+              "as": "peak_rss_mb_median"
+            }
+          ],
+          "groupby": [
+            "command",
+            "backend"
+          ]
         }
       ],
       "mark": "bar",
@@ -28,7 +36,9 @@
           "type": "nominal",
           "title": null,
           "sort": null,
-          "axis": { "labelLimit": 600 }
+          "axis": {
+            "labelLimit": 600
+          }
         },
         "x": {
           "field": "peak_rss_mb_median",
@@ -40,8 +50,14 @@
           "type": "nominal",
           "title": "backend",
           "scale": {
-            "domain": ["hq", "jq"],
-            "range": ["#DA3322", "#333333"]
+            "domain": [
+              "hq",
+              "jq"
+            ],
+            "range": [
+              "#DA3322",
+              "#333333"
+            ]
           }
         },
         "tooltip": [
@@ -59,7 +75,7 @@
     },
     {
       "title": "Average (mean of medians)",
-      "width": 1000,
+      "width": 800,
       "height": {
         "step": 40
       },
@@ -69,15 +85,32 @@
           "as": "backend"
         },
         {
-          "aggregate": [{ "op": "median", "field": "peak_rss_mb", "as": "peak_rss_mb_median" }],
-          "groupby": ["command", "backend"]
+          "aggregate": [
+            {
+              "op": "median",
+              "field": "peak_rss_mb",
+              "as": "peak_rss_mb_median"
+            }
+          ],
+          "groupby": [
+            "command",
+            "backend"
+          ]
         },
         {
-          "aggregate": [{ "op": "mean", "field": "peak_rss_mb_median", "as": "peak_rss_mb_average" }],
-          "groupby": ["backend"]
+          "aggregate": [
+            {
+              "op": "mean",
+              "field": "peak_rss_mb_median",
+              "as": "peak_rss_mb_average"
+            }
+          ],
+          "groupby": [
+            "backend"
+          ]
         },
         {
-          "calculate": "datum.backend + ' total'",
+          "calculate": "datum.backend",
           "as": "command"
         }
       ],
@@ -87,8 +120,13 @@
           "field": "command",
           "type": "nominal",
           "title": null,
-          "sort": ["hq total", "jq total"],
-          "axis": { "labelLimit": 600 }
+          "sort": [
+            "hq",
+            "jq"
+          ],
+          "axis": {
+            "labelLimit": 600
+          }
         },
         "x": {
           "field": "peak_rss_mb_average",
@@ -100,8 +138,14 @@
           "type": "nominal",
           "title": "backend",
           "scale": {
-            "domain": ["hq", "jq"],
-            "range": ["#DA3322", "#333333"]
+            "domain": [
+              "hq",
+              "jq"
+            ],
+            "range": [
+              "#DA3322",
+              "#333333"
+            ]
           }
         },
         "tooltip": [

@@ -161,12 +161,13 @@
         packages.hq-bench-data = pkgs.stdenv.mkDerivation {
           name = "hq-bench-data";
           pname = "hq-bench-data";
+          src = json-data;
           version = "0.0.0.1";
           dontUnpack = true;
           buildInputs = [packages.hq-bench];
           buildPhase = ''
             set -xue
-            hq-bench ${json-data} hq-bench.csv 3
+            hq-bench $src hq-bench.csv 3
           '';
           installPhase = "mkdir $out && cp hq-bench.csv $out/";
         };
