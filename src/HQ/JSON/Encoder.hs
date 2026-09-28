@@ -28,7 +28,7 @@ where
 
 import Data.Bits (Bits (..))
 import qualified Data.ByteString as BS
-import Data.ByteString.Builder (Builder, byteString, char7, charUtf8, string7, stringUtf8, toLazyByteString)
+import Data.ByteString.Builder (Builder, byteString, char7, charUtf8, integerDec, string7, stringUtf8, toLazyByteString)
 import Data.Scientific (Scientific, base10Exponent, coefficient)
 import qualified Data.Text as Text
 import Data.Text.Encoding (encodeUtf8Builder)
@@ -115,32 +115,62 @@ data EncoderState = EncoderState [EncodeContext] NestDepth
 initialEncoderState :: EncoderState
 initialEncoderState = EncoderState [] initialDepth
 
--- | Show a 'Scientific' in compact JSON-compatible form.
+-- | Encode a 'Scientific' in compact JSON-compatible form, directly to
+-- a 'Chunk'.
 --
 -- GHC's 'show' instance for 'Scientific' produces "42.0" for integer
 -- values and "1.0e10" for exponent notation, neither of which is valid
--- JSON.  This function formats numbers correctly.
-showScientific :: Scientific -> Text
-showScientific n
-  | expo >= 0 = show (coefficient n * 10 ^ expo)
-  | otherwise = formatNonInteger (coefficient n) expo
-  where
-    expo = base10Exponent n
-
--- | Format a non-integer number with a negative exponent.
--- E.g. coefficient=1, expo=-2 → "0.01"; coefficient=15, expo=-2 → "0.15".
--- Negative coefficients produce a leading "-".
-formatNonInteger :: Integer -> Int -> Text
-formatNonInteger c e
-  | e >= 0 = show (c * 10 ^ e)
-  | len <= na = sign <> "0." <> Text.replicate (na - len) "0" <> show (abs c)
+-- JSON.  This function formats numbers correctly without intermediate
+-- 'Text'/'String' conversions and without @10 ^ expo@ bignum
+-- multiplications: non-negative exponents append @expo@ ASCII zeros,
+-- negative exponents splice the decimal point into the coefficient
+-- digits. Output text is identical to the previous 'show'-based
+-- implementation; only allocation is reduced.
+encodeNumber :: Scientific -> Chunk
+encodeNumber n
+  | c == 0 = Chunk (char7 '0') 1
+  | e >= 0 =
+      let signB = if c < 0 then char7 '-' else mempty
+          signLen = if c < 0 then 1 else 0
+          mag = abs c
+          digLen = integerDigits mag
+          zerosB = zeroBytes e
+       in Chunk (signB <> integerDec mag <> zerosB) (signLen + digLen + e)
   | otherwise =
-      let (prefix, suffix) = Text.splitAt (len - na) (show (abs c))
-       in sign <> prefix <> "." <> suffix
+      let signB = if c < 0 then char7 '-' else mempty
+          signLen = if c < 0 then 1 else 0
+          digits = show (abs c)
+          len = length digits
+          na = negate e
+       in if len <= na
+            then
+              Chunk
+                (signB <> string7 "0." <> zeroBytes (na - len) <> string7 digits)
+                (signLen + 2 + na)
+            else
+              let (prefix, suffix) = splitAt (len - na) digits
+               in Chunk
+                    (signB <> string7 prefix <> char7 '.' <> string7 suffix)
+                    (signLen + len + 1)
   where
-    sign = if c < 0 then "-" else ""
-    len = Text.length (show (abs c))
-    na = abs e
+    c = coefficient n
+    e = base10Exponent n
+
+-- | ASCII @'0'@ bytes as a builder: a @memset@, like 'indentSpaces'.
+zeroBytes :: Int -> Builder
+zeroBytes k
+  | k <= 0 = mempty
+  | otherwise = byteString (BS.replicate k 0x30)
+
+-- | Decimal digit count of a non-zero magnitude. Small values (the
+-- common case: ages, balances, ids) take 1-2 steps; large values loop
+-- once per digit without allocating a digit string.
+integerDigits :: Integer -> Int
+integerDigits x = go x (0 :: Int)
+  where
+    go v !acc
+      | v < 10 = acc + 1
+      | otherwise = go (v `quot` 10) (acc + 1)
 
 -- | Encode a stream of 'JSONEvent's into a stream of 'Chunk's.
 --
@@ -337,9 +367,7 @@ encodeEvent = \case
   JSONNull -> Chunk jsonNull 4
   JSONBool True -> Chunk jsonTrue 4
   JSONBool False -> Chunk jsonFalse 5
-  JSONNumber n ->
-    let text = toString (showScientific n)
-     in Chunk (string7 text) (length text)
+  JSONNumber n -> encodeNumber n
   JSONObjectKey text -> encodeString text
   JSONString text -> encodeString text
 
@@ -436,9 +464,7 @@ encodeChunks size = go mempty 0
       nextResult <- lift $ S.next stream
       case nextResult of
         Left r ->
-          if size' == 0
-            then Return r
-            else S.yield (flush builder) >> Return r
+          if size' == 0 then Return r else S.yield (flush builder) >> Return r
         Right (chunk, rest) ->
           let eventChunk = chunk
               newSize = size' + chunkSize eventChunk
