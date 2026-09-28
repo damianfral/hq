@@ -22,7 +22,17 @@ opticParser = dotChain opticAtomParser compose
 
 opticAtomParser :: Parser Optic
 opticAtomParser =
-  fieldParser <|> eachParser <|> keysParser <|> valuesParser <|> filterParser <|> idParser <|> prismParser <|> ixParser <|> groupedOptic
+  choice
+    [ fieldParser,
+      eachParser,
+      keysParser,
+      valuesParser,
+      filterParser,
+      idParser,
+      prismParser,
+      ixParser,
+      groupedOptic
+    ]
 
 -- | A parenthesized optic, e.g. @(#a)@ or @(#a . #b)@: tolerates
 -- redundant parentheses anywhere an optic atom is accepted.
