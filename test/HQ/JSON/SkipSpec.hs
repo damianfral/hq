@@ -11,7 +11,7 @@ import HQ.JSON.Event (JSONEvent (..))
 import HQ.JSON.Skip
 import Relude hiding (Compose, id)
 import qualified Streaming.Prelude as S
-import Test.HQ (decodeShown, drainCollect, malformedPullCorpus, runStreaming, splits, validPullCorpus)
+import Test.HQ (decodeShown, drainCollect, runStreaming, splits)
 import Test.Syd
 
 spec :: Spec
@@ -28,16 +28,6 @@ firstShown (Right _) = Right (mempty, [])
 --------------------------------------------------------------------------------
 -- skipValueText / skipMemberValueText
 --------------------------------------------------------------------------------
-
--- | Skip one value over chunks; collect remainder text and chunks.
-runSkipValue :: [Text] -> IO (Either Text (Text, [Text]))
-runSkipValue [] = pure (Left "empty chunk list")
-runSkipValue (c : cs) = do
-  result <- runExceptT $ do
-    (remText, rest) <- skipValueText [] c (S.each cs)
-    remaining <- S.toList_ rest
-    pure (remText, remaining)
-  pure (first renderHQError result)
 
 -- | Skip an object member value over chunks starting after the key.
 runSkipMember :: [Text] -> IO (Either Text (Text, [Text]))
@@ -65,47 +55,7 @@ drainAfterSkippedMember remainder =
         Right result -> drainCollect result
 
 skipTextSpec :: Spec
-skipTextSpec = describe "skipValueText" $ do
-  it "consumes single values exactly under every split" $ do
-    forM_ exactPullCorpus $ \input ->
-      forM_ (splits input) $ \chunks -> do
-        skipped <- runSkipValue chunks
-        case skipped of
-          Left err -> expectationFailure $ "skip failed: " <> toString err
-          Right (remHead, remChunks) ->
-            (remHead <> T.concat remChunks) `shouldBe` mempty
-
-  it "leaves trailing whitespace after skipped values" $ do
-    forM_ (splits " {\"a\" : [1, 2] } ") $ \chunks -> do
-      skipped <- runSkipValue chunks
-      case skipped of
-        Left err -> expectationFailure $ "skip failed: " <> toString err
-        Right (remHead, remChunks) ->
-          (remHead <> T.concat remChunks) `shouldBe` " "
-
-  it "reports the same errors as streaming decode under every split" $ do
-    forM_ malformedPullCorpus $ \input ->
-      forM_ (splits input) $ \chunks -> do
-        skipped <- runSkipValue chunks
-        skipped `shouldBe` firstShown (decodeShown chunks)
-
-  it "stops after complete values with trailing garbage" $ do
-    -- A complete value followed by garbage decodes to an error, but
-    -- skipping consumes exactly the value and returns the rest: the
-    -- continuation, not the skipper, reports the trailing input.
-    let inputJSON =
-          [ ("\"a\":1", ":1"),
-            ("[1] trailing", " trailing"),
-            ("{\"a\":1} x", " x")
-          ]
-    forM_ inputJSON $ \(input, trailing) ->
-      forM_ (splits input) $ \chunks -> do
-        skipped <- runSkipValue chunks
-        case skipped of
-          Left err -> expectationFailure $ "skip failed: " <> toString err
-          Right (remHead, remChunks) ->
-            (remHead <> T.concat remChunks) `shouldBe` trailing
-
+skipTextSpec = describe "skipMember" $ do
   it "skips member values and continues decoding after every split" $ do
     forM_ memberValues $ \value ->
       let full = "{\"a\":" <> value <> ",\"b\":2}"
@@ -193,9 +143,3 @@ skipContainerTextSpec = describe "skipContainerText" $ do
         "[[[]]]",
         "{\"a\":[1,{\"b\":2}]}"
       ]
-
--- | Values without leading/trailing whitespace: skipping must consume
--- everything. (Padded, empty and blank inputs are covered by the
--- neighbouring tests.)
-exactPullCorpus :: [Text]
-exactPullCorpus = filter (`notElem` ["", "   ", " {\"a\" : [1, 2] } "]) validPullCorpus

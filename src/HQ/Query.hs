@@ -11,7 +11,7 @@ import HQ.Optic.AST
 import HQ.Optic.OpticType (OpticType (..), canUseAs)
 import HQ.Transformation
 import HQ.Transformation.AST
-import HQ.Transformation.TransformationType (ValueType (..), transformationOutput)
+import HQ.Transformation.TransformationType (ValueType (..))
 import Relude hiding (Compose, many, not, or, some, subtract)
 
 --------------------------------------------------------------------------------

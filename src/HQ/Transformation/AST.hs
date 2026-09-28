@@ -1,7 +1,14 @@
 {-# LANGUAGE StrictData #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 
-module HQ.Transformation.AST where
+module HQ.Transformation.AST
+  ( buildTransformationAST,
+    TransformationAST (..),
+    TransformationType (..),
+    TransformationTypeError (..),
+    rootType,
+  )
+where
 
 import Control.Comonad.Cofree (Cofree ((:<)), _extract)
 import Data.Aeson.Types (Value (..))
@@ -14,7 +21,9 @@ import Relude.Extra (view)
 -- | A transformation annotated with input and output value types at each
 -- node. Used for static validation that transformation compositions are
 -- well-typed.
-newtype TransformationAST = TransformationAST {unTransformationAST :: Cofree TransformationF TransformationType}
+newtype TransformationAST = TransformationAST {unTransformationAST :: AST}
+
+type AST = Cofree TransformationF TransformationType
 
 -- | The type error produced when the composed steps of a transformation do
 -- not line up.
@@ -37,21 +46,31 @@ data TransformationTypeError
 -- of a 'Combine' do not line up: the output type of the right step must
 -- match the input type of the left step, unless the left step accepts any
 -- value (a constant).
-buildTransformationAST :: Transformation -> Either TransformationTypeError TransformationAST
+buildTransformationAST ::
+  Transformation -> Either TransformationTypeError TransformationAST
 buildTransformationAST (Transformation transformation) =
   TransformationAST <$> foldFix algebra transformation
   where
-    algebra :: TransformationF (Either TransformationTypeError (Cofree TransformationF TransformationType)) -> Either TransformationTypeError (Cofree TransformationF TransformationType)
+    algebra ::
+      TransformationF (Either TransformationTypeError AST) ->
+      Either TransformationTypeError AST
     algebra (Add n) = pure $ TransformationType ValueNumber ValueNumber :< Add n
-    algebra (Multiply n) = pure $ TransformationType ValueNumber ValueNumber :< Multiply n
-    algebra (Subtract n) = pure $ TransformationType ValueNumber ValueNumber :< Subtract n
-    algebra (Divide n) = pure $ TransformationType ValueNumber ValueNumber :< Divide n
-    algebra (ConcatString s) = pure $ TransformationType ValueString ValueString :< ConcatString s
-    algebra (ConcatArray xs) = pure $ TransformationType ValueArray ValueArray :< ConcatArray xs
+    algebra (Multiply n) =
+      pure $ TransformationType ValueNumber ValueNumber :< Multiply n
+    algebra (Subtract n) =
+      pure $ TransformationType ValueNumber ValueNumber :< Subtract n
+    algebra (Divide n) =
+      pure $ TransformationType ValueNumber ValueNumber :< Divide n
+    algebra (ConcatString s) =
+      pure $ TransformationType ValueString ValueString :< ConcatString s
+    algebra (ConcatArray xs) =
+      pure $ TransformationType ValueArray ValueArray :< ConcatArray xs
     algebra Trim = pure $ TransformationType ValueString ValueString :< Trim
-    algebra (Replace a b) = pure $ TransformationType ValueString ValueString :< Replace a b
+    algebra (Replace a b) =
+      pure $ TransformationType ValueString ValueString :< Replace a b
     algebra (Equal v) = pure $ TransformationType ValueAny ValueBool :< Equal v
-    algebra (Const v) = pure $ TransformationType ValueAny (valueType v) :< Const v
+    algebra (Const v) =
+      pure $ TransformationType ValueAny (valueType v) :< Const v
     algebra Not = pure $ TransformationType ValueBool ValueBool :< Not
     algebra (Or left right) = do
       l <- left
@@ -60,7 +79,8 @@ buildTransformationAST (Transformation transformation) =
           rt = view _extract r
       case (transformationOutput lt, transformationOutput rt) of
         (ValueBool, ValueBool) ->
-          pure $ TransformationType (transformationInput (view _extract l)) ValueBool :< Or l r
+          let inputType = transformationInput $ view _extract l
+           in pure $ TransformationType inputType ValueBool :< Or l r
         (ValueBool, other) ->
           Left $ InvalidOr (subTransformation (Or l r)) other
         (other, _) ->
@@ -70,9 +90,21 @@ buildTransformationAST (Transformation transformation) =
       r <- right
       let lt = view _extract l
           rt = view _extract r
-      if transformationInput lt == ValueAny || transformationOutput rt == transformationInput lt
-        then pure $ TransformationType (transformationInput rt) (transformationOutput lt) :< Combine l r
-        else Left $ InvalidCombine (subTransformation (Combine l r)) (transformationOutput rt) (transformationInput lt)
+          conditions =
+            [ transformationInput lt == ValueAny,
+              transformationOutput rt == transformationInput lt
+            ]
+          inputType = transformationInput rt
+          outputType = transformationOutput lt
+      if getAny $ foldMap Any conditions
+        then do
+          pure $ TransformationType inputType outputType :< Combine l r
+        else
+          Left
+            $ InvalidCombine
+              (subTransformation (Combine l r))
+              (transformationOutput rt)
+              (transformationInput lt)
 
 -- | The 'ValueType' of an embedded JSON literal.
 valueType :: Value -> ValueType
@@ -88,7 +120,7 @@ cofreeToFix :: (Functor f) => Cofree f a -> Fix f
 cofreeToFix (_ :< f) = Fix (fmap cofreeToFix f)
 
 -- | The original transformation represented by an annotated subtree.
-subTransformation :: TransformationF (Cofree TransformationF TransformationType) -> Transformation
+subTransformation :: TransformationF AST -> Transformation
 subTransformation = Transformation . Fix . fmap cofreeToFix
 
 -- | The root type of a well-typed transformation.

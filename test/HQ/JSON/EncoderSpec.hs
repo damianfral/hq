@@ -42,29 +42,18 @@ encodeEventsWith encConfig events = runIdentity $ do
 
 encodeSpec :: Spec
 encodeSpec = describe "encode" $ do
-  it "encodes null"
-    $ encodeEvents [JSONNull]
-    `shouldBe` "null"
+  it "encodes null" $ encodeEvents [JSONNull] `shouldBe` "null"
 
-  it "encodes true"
-    $ encodeEvents [JSONBool True]
-    `shouldBe` "true"
+  it "encodes true" $ encodeEvents [JSONBool True] `shouldBe` "true"
 
-  it "encodes false"
-    $ encodeEvents [JSONBool False]
-    `shouldBe` "false"
+  it "encodes false" $ encodeEvents [JSONBool False] `shouldBe` "false"
 
-  it "encodes number"
-    $ encodeEvents [JSONNumber 42]
-    `shouldBe` "42"
+  it "encodes number" $ encodeEvents [JSONNumber 42] `shouldBe` "42"
 
-  it "encodes string"
-    $ encodeEvents [JSONString "hello"]
-    `shouldBe` "\"hello\""
+  it "encodes string" $ encodeEvents [JSONString "hello"] `shouldBe` "\"hello\""
 
-  it "encodes empty object"
-    $ encodeEvents [JSONBeginObject, JSONEndObject]
-    `shouldBe` "{}"
+  it "encodes empty object" $ do
+    encodeEvents [JSONBeginObject, JSONEndObject] `shouldBe` "{}"
 
   it "encodes object with one field"
     $ encodeEvents
@@ -86,13 +75,11 @@ encodeSpec = describe "encode" $ do
       ]
     `shouldBe` "{\"a\":1,\"b\":2}"
 
-  it "encodes empty array"
-    $ encodeEvents [JSONBeginArray, JSONEndArray]
-    `shouldBe` "[]"
+  it "encodes empty array" $ do
+    encodeEvents [JSONBeginArray, JSONEndArray] `shouldBe` "[]"
 
-  it "encodes array with one element"
-    $ encodeEvents [JSONBeginArray, JSONNumber 1, JSONEndArray]
-    `shouldBe` "[1]"
+  it "encodes array with one element" $ do
+    encodeEvents [JSONBeginArray, JSONNumber 1, JSONEndArray] `shouldBe` "[1]"
 
   it "encodes array with multiple elements"
     $ encodeEvents
@@ -104,8 +91,8 @@ encodeSpec = describe "encode" $ do
       ]
     `shouldBe` "[1,2,3]"
 
-  it "encodes array of strings"
-    $ encodeEvents
+  it "encodes array of strings" $ do
+    encodeEvents
       [ JSONBeginArray,
         JSONString "a",
         JSONString "b",
@@ -113,8 +100,8 @@ encodeSpec = describe "encode" $ do
       ]
     `shouldBe` "[\"a\",\"b\"]"
 
-  it "encodes nested objects"
-    $ encodeEvents
+  it "encodes nested objects" $ do
+    encodeEvents
       [ JSONBeginObject,
         JSONObjectKey "a",
         JSONBeginObject,
@@ -125,8 +112,8 @@ encodeSpec = describe "encode" $ do
       ]
     `shouldBe` "{\"a\":{\"b\":1}}"
 
-  it "encodes nested arrays"
-    $ encodeEvents
+  it "encodes nested arrays" $ do
+    encodeEvents
       [ JSONBeginArray,
         JSONBeginArray,
         JSONNumber 1,
@@ -138,8 +125,8 @@ encodeSpec = describe "encode" $ do
       ]
     `shouldBe` "[[1],[2]]"
 
-  it "encodes object containing array"
-    $ encodeEvents
+  it "encodes object containing array" $ do
+    encodeEvents
       [ JSONBeginObject,
         JSONObjectKey "items",
         JSONBeginArray,
@@ -150,8 +137,8 @@ encodeSpec = describe "encode" $ do
       ]
     `shouldBe` "{\"items\":[1,2]}"
 
-  it "encodes array containing object"
-    $ encodeEvents
+  it "encodes array containing object" $ do
+    encodeEvents
       [ JSONBeginArray,
         JSONBeginObject,
         JSONObjectKey "a",
@@ -161,8 +148,8 @@ encodeSpec = describe "encode" $ do
       ]
     `shouldBe` "[{\"a\":1}]"
 
-  it "encodes complex structure"
-    $ encodeEvents
+  it "encodes complex structure" $ do
+    encodeEvents
       [ JSONBeginObject,
         JSONObjectKey "users",
         JSONBeginArray,
@@ -209,11 +196,11 @@ encodePrettySpec = describe "pretty encode" $ do
         encodeEventsWith prettyConfig events `shouldBe` expected
 
   describe "empty containers stay compact" $ do
-    it "empty object"
-      $ encodeEventsWith prettyConfig [JSONBeginObject, JSONEndObject]
+    it "empty object" $ do
+      encodeEventsWith prettyConfig [JSONBeginObject, JSONEndObject]
       `shouldBe` "{}"
-    it "empty array"
-      $ encodeEventsWith prettyConfig [JSONBeginArray, JSONEndArray]
+    it "empty array" $ do
+      encodeEventsWith prettyConfig [JSONBeginArray, JSONEndArray]
       `shouldBe` "[]"
     it "empty containers nested in non-empty containers" $ do
       encodeEventsWith
@@ -234,20 +221,18 @@ encodePrettySpec = describe "pretty encode" $ do
         `shouldBe` "[\n  [],\n  []\n]"
 
   describe "single-element containers" $ do
-    it "object"
-      $ encodeEventsWith
+    it "object" $ do
+      encodeEventsWith
         prettyConfig
         [JSONBeginObject, JSONObjectKey "name", JSONString "Alice", JSONEndObject]
       `shouldBe` "{\n  \"name\": \"Alice\"\n}"
-    it "array"
-      $ encodeEventsWith
-        prettyConfig
-        [JSONBeginArray, JSONNumber 42, JSONEndArray]
+    it "array" $ do
+      encodeEventsWith prettyConfig [JSONBeginArray, JSONNumber 42, JSONEndArray]
       `shouldBe` "[\n  42\n]"
 
   describe "multiple elements" $ do
-    it "object with multiple fields"
-      $ encodeEventsWith
+    it "object with multiple fields" $ do
+      encodeEventsWith
         prettyConfig
         [ JSONBeginObject,
           JSONObjectKey "a",
@@ -257,15 +242,15 @@ encodePrettySpec = describe "pretty encode" $ do
           JSONEndObject
         ]
       `shouldBe` "{\n  \"a\": 1,\n  \"b\": 2\n}"
-    it "array with multiple elements"
-      $ encodeEventsWith
+    it "array with multiple elements" $ do
+      encodeEventsWith
         prettyConfig
         [JSONBeginArray, JSONNumber 1, JSONNumber 2, JSONNumber 3, JSONEndArray]
       `shouldBe` "[\n  1,\n  2,\n  3\n]"
 
   describe "nested structures" $ do
-    it "object in object"
-      $ encodeEventsWith
+    it "object in object" $ do
+      encodeEventsWith
         prettyConfig
         [ JSONBeginObject,
           JSONObjectKey "a",
@@ -276,13 +261,15 @@ encodePrettySpec = describe "pretty encode" $ do
           JSONEndObject
         ]
       `shouldBe` "{\n  \"a\": {\n    \"b\": 1\n  }\n}"
-    it "array in array"
-      $ encodeEventsWith
+
+    it "array in array" $ do
+      encodeEventsWith
         prettyConfig
         [JSONBeginArray, JSONBeginArray, JSONNumber 1, JSONEndArray, JSONEndArray]
       `shouldBe` "[\n  [\n    1\n  ]\n]"
-    it "array in object"
-      $ encodeEventsWith
+
+    it "array in object" $ do
+      encodeEventsWith
         prettyConfig
         [ JSONBeginObject,
           JSONObjectKey "users",
@@ -293,13 +280,20 @@ encodePrettySpec = describe "pretty encode" $ do
           JSONEndObject
         ]
       `shouldBe` "{\n  \"users\": [\n    1,\n    2\n  ]\n}"
-    it "object in array"
-      $ encodeEventsWith
+
+    it "object in array" $ do
+      encodeEventsWith
         prettyConfig
-        [JSONBeginArray, JSONBeginObject, JSONObjectKey "a", JSONNumber 1, JSONEndObject, JSONEndArray]
+        [ JSONBeginArray,
+          JSONBeginObject,
+          JSONObjectKey "a",
+          JSONNumber 1,
+          JSONEndObject,
+          JSONEndArray
+        ]
       `shouldBe` "[\n  {\n    \"a\": 1\n  }\n]"
-    it "deeply nested"
-      $ encodeEventsWith
+    it "deeply nested" $ do
+      encodeEventsWith
         prettyConfig
         [ JSONBeginObject,
           JSONObjectKey "a",
@@ -315,8 +309,8 @@ encodePrettySpec = describe "pretty encode" $ do
           JSONEndObject
         ]
       `shouldBe` "{\n  \"a\": {\n    \"b\": [\n      {\n        \"c\": 1\n      }\n    ]\n  }\n}"
-    it "complex structure"
-      $ encodeEventsWith
+    it "complex structure" $ do
+      encodeEventsWith
         prettyConfig
         [ JSONBeginObject,
           JSONObjectKey "users",
@@ -339,10 +333,16 @@ encodePrettySpec = describe "pretty encode" $ do
           JSONEndObject
         ]
       `shouldBe` "{\n  \"users\": [\n    {\n      \"name\": \"alice\",\n      \"age\": 30\n    },\n    {\n      \"name\": \"bob\",\n      \"age\": 25\n    }\n  ],\n  \"count\": 2\n}"
-    it "mixed types in array"
-      $ encodeEventsWith
+    it "mixed types in array" $ do
+      encodeEventsWith
         prettyConfig
-        [JSONBeginArray, JSONNumber 1, JSONString "hello", JSONBool True, JSONNull, JSONEndArray]
+        [ JSONBeginArray,
+          JSONNumber 1,
+          JSONString "hello",
+          JSONBool True,
+          JSONNull,
+          JSONEndArray
+        ]
       `shouldBe` "[\n  1,\n  \"hello\",\n  true,\n  null\n]"
 
   describe "string escaping is preserved" $ do

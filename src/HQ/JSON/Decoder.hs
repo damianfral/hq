@@ -12,27 +12,12 @@ module HQ.JSON.Decoder
   ( module HQ.Error,
     module HQ.JSON.Decoder.Core,
     module HQ.JSON.Decoder.Error,
-    module HQ.JSON.Decoder.Keyword,
-    module HQ.JSON.Decoder.Number,
-    module HQ.JSON.Decoder.String,
     initialDecoder,
     feed,
     finish,
     step,
-    stepStructural,
-    parseStructuralChar,
-    parseValueChar,
-    startValue,
-    isNumberStart,
-    isRootDone,
     decode,
-    runDecoder,
-    drain,
-    drainStep,
-    drainTrailing,
-    drainAtEnd,
     pullEvent,
-    decodeIO,
   )
 where
 
@@ -322,10 +307,3 @@ pullEvent decoder txtStream = case step decoder of
       Right (Done _) -> pure EndOfInput
       Right (NeedInput _) -> throwError (HQDecodeError UnexpectedEnd)
       Right (Emit event dec') -> pure $ NextEvent event dec' $ pure ()
-
-decodeIO :: StreamIO Text () -> StreamIO JSONEvent ()
-decodeIO input = do
-  result <- decode input
-  case result of
-    Left err -> throwError (HQDecodeError err)
-    Right () -> pure ()

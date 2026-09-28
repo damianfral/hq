@@ -8,15 +8,8 @@ module HQ.Runner
     module HQ.Runner.Take,
     module HQ.Runner.Fold,
     module HQ.Runner.Rewrite,
-    RunnerEnv (..),
-    RunnerF (..),
-    Runner,
-    runRunner,
-    runRunnerIO,
     runRunnerIOWith,
     jsonRunner,
-    streamHandle,
-    decodeUtf8Stream,
   )
 where
 
@@ -26,7 +19,7 @@ import qualified Data.ByteString.Lazy as LBS
 import Data.Text.IO (hPutStrLn)
 import HQ.Error (HQError (..), renderHQError)
 import HQ.JSON.Decoder (StreamIO, initialDecoder)
-import HQ.JSON.Encoder (BSStream, EncodeStyle (..), EncoderConfig (..), Join (..), Raw (..), ValueOptions (..), encode, encodeChunks, initialEncoderState)
+import HQ.JSON.Encoder (BSStream, EncoderConfig (..), encode, encodeChunks, initialEncoderState)
 import HQ.Query (Query (..))
 import HQ.Runner.Cursor
 import HQ.Runner.Error (RunnerError (..))
@@ -43,7 +36,7 @@ data RunnerEnv = RunnerEnv
     runnerEnvConfig :: EncoderConfig
   }
 
-newtype RunnerF a = Runner {unRunner :: ReaderT RunnerEnv (ExceptT HQError IO) a}
+newtype RunnerF a = Runner (ReaderT RunnerEnv (ExceptT HQError IO) a)
   deriving newtype
     ( Functor,
       Applicative,
@@ -64,13 +57,6 @@ runRunner ::
 runRunner (Runner runner) query config handle = runReaderT runner env
   where
     env = RunnerEnv query (streamHandle 256 handle) config
-
--- | Run a query, encoding the selected values to stdout with pretty
--- formatting and default value options.
-runRunnerIO :: Runner -> Query -> Handle -> IO ()
-runRunnerIO runner query = runRunnerIOWith runner query config
-  where
-    config = EncoderConfig (Pretty 2) (ValueOptions NoRaw NoJoin)
 
 -- | Run a query, encoding the selected values to stdout with the given
 -- style and value options.
@@ -110,13 +96,18 @@ jsonRunner = do
   input <- asks runnerEnvInput
   config <- asks runnerEnvConfig
   let cursor = Cursor [] initialDecoder (decodeUtf8Stream input)
-  case query of
-    Preview optic -> pure (void (encode config 65536 (takeFirstValue (runFold optic cursor))))
-    Fold optic -> pure (void (encode config 65536 (runFold optic cursor)))
-    Over optic transformation ->
-      pure (void (encodeChunks 65536 (runRewrite (RewriteTransform transformation) optic config cursor initialEncoderState)))
-    Delete optic ->
-      pure (void (encodeChunks 65536 (runRewrite RewriteDelete optic config cursor initialEncoderState)))
+  pure $ case query of
+    Preview optic -> void $ do
+      encode config 65536 (takeFirstValue (runFold optic cursor))
+    Fold optic -> void $ encode config 65536 (runFold optic cursor)
+    Over optic transformation -> void $ do
+      encodeChunks 65536 $ do
+        let transform = RewriteTransform transformation
+        runRewrite transform optic config cursor initialEncoderState
+    Delete optic -> do
+      let rewriting =
+            runRewrite RewriteDelete optic config cursor initialEncoderState
+      void $ encodeChunks 65536 rewriting
 
 decodeUtf8Stream :: StreamIO ByteString () -> StreamIO Text ()
 decodeUtf8Stream = go mempty

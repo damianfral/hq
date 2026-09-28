@@ -1,5 +1,6 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE StrictData #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 
@@ -9,6 +10,8 @@ import Control.Monad.Error.Class (MonadError (throwError))
 import Data.Char (digitToInt, isDigit, isHexDigit)
 import qualified Data.Text as T
 import HQ.JSON.Decoder
+import HQ.JSON.Decoder.Keyword (advanceKeyword, keywordState)
+import HQ.JSON.Decoder.Number (advanceNumber, isValidNumberFinal, startNumberState)
 import HQ.JSON.Depth (NestDepth (..), deeper, shallower)
 import HQ.JSON.Event (JSONEvent (..))
 import Relude hiding (Compose, id, many, some, state)
@@ -57,22 +60,6 @@ nextSkipChar input text = case T.uncons (T.dropWhile isWhitespace input) of
       Left () -> throwError (HQDecodeError UnexpectedEnd)
       Right (chunk, rest) -> nextSkipChar chunk rest
 
--- | Skip exactly one JSON value starting at the head of the text
--- (leading whitespace is allowed). The stack is the enclosing
--- context, used for error categories and for detecting completion:
--- the skip ends when the depth is back at its entry level. The depth
--- tracks 'length' of the stack without traversing it; callers compute
--- it once and every push/pop adjusts it by one. Returns the
--- unconsumed remainder and the rest of the stream.
-skipValueText ::
-  [DecodeContext] ->
-  Text ->
-  StreamIO Text () ->
-  ExceptT HQError IO (Text, StreamIO Text ())
-skipValueText stack =
-  let depth = NestDepth (length stack)
-   in skipExpect depth depth stack ExpectValue
-
 -- | Skip an object member value: the text starts where the key ended,
 -- so a colon is required first (mirroring 'ParserStateObjectColon').
 skipMemberValueText ::
@@ -96,7 +83,7 @@ skipContainerText ::
   DecoderState ->
   StreamIO Text () ->
   ExceptT HQError IO (DecoderState, StreamIO Text ())
-skipContainerText open decoder text = case open of
+skipContainerText open decoder@DecoderState {..} text = case open of
   JSONBeginArray -> skipRest ExpectValue
   JSONBeginObject -> skipRest ExpectKey
   _ -> pure (decoder, text)
@@ -104,11 +91,11 @@ skipContainerText open decoder text = case open of
     -- The opener is already consumed, so the skip ends when the depth
     -- pops back below its entry level.
     skipRest expect = do
-      let depth = decoderNestDepth decoder
+      let depth = decoderNestDepth
           base = shallower depth
       (remainder, rest) <-
-        skipExpect base depth (decoderStack decoder) expect (decoderInput decoder) text
-      case decoderStack decoder of
+        skipExpect base depth decoderStack expect decoderInput text
+      case decoderStack of
         _ : ctxs ->
           let newDecoder = decoder {decoderInput = remainder, decoderStack = ctxs}
            in pure (finishValue newDecoder, rest)

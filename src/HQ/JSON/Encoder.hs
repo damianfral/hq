@@ -198,12 +198,12 @@ formatEvent (EncoderConfig style (ValueOptions rawOpt joinOpt)) st event =
        in (sep <> valueChunk event st <> finishValue st'', st'')
   where
     closeContainerAndFinish =
-      let (sep, st') = closeContainer style st
-       in (sep <> finishValue st', st')
+      let (sep, st') = closeContainer style st in (sep <> finishValue st', st')
 
     -- Push one container context, tracking depth alongside.
     pushCtx :: EncodeContext -> EncoderState -> EncoderState
-    pushCtx ctx (EncoderState ctxs depth) = EncoderState (ctx : ctxs) (deeper depth)
+    pushCtx ctx (EncoderState ctxs depth) =
+      EncoderState (ctx : ctxs) (deeper depth)
 
     -- Render one value event, honoring raw top-level string output.
     valueChunk :: JSONEvent -> EncoderState -> Chunk
@@ -287,8 +287,7 @@ closingDelimiter style (NestDepth depth) ctx = case ctx of
 -- item); in 'Pretty' mode a newline (preceded by a comma except for the
 -- first item) and indentation to @depth@.
 elementSeparator :: EncodeStyle -> Bool -> NestDepth -> Chunk
-elementSeparator Compact seen _ =
-  if seen then Chunk comma 1 else mempty
+elementSeparator Compact seen _ = if seen then Chunk comma 1 else mempty
 elementSeparator (Pretty width) seen (NestDepth depth) =
   let size = width * depth
       prefix = if seen then commaNewline else newline

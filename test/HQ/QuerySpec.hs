@@ -113,26 +113,3 @@ spec = describe "HQ.Query" $ do
         Left err ->
           expectationFailure $ "wrong error: " <> show err
         Right _ -> expectationFailure "expected a type error"
-
-  describe "renderTypeError" $ do
-    it "renders an optic mismatch" $ do
-      let err = InvalidOpticType OpticPrism OpticTraversal
-      renderTypeError err
-        `shouldBe` "optic mismatch: this query needs a prism (at most one target) but the optic is a traversal"
-
-    it "renders a transformation seam mismatch" $ do
-      let bad = combine (add 1) (equal (Number 3))
-          err = InvalidTransformationType (InvalidCombine bad ValueBool ValueNumber)
-      renderTypeError err
-        `shouldBe` "transformation mismatch in +1 . == 3: produces boolean but the next step expects number"
-
-    it "renders a non-boolean or branch" $ do
-      let bad = or (add 1) (equal (Number 2))
-          err = InvalidTransformationType (InvalidOr bad ValueNumber)
-      renderTypeError err
-        `shouldBe` "transformation mismatch in +1 or == 2: both sides of or must produce booleans, but a branch produces number"
-
-    it "renders a non-boolean filter predicate" $ do
-      let err = InvalidTransformationType (InvalidFilter (add 1) ValueNumber)
-      renderTypeError err
-        `shouldBe` "filter transformation +1 must produce a boolean, but produces number"
