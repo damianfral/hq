@@ -1,3 +1,4 @@
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE StrictData #-}
 {-# LANGUAGE NoImplicitPrelude #-}
@@ -6,20 +7,20 @@ module HQ.JSON.Parser where
 
 import Data.Aeson (Value (..))
 import Data.Aeson.Key (fromText)
+import Data.Scientific (Scientific)
+import qualified Data.Vector as V
 import qualified HQ.JSON.Decoder as Decoder
 import HQ.JSON.Event (JSONEvent (..))
+import HQ.Parser (Parser, braces, brackets, colon, commaSep, lexeme, parseTop, sc, symbol)
 import Relude hiding (Compose, id, many, some)
 import Streaming (Of (..))
 import qualified Streaming.Prelude as S
 import Text.Megaparsec
-import Text.Megaparsec.Char
+import Text.Megaparsec.Char (char)
 import Text.Megaparsec.Char.Lexer (scientific, signed)
-import qualified Text.Megaparsec.Char.Lexer as L
-
-type Parser = Parsec Void Text
 
 parseValue :: Text -> Either (ParseErrorBundle Text Void) Value
-parseValue = parse (sc *> jsonValueParser <* eof) "value"
+parseValue = parseTop "value" jsonValueParser
 
 -- | Parse a single JSON value into the streaming event grammar,
 -- preserving object member order.
@@ -47,20 +48,17 @@ jsonValueParser :: Parser Value
 jsonValueParser = nullParser <|> boolParser <|> numberParser <|> stringParser <|> arrayParser <|> objectParser
 
 nullParser :: Parser Value
-nullParser = L.symbol sc "null" $> Null
+nullParser = symbol "null" $> Null
 
 boolParser :: Parser Value
-boolParser = (L.symbol sc "true" $> Bool True) <|> (L.symbol sc "false" $> Bool False)
+boolParser = (symbol "true" $> Bool True) <|> (symbol "false" $> Bool False)
 
 numberParser :: Parser Value
-numberParser = L.lexeme sc $ Number <$> signed sc scientific
+numberParser = lexeme $ Number <$> signed sc scientific
 
-stringParser :: Parser Value
-stringParser = L.lexeme sc $ do
-  void $ char '"'
-  chars <- many (escapedChar <|> nonEscapeChar)
-  void $ char '"'
-  pure $ String (toText chars)
+-- | Raw string contents without quotes, shared by values and object keys.
+jsonStringContent :: Parser Text
+jsonStringContent = toText <$> many (escapedChar <|> nonEscapeChar)
   where
     escapedChar = do
       void $ char '\\'
@@ -73,30 +71,51 @@ stringParser = L.lexeme sc $ do
         _ -> c
     nonEscapeChar = satisfy (\c -> c /= '"' && c /= '\\')
 
+stringParser :: Parser Value
+stringParser = lexeme $ do
+  void $ char '"'
+  chars <- jsonStringContent
+  void $ char '"'
+  pure $ String chars
+
 arrayParser :: Parser Value
-arrayParser = do
-  void $ L.lexeme sc (char '[')
-  vals <- jsonValueParser `sepBy` L.lexeme sc (char ',')
-  void $ L.lexeme sc (char ']')
-  pure $ Array (fromList vals)
+arrayParser = Array . fromList <$> brackets (commaSep jsonValueParser)
 
 objectParser :: Parser Value
 objectParser = do
-  void $ L.lexeme sc $ char '{'
-  pairs <- objectField `sepBy` L.lexeme sc (char ',')
-  void $ L.lexeme sc $ char '}'
+  pairs <- braces (commaSep objectField)
   pure $ Object $ fromList [(fromText k, v) | (k, v) <- pairs]
 
 objectField :: Parser (Text, Value)
 objectField = do
-  key <- L.lexeme sc $ do
-    void $ char '"'
-    k <- many (satisfy (\c -> c /= '"' && c /= '\\'))
-    void $ char '"'
-    pure (toText k)
-  void $ L.lexeme sc (char ':')
+  key <- lexeme $ char '"' *> jsonStringContent <* char '"'
+  colon
   val <- jsonValueParser
   pure (key, val)
 
-sc :: Parser ()
-sc = L.space (void spaceChar) empty empty
+-- | Parse a JSON value and project it, failing with @msg@ on mismatch.
+-- Shared by transformation operands so @+1@, @++ \"s\"@ and @concat@ stay total.
+jsonTyped :: Text -> (Value -> Maybe a) -> Parser a
+jsonTyped msg project = do
+  value <- jsonValueParser
+  case project value of
+    Just a -> pure a
+    Nothing -> fail (toString msg)
+
+-- | A JSON number literal, e.g. @1@ or @0.5@.
+jsonNumber :: Parser Scientific
+jsonNumber = jsonTyped "expected a JSON number" $ \case
+  Number n -> Just n
+  _ -> Nothing
+
+-- | A JSON string literal, e.g. @\"hello\"@.
+jsonText :: Parser Text
+jsonText = jsonTyped "expected a JSON string" $ \case
+  String t -> Just t
+  _ -> Nothing
+
+-- | A JSON array literal, e.g. @[1, \"two\"]@.
+jsonArray :: Parser [Value]
+jsonArray = jsonTyped "expected a JSON array" $ \case
+  Array items -> Just (V.toList items)
+  _ -> Nothing
