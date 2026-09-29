@@ -1,3 +1,4 @@
+{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE StrictData #-}
 {-# LANGUAGE NoImplicitPrelude #-}
@@ -67,14 +68,14 @@ finish decoder = case decoderPhase decoder of
   _ -> Left UnexpectedEnd
 
 step :: DecoderState -> Either DecodeError DecoderResult
-step decoder = case decoderPhase decoder of
+step !decoder = case decoderPhase decoder of
   DecoderPhaseString state -> stepString decoder state
   DecoderPhaseNumber numState -> stepNumber decoder numState
   DecoderPhaseKeyword state -> stepKeyword decoder state
   _ -> stepStructural decoder
 
 stepStructural :: DecoderState -> Either DecodeError DecoderResult
-stepStructural decoder = case T.uncons input of
+stepStructural !decoder = case T.uncons input of
   Nothing -> case decoderPhase decoder of
     DecoderPhaseFinished ->
       let newDecoder = decoder {decoderInput = mempty}
@@ -89,7 +90,7 @@ stepStructural decoder = case T.uncons input of
 
 parseStructuralChar ::
   Char -> Text -> DecoderState -> Either DecodeError DecoderResult
-parseStructuralChar c rest decoder = case decoderPhase decoder of
+parseStructuralChar !c !rest !decoder = case decoderPhase decoder of
   DecoderPhaseValue -> parseValueChar c rest decoder
   DecoderPhaseObjectKey
     | c == '}' -> case decoderStack decoder of
@@ -127,14 +128,14 @@ parseStructuralChar c rest decoder = case decoderPhase decoder of
   DecoderPhaseKeyword _ -> Left (UnexpectedChar c)
 
 parseValueChar :: Char -> Text -> DecoderState -> Either DecodeError DecoderResult
-parseValueChar c rest decoder = case decoderStack decoder of
+parseValueChar !c !rest !decoder = case decoderStack decoder of
   DecodeArray : contexts
     | c == ']' ->
         emitContainerEnd JSONEndArray rest decoder {decoderStack = contexts}
   _ -> startValue c rest decoder
 
 startValue :: Char -> Text -> DecoderState -> Either DecodeError DecoderResult
-startValue c rest decoder = case c of
+startValue !c !rest !decoder = case c of
   '{' ->
     Right
       $ Emit

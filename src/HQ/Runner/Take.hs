@@ -1,3 +1,4 @@
+{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 
 module HQ.Runner.Take where
@@ -168,7 +169,7 @@ takeContainerChunks config closing c st0 = go c st0 mempty 0
       Builder ->
       Int ->
       ChunkStream (ExceptT HQError IO) (EncoderState, Cursor)
-    go (Cursor buf dec txt) st pend pendSize = case buf of
+    go (Cursor !buf dec txt) !st !pend !pendSize = case buf of
       event : rest -> emit event (Cursor rest dec txt) st pend pendSize
       [] -> stepMore dec txt st pend pendSize
     stepMore ::
@@ -178,7 +179,7 @@ takeContainerChunks config closing c st0 = go c st0 mempty 0
       Builder ->
       Int ->
       ChunkStream (ExceptT HQError IO) (EncoderState, Cursor)
-    stepMore dec txt st pend pendSize = case Decoder.step dec of
+    stepMore !dec !txt !st !pend !pendSize = case Decoder.step dec of
       Left err -> throwError (HQDecodeError err)
       Right (Emit event dec') ->
         let newCursor = Cursor [] dec' txt
@@ -194,7 +195,7 @@ takeContainerChunks config closing c st0 = go c st0 mempty 0
       Builder ->
       Int ->
       ChunkStream (ExceptT HQError IO) (EncoderState, Cursor)
-    emit event cursor st pend pendSize = do
+    emit !event !cursor !st !pend !pendSize = do
       let (Chunk b s, st') = formatEvent config st event
           pend' = pend <> b
           pendSize' = pendSize + s
@@ -214,7 +215,7 @@ takeContainerChunks config closing c st0 = go c st0 mempty 0
       Builder ->
       Int ->
       ChunkStream (ExceptT HQError IO) (EncoderState, Cursor)
-    nested end cursor st pend pendSize = do
+    nested !end !cursor !st !pend !pendSize = do
       -- Flush before descending so nested chunks yield after us.
       flush pend pendSize
       (st', cursor') <- takeContainerChunks config end cursor st
@@ -226,7 +227,7 @@ takeContainerChunks config closing c st0 = go c st0 mempty 0
       Builder ->
       Int ->
       ChunkStream (ExceptT HQError IO) (EncoderState, Cursor)
-    pullMore dec txt st pend pendSize = do
+    pullMore !dec !txt !st !pend !pendSize = do
       result <- lift (S.next txt)
       case result of
         Left () -> finishTake dec st pend pendSize
@@ -244,7 +245,7 @@ takeContainerChunks config closing c st0 = go c st0 mempty 0
       Builder ->
       Int ->
       ChunkStream (ExceptT HQError IO) (EncoderState, Cursor)
-    finishTake dec st pend pendSize = case finish dec of
+    finishTake !dec !st !pend !pendSize = case finish dec of
       Left UnexpectedEnd
         | decoderPhase dec == DecoderPhaseValue && null (decoderStack dec) ->
             throwError $ HQRunnerError UnexpectedEndOfInput
@@ -255,4 +256,4 @@ takeContainerChunks config closing c st0 = go c st0 mempty 0
         let newCursor = Cursor [] dec' (pure ())
          in emit event newCursor st pend pendSize
     flush :: Builder -> Int -> ChunkStream (ExceptT HQError IO) ()
-    flush pend pendSize = when (pendSize > 0) $ S.yield $ Chunk pend pendSize
+    flush !pend !pendSize = when (pendSize > 0) $ S.yield $ Chunk pend pendSize

@@ -41,7 +41,7 @@ data SkipExpect
 -- exactly like the decoder stalling on 'NeedInput' at end of input.
 pullSkipText ::
   Text -> StreamIO Text () -> ExceptT HQError IO (Text, StreamIO Text ())
-pullSkipText input text
+pullSkipText !input !text
   | T.null input = do
       result <- S.next text
       case result of
@@ -68,7 +68,7 @@ skipMemberValueText ::
   Text ->
   StreamIO Text () ->
   ExceptT HQError IO (Text, StreamIO Text ())
-skipMemberValueText depth stack input text = do
+skipMemberValueText !depth !stack !input !text = do
   (c, rest, text') <- nextSkipChar input text
   case c of
     ':' -> skipExpect depth depth stack ExpectValue rest text'
@@ -228,7 +228,7 @@ skipUnicode ::
   Text ->
   StreamIO Text () ->
   ExceptT HQError IO (Text, StreamIO Text ())
-skipUnicode value digits input text = do
+skipUnicode !value !digits !input !text = do
   (chunk, rest0) <- pullSkipText input text
   let needed = 4 - digits
       hex = T.take needed (T.takeWhile isHexDigit chunk)
@@ -246,7 +246,7 @@ skipUnicode value digits input text = do
 -- buffering.
 finishUnicodeSkip ::
   Text -> StreamIO Text () -> Int -> ExceptT HQError IO (Text, StreamIO Text ())
-finishUnicodeSkip input text value
+finishUnicodeSkip !input !text !value
   | isHighSurrogate value = skipLowSurrogate input text value
   | isLowSurrogate value = throwError (HQDecodeError InvalidSurrogatePair)
   | otherwise = skipStringText input text
@@ -255,7 +255,7 @@ finishUnicodeSkip input text value
 -- 'consumeLowSurrogate' without buffering.
 skipLowSurrogate ::
   Text -> StreamIO Text () -> Int -> ExceptT HQError IO (Text, StreamIO Text ())
-skipLowSurrogate input text high = do
+skipLowSurrogate !input !text !high = do
   (chunk, rest) <- pullSkipText input text
   case T.uncons chunk of
     Nothing -> skipLowSurrogate mempty rest high
@@ -286,7 +286,7 @@ skipLowDigits ::
   Int ->
   Int ->
   ExceptT HQError IO (Text, StreamIO Text ())
-skipLowDigits input text high value digits
+skipLowDigits !input !text !high !value !digits
   | digits == 4 =
       if isLowSurrogate value
         then skipStringText input text
@@ -333,7 +333,7 @@ skipNumberText numState =
       Text ->
       StreamIO Text () ->
       ExceptT HQError IO (Text, StreamIO Text ())
-    go (ReversedString rev) phase inp txt
+    go (ReversedString rev) !phase !inp !txt
       | T.null inp = do
           result <- S.next txt
           case result of
@@ -385,7 +385,7 @@ skipKeywordText state input text =
       Text ->
       StreamIO Text () ->
       ExceptT HQError IO (Text, StreamIO Text ())
-    finalCheck keyword inp txt
+    finalCheck !keyword !inp !txt
       | T.null inp = do
           result <- S.next txt
           case result of
@@ -402,7 +402,7 @@ skipKeywordText state input text =
       Text ->
       StreamIO Text () ->
       ExceptT HQError IO (Text, StreamIO Text ())
-    matchLoop keyword index inp txt
+    matchLoop !keyword !index !inp !txt
       | T.null inp = do
           result <- S.next txt
           case result of
