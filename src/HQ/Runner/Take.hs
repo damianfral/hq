@@ -146,25 +146,28 @@ takeValueChunks config cursor st = do
         JSONObjectKey _ -> throwError $ HQRunnerError UnexpectedObjectKey
         _ -> pure (st', cursor')
 
--- | If the cursor sits at the start of a string value with the opening
--- quote already in hand (a member value after its key and colon, or a
--- value in value position), return the text after the quote with the
--- decoder and stream positioned there. Anything else (including
--- exhausted input or a missing colon) declines, leaving the existing
--- paths to pull and report errors.
+-- | If the cursor sits at the start of a string value, return the text
+-- after its opening quote with the decoder and stream positioned there.
+-- Anything else (including buffered replay cursors, where the text is
+-- already consumed) declines, leaving the existing paths to pull and
+-- report errors.
 peekRawString :: Cursor -> Maybe (Text, DecoderState, StreamIO Text ())
 peekRawString (Cursor buf dec@DecoderState {decoderInput = input, decoderPhase = phase} txt)
   | null buf,
-    Just ('"', rest) <- T.uncons atValue =
-      Just (rest, dec, txt)
+    Just afterQuote <- peekValue phase input =
+      Just (afterQuote, dec, txt)
   | otherwise = Nothing
   where
-    atValue = case phase of
-      DecoderPhaseValue -> T.dropWhile isWhitespace input
-      DecoderPhaseObjectColon -> case T.uncons (T.dropWhile isWhitespace input) of
-        Just (':', colonRest) -> T.dropWhile isWhitespace colonRest
-        _ -> mempty
-      _ -> mempty
+    -- Member values hide behind their colon; anything else must already
+    -- be in value position.
+    peekValue DecoderPhaseValue inp = atQuote (T.dropWhile isWhitespace inp)
+    peekValue DecoderPhaseObjectColon inp = case T.uncons (T.dropWhile isWhitespace inp) of
+      Just (':', rest) -> atQuote (T.dropWhile isWhitespace rest)
+      _ -> Nothing
+    peekValue _ _ = Nothing
+    atQuote t = case T.uncons t of
+      Just ('"', rest) -> Just rest
+      _ -> Nothing
 
 -- | Transcribe a string value straight from the input text: the opening
 -- quote was peeked, so the body is captured verbatim (escapes
