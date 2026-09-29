@@ -28,7 +28,12 @@ consumeString target input buffer decoder = case T.uncons rest of
         decoder' = decoder {decoderInput = mempty, decoderPhase = parserString}
      in Right $ NeedInput decoder'
   Just (c, rest')
-    | c == '"' -> finishString target newBuffer rest' decoder
+    | c == '"' -> case buffer of
+        -- Single escape-free fragment (the common case for keys and
+        -- short values): reference the input slice directly instead
+        -- of copying it through 'StringBuffer' and 'T.concat'.
+        StringBuffer [] -> finishStringText target chunk rest' decoder
+        _ -> finishString target newBuffer rest' decoder
     | c == '\\' -> consumeStringEscape target rest' newBuffer decoder
     | otherwise -> Left (UnexpectedChar c)
   where
@@ -212,11 +217,23 @@ finishString ::
   Text ->
   DecoderState ->
   Either DecodeError DecoderResult
-finishString target value remaining decoder = case target of
+finishString target = finishStringText target . finishStringBuffer
+
+-- | Finish a string from its materialized text. 'finishString' funnels
+-- here after concatenating multi-fragment buffers, while the
+-- single-fragment fast path in 'consumeString' calls it directly with
+-- the input slice.
+finishStringText ::
+  StringTarget ->
+  Text ->
+  Text ->
+  DecoderState ->
+  Either DecodeError DecoderResult
+finishStringText target text remaining decoder = case target of
   StringValue ->
-    emitScalar (JSONString (finishStringBuffer value)) remaining decoder
+    emitScalar (JSONString text) remaining decoder
   StringKey -> do
-    let key = JSONObjectKey (finishStringBuffer value)
+    let key = JSONObjectKey text
     let newDecoder =
           decoder
             { decoderInput = remaining,
