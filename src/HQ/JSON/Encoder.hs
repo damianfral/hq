@@ -11,6 +11,7 @@ module HQ.JSON.Encoder
     encode,
     encodeChunks,
     formatEvent,
+    transcribeRawString,
     Builder,
     Chunk (..),
     ChunkStream,
@@ -214,9 +215,28 @@ formatEvent (EncoderConfig style (ValueOptions rawOpt joinOpt)) st event =
     -- Separator emitted after a complete top-level value.  A top-level
     -- value is one that leaves the context stack empty.
     finishValue :: EncoderState -> Chunk
-    finishValue (EncoderState ctxs' _)
-      | joinOpt == NoJoin && null ctxs' = Chunk newline 1
-      | otherwise = mempty
+    finishValue = finishTopValue joinOpt
+
+-- | Separator emitted after a complete top-level value: a newline
+-- separates back-to-back top-level values unless 'Join' concatenates
+-- them without separators.
+finishTopValue :: Join -> EncoderState -> Chunk
+finishTopValue joinOpt (EncoderState ctxs' _)
+  | joinOpt == NoJoin && null ctxs' = Chunk newline 1
+  | otherwise = mempty
+
+-- | Transcribe a pre-encoded string body (raw input bytes without their
+-- quotes, captured straight from the text): separator, quoted body and
+-- top-level terminator in a single 'Chunk', advancing the state exactly
+-- as 'formatEvent' would for the equivalent scalar event. Rewrite
+-- passthrough uses this to re-emit strings without decoding and
+-- re-encoding them; escape sequences stay verbatim.
+transcribeRawString :: EncoderConfig -> EncoderState -> Builder -> Int -> (Chunk, EncoderState)
+transcribeRawString (EncoderConfig style (ValueOptions _ joinOpt)) st rawB rawS =
+  let (sep, st1) = beforeValue style st
+      st2 = afterValue st1
+      body = Chunk (char7 '"' <> rawB <> char7 '"') (rawS + 2)
+   in (sep <> body <> finishTopValue joinOpt st2, st2)
 
 -- | The structural pieces to emit before an object key: a separator for
 -- the first or any following key, and the switch to

@@ -7,8 +7,10 @@
 module HQ.JSON.Skip where
 
 import Control.Monad.Error.Class (MonadError (throwError))
+import Data.ByteString.Builder (Builder, char7, charUtf8)
 import Data.Char (digitToInt, isDigit, isHexDigit)
 import qualified Data.Text as T
+import Data.Text.Encoding (encodeUtf8Builder)
 import HQ.JSON.Decoder
 import HQ.JSON.Decoder.Keyword (advanceKeyword, keywordState)
 import HQ.JSON.Decoder.Number (advanceNumber, isValidNumberFinal, startNumberState)
@@ -35,6 +37,44 @@ data SkipExpect
   | ExpectObjComma
   | ExpectArrComma
   deriving (Eq, Show)
+
+-- | Keyword literals as shared CAFs: fresh overloaded literals would be
+-- repacked on every skipped keyword.
+trueKeyword, falseKeyword, nullKeyword :: Text
+trueKeyword = "true"
+falseKeyword = "false"
+nullKeyword = "null"
+
+-- | Match a keyword remainder (first character already consumed) with
+-- total 'T.uncons' steps only: no 'HasCallStack' costs, and no
+-- allocation beyond the input suffix slices the old loop built anyway.
+matchKeyword :: Text -> Text -> Maybe Text
+matchKeyword keyword inp
+  | keyword == trueKeyword = match3 'r' 'u' 'e' inp
+  | keyword == falseKeyword = match4 'a' 'l' 's' 'e' inp
+  | otherwise = match3 'u' 'l' 'l' inp
+
+-- | Match three literal characters, returning the text after them.
+match3 :: Char -> Char -> Char -> Text -> Maybe Text
+match3 c1 c2 c3 t = case T.uncons t of
+  Just (d1, r1) | d1 == c1 -> case T.uncons r1 of
+    Just (d2, r2) | d2 == c2 -> case T.uncons r2 of
+      Just (d3, r3) | d3 == c3 -> Just r3
+      _ -> Nothing
+    _ -> Nothing
+  _ -> Nothing
+
+-- | Match four literal characters, returning the text after them.
+match4 :: Char -> Char -> Char -> Char -> Text -> Maybe Text
+match4 c1 c2 c3 c4 t = case T.uncons t of
+  Just (d1, r1) | d1 == c1 -> case T.uncons r1 of
+    Just (d2, r2) | d2 == c2 -> case T.uncons r2 of
+      Just (d3, r3) | d3 == c3 -> case T.uncons r3 of
+        Just (d4, r4) | d4 == c4 -> Just r4
+        _ -> Nothing
+      _ -> Nothing
+    _ -> Nothing
+  _ -> Nothing
 
 -- | Pull the next chunk when the current text is empty, skipping empty
 -- chunks. Exhaustion inside a skipped region is 'UnexpectedEnd',
@@ -121,9 +161,9 @@ skipExpect base depth stack ExpectValue input text = do
     '"' -> do
       (rest', text'') <- skipStringText rest text'
       afterValue base depth stack rest' text''
-    't' -> skipKeywordCont "true" 1 rest text'
-    'f' -> skipKeywordCont "false" 1 rest text'
-    'n' -> skipKeywordCont "null" 1 rest text'
+    't' -> skipKeywordFast trueKeyword 1 rest text'
+    'f' -> skipKeywordFast falseKeyword 1 rest text'
+    'n' -> skipKeywordFast nullKeyword 1 rest text'
     _
       | c == '-' || isDigit c -> do
           (rest', text'') <- skipNumberText (startNumberState c) rest text'
@@ -133,10 +173,24 @@ skipExpect base depth stack ExpectValue input text = do
           _ -> throwError (HQDecodeError (UnexpectedChar c))
       | otherwise -> throwError (HQDecodeError (UnexpectedChar c))
   where
-    skipKeywordCont keyword consumed rest' text'' = do
-      (rest'', text''') <-
-        skipKeywordText (keywordState keyword consumed) rest' text''
-      afterValue base depth stack rest'' text'''
+    -- \| Fast path for @true@/@false@/@null@: when the rest of the
+    -- literal and its trailing delimiter sit in the current chunk, one
+    -- prefix check replaces an 'ExceptT' roundtrip per character.
+    -- Split literals and invalid input fall back to the char-at-a-time
+    -- loop, which reports exactly the same errors.
+    skipKeywordFast ::
+      Text ->
+      Int ->
+      Text ->
+      StreamIO Text () ->
+      ExceptT HQError IO (Text, StreamIO Text ())
+    skipKeywordFast keyword consumed inp txt =
+      case matchKeyword keyword inp of
+        Just after -> case T.uncons after of
+          Just (c, _)
+            | isJsonDelimiter c -> afterValue base depth stack after txt
+          _ -> skipKeywordSlow keyword consumed base depth stack inp txt
+        Nothing -> skipKeywordSlow keyword consumed base depth stack inp txt
 skipExpect base depth stack ExpectKey input text = do
   (c, rest, text') <- nextSkipChar input text
   case c of
@@ -169,6 +223,23 @@ skipExpect base depth stack ExpectArrComma input text = do
       [] -> throwError (HQDecodeError ExpectedCommaOrEnd)
     _ -> throwError (HQDecodeError ExpectedCommaOrEnd)
 
+-- | The char-at-a-time keyword loop behind 'skipKeywordFast': split
+-- literals and invalid input, with exactly the historical errors.
+-- Top-level so the fast path allocates no per-keyword fallback closure.
+skipKeywordSlow ::
+  Text ->
+  Int ->
+  NestDepth ->
+  NestDepth ->
+  [DecodeContext] ->
+  Text ->
+  StreamIO Text () ->
+  ExceptT HQError IO (Text, StreamIO Text ())
+skipKeywordSlow keyword consumed base depth stack inp txt = do
+  (rest', txt') <-
+    skipKeywordText (keywordState keyword consumed) inp txt
+  afterValue base depth stack rest' txt'
+
 -- | A value just completed: return when back at the entry depth,
 -- otherwise expect the enclosing container's separator.
 afterValue ::
@@ -185,24 +256,25 @@ afterValue base depth stack rest text'
       DecodeObject : _ -> skipExpect base depth stack ExpectObjComma rest text'
       [] -> pure (rest, text')
 
+-- | String bytes that copy through verbatim: shared by 'skipStringText'
+-- and 'skipStringCollect' so both paths split strings identically.
+isStringChar :: Char -> Bool
+isStringChar c = c /= '"' && c /= '\\' && ord c >= 0x20
+
 -- | Skip a string starting after its opening quote. Returns the text
 -- after the closing quote. Mirrors 'consumeString' without buffering.
 skipStringText ::
   Text -> StreamIO Text () -> ExceptT HQError IO (Text, StreamIO Text ())
-skipStringText = go
-  where
-    go :: Text -> StreamIO Text () -> ExceptT HQError IO (Text, StreamIO Text ())
-    go inp txt = do
-      let rest = T.dropWhile isStringChar inp
-      case T.uncons rest of
-        Nothing -> do
-          (chunk, rest') <- pullSkipText mempty txt
-          go chunk rest'
-        Just (c, rest')
-          | c == '"' -> pure (rest', txt)
-          | c == '\\' -> skipEscape rest' txt
-          | otherwise -> throwError (HQDecodeError (UnexpectedChar c))
-    isStringChar c = c /= '"' && c /= '\\' && ord c >= 0x20
+skipStringText inp txt = do
+  let rest = T.dropWhile isStringChar inp
+  case T.uncons rest of
+    Nothing -> do
+      (chunk, rest') <- pullSkipText mempty txt
+      skipStringText chunk rest'
+    Just (c, rest')
+      | c == '"' -> pure (rest', txt)
+      | c == '\\' -> skipEscape rest' txt
+      | otherwise -> throwError (HQDecodeError (UnexpectedChar c))
 
 -- | Skip one escape sequence. Mirrors 'consumeStringEscape' without
 -- buffering.
@@ -414,3 +486,177 @@ skipKeywordText state input text =
             | c == T.index keyword index ->
                 skipKeywordText (advanceKeyword state) rest txt
             | otherwise -> throwError $ HQDecodeError $ InvalidKeyword keyword
+
+--------------------------------------------------------------------------------
+-- Raw string capture
+--------------------------------------------------------------------------------
+--
+-- 'skipStringCollect' mirrors 'skipStringText' exactly (same states,
+-- same errors) but accumulates the consumed input bytes so rewrite
+-- passthrough can re-emit strings without decoding and re-encoding
+-- them. Escape sequences are preserved verbatim (@\/@ stays @\/@,
+-- @\u0041@ stays as-is): output bytes may differ from canonical
+-- re-encoding, but decode to identical events.
+--
+-- Sizes ride along as estimated char counts, the same heuristic
+-- 'Chunk's use for flush decisions.
+
+-- | Skip a string starting after its opening quote, returning the text
+-- after the closing quote plus the raw consumed bytes (quotes excluded)
+-- and their estimated size.
+skipStringCollect ::
+  Text -> StreamIO Text () -> ExceptT HQError IO (Text, Builder, Int, StreamIO Text ())
+skipStringCollect = collectStringGo mempty 0
+
+collectStringGo ::
+  Builder ->
+  Int ->
+  Text ->
+  StreamIO Text () ->
+  ExceptT HQError IO (Text, Builder, Int, StreamIO Text ())
+collectStringGo !accB !accS !inp !txt = do
+  let (safe, rest) = T.span isStringChar inp
+      accB' = accB <> encodeUtf8Builder safe
+      accS' = accS + T.length safe
+  case T.uncons rest of
+    Nothing -> do
+      (chunk, rest') <- pullSkipText mempty txt
+      collectStringGo accB' accS' chunk rest'
+    Just (c, rest')
+      | c == '"' -> pure (rest', accB', accS', txt)
+      | c == '\\' -> collectEscape accB' accS' rest' txt
+      | otherwise -> throwError (HQDecodeError (UnexpectedChar c))
+
+-- | Capture one escape sequence. Mirrors 'skipEscape', appending the
+-- raw @\@ and indicator bytes.
+collectEscape ::
+  Builder ->
+  Int ->
+  Text ->
+  StreamIO Text () ->
+  ExceptT HQError IO (Text, Builder, Int, StreamIO Text ())
+collectEscape !accB !accS !input !text = do
+  (chunk, rest) <- pullSkipText input text
+  case T.uncons chunk of
+    Nothing -> collectEscape accB accS mempty rest
+    Just (c, rest')
+      | c == '"' || c == '\\' || c == '/' -> collectString (esc c) rest' rest
+      | c == 'b' || c == 'f' || c == 'n' || c == 'r' || c == 't' ->
+          collectString (esc c) rest' rest
+      | c == 'u' -> collectUnicode (esc 'u') rest' rest 0 0
+      | otherwise -> throwError (HQDecodeError (InvalidEscape c))
+  where
+    esc c = (accB <> char7 '\\' <> charUtf8 c, accS + 2)
+    collectString (b, s) = collectStringGo b s
+
+-- | Capture a @\u@ escape's four hex digits. Mirrors 'skipUnicode'.
+collectUnicode ::
+  (Builder, Int) ->
+  Text ->
+  StreamIO Text () ->
+  Int ->
+  Int ->
+  ExceptT HQError IO (Text, Builder, Int, StreamIO Text ())
+collectUnicode (!accB, !accS) !input !text !value !digits = do
+  (chunk, rest0) <- pullSkipText input text
+  let needed = 4 - digits
+      hex = T.take needed (T.takeWhile isHexDigit chunk)
+      rest' = T.drop (T.length hex) chunk
+      value' = T.foldl' (\v c -> v * 16 + digitToInt c) value hex
+      digits' = digits + T.length hex
+      accB' = accB <> encodeUtf8Builder hex
+      accS' = accS + T.length hex
+  if digits' >= 4
+    then finishUnicodeCollect accB' accS' rest' rest0 value'
+    else
+      if T.null rest'
+        then collectUnicode (accB', accS') mempty rest0 value' digits'
+        else throwError (HQDecodeError InvalidUnicodeEscape)
+
+-- | Validate a completed @\u@ escape. Mirrors 'finishUnicodeSkip'.
+finishUnicodeCollect ::
+  Builder ->
+  Int ->
+  Text ->
+  StreamIO Text () ->
+  Int ->
+  ExceptT HQError IO (Text, Builder, Int, StreamIO Text ())
+finishUnicodeCollect !accB !accS !input !text !value
+  | isHighSurrogate value = collectLowSurrogate accB accS input text value
+  | isLowSurrogate value = throwError (HQDecodeError InvalidSurrogatePair)
+  | otherwise = collectStringGo accB accS input text
+
+-- | Capture a low-surrogate escape after a high surrogate. Mirrors
+-- 'skipLowSurrogate'.
+collectLowSurrogate ::
+  Builder ->
+  Int ->
+  Text ->
+  StreamIO Text () ->
+  Int ->
+  ExceptT HQError IO (Text, Builder, Int, StreamIO Text ())
+collectLowSurrogate !accB !accS !input !text !high = do
+  (chunk, rest) <- pullSkipText input text
+  case T.uncons chunk of
+    Nothing -> collectLowSurrogate accB accS mempty rest high
+    Just ('\\', rest') -> case T.uncons rest' of
+      Nothing -> collectLowSurrogateBackslash (accB <> char7 '\\') (accS + 1) rest high
+      Just ('u', rest'') ->
+        collectLowDigits (accB <> char7 '\\' <> charUtf8 'u') (accS + 2) rest'' rest high 0 0
+      _ -> throwError (HQDecodeError InvalidSurrogatePair)
+    _ -> throwError (HQDecodeError InvalidSurrogatePair)
+
+-- | The low surrogate's backslash arrived at a chunk end. Mirrors
+-- 'skipLowSurrogateBackslash'.
+collectLowSurrogateBackslash ::
+  Builder ->
+  Int ->
+  StreamIO Text () ->
+  Int ->
+  ExceptT HQError IO (Text, Builder, Int, StreamIO Text ())
+collectLowSurrogateBackslash !accB !accS !text !high = do
+  (chunk, rest) <- pullSkipText mempty text
+  case T.uncons chunk of
+    Nothing -> collectLowSurrogateBackslash accB accS rest high
+    Just ('u', rest') -> collectLowDigits (accB <> charUtf8 'u') (accS + 1) rest' rest high 0 0
+    _ -> throwError (HQDecodeError InvalidSurrogatePair)
+
+-- | Capture the low surrogate's four hex digits. Mirrors
+-- 'skipLowDigits'.
+collectLowDigits ::
+  Builder ->
+  Int ->
+  Text ->
+  StreamIO Text () ->
+  Int ->
+  Int ->
+  Int ->
+  ExceptT HQError IO (Text, Builder, Int, StreamIO Text ())
+collectLowDigits !accB !accS !input !text !high !value !digits
+  | digits == 4 =
+      if isLowSurrogate value
+        then collectStringGo accB accS input text
+        else throwError $ HQDecodeError InvalidSurrogatePair
+  | otherwise = do
+      (chunk, rest) <- pullSkipText input text
+      case T.uncons chunk of
+        Nothing -> collectLowDigits accB accS mempty rest high value digits
+        Just _ -> do
+          let remaining = 4 - digits
+              limited = T.take remaining chunk
+              (hexDigits, _) = T.span isHexDigit limited
+              consumed = T.length hexDigits
+              value' = T.foldl' (\ac c -> ac * 16 + digitToInt c) value hexDigits
+              digits' = digits + consumed
+              rest' = T.drop consumed chunk
+              accB' = accB <> encodeUtf8Builder hexDigits
+              accS' = accS + consumed
+          if digits' == 4
+            then
+              if isLowSurrogate value'
+                then collectStringGo accB' accS' rest' rest
+                else throwError $ HQDecodeError InvalidSurrogatePair
+            else
+              if T.null rest'
+                then collectLowDigits accB' accS' mempty rest high value' digits'
+                else throwError $ HQDecodeError InvalidUnicodeEscape

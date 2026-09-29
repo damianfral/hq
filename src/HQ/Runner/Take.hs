@@ -6,10 +6,11 @@ module HQ.Runner.Take where
 import Control.Monad.Error.Class (MonadError (throwError))
 import qualified Data.Text as T
 import HQ.Error (HQError (..))
-import HQ.JSON.Decoder (DecodeError (..), DecoderPhase (..), DecoderResult (..), DecoderState (..), Next (..), StreamIO, finish, pullEvent)
+import HQ.JSON.Decoder (DecodeError (..), DecoderPhase (..), DecoderResult (..), DecoderState (..), Next (..), StreamIO, finish, finishValue, isWhitespace, pullEvent)
 import qualified HQ.JSON.Decoder as Decoder
-import HQ.JSON.Encoder (Builder, Chunk (..), ChunkStream, EncoderConfig, EncoderState, formatEvent)
+import HQ.JSON.Encoder (Builder, Chunk (..), ChunkStream, EncoderConfig, EncoderState, formatEvent, transcribeRawString)
 import HQ.JSON.Event (JSONEvent (..))
+import HQ.JSON.Skip (skipStringCollect)
 import HQ.Runner.Cursor (Continuation, Cursor (..), EventStream)
 import HQ.Runner.Error (RunnerError (..))
 import Relude hiding (Compose, id, many, some, state)
@@ -132,15 +133,54 @@ takeValueChunks ::
   EncoderState ->
   ChunkStream (ExceptT HQError IO) (EncoderState, Cursor)
 takeValueChunks config cursor st = do
-  (event, cursor') <- lift (pullOne cursor)
-  st' <- emitChunk config event st
-  case event of
-    JSONBeginArray -> takeContainerChunks config JSONEndArray cursor' st'
-    JSONBeginObject -> takeContainerChunks config JSONEndObject cursor' st'
-    JSONEndArray -> throwError $ HQRunnerError UnexpectedEndOfArray
-    JSONEndObject -> throwError $ HQRunnerError UnexpectedEndOfObject
-    JSONObjectKey _ -> throwError $ HQRunnerError UnexpectedObjectKey
-    _ -> pure (st', cursor')
+  case peekRawString cursor of
+    Just (afterQuote, dec, txt) -> takeRawStringChunks config afterQuote dec txt st
+    Nothing -> do
+      (event, cursor') <- lift (pullOne cursor)
+      st' <- emitChunk config event st
+      case event of
+        JSONBeginArray -> takeContainerChunks config JSONEndArray cursor' st'
+        JSONBeginObject -> takeContainerChunks config JSONEndObject cursor' st'
+        JSONEndArray -> throwError $ HQRunnerError UnexpectedEndOfArray
+        JSONEndObject -> throwError $ HQRunnerError UnexpectedEndOfObject
+        JSONObjectKey _ -> throwError $ HQRunnerError UnexpectedObjectKey
+        _ -> pure (st', cursor')
+
+-- | If the cursor sits at the start of a string value with the opening
+-- quote already in hand (a member value after its key and colon, or a
+-- value in value position), return the text after the quote with the
+-- decoder and stream positioned there. Anything else (including
+-- exhausted input or a missing colon) declines, leaving the existing
+-- paths to pull and report errors.
+peekRawString :: Cursor -> Maybe (Text, DecoderState, StreamIO Text ())
+peekRawString (Cursor buf dec@DecoderState {decoderInput = input, decoderPhase = phase} txt)
+  | null buf,
+    Just ('"', rest) <- T.uncons atValue =
+      Just (rest, dec, txt)
+  | otherwise = Nothing
+  where
+    atValue = case phase of
+      DecoderPhaseValue -> T.dropWhile isWhitespace input
+      DecoderPhaseObjectColon -> case T.uncons (T.dropWhile isWhitespace input) of
+        Just (':', colonRest) -> T.dropWhile isWhitespace colonRest
+        _ -> mempty
+      _ -> mempty
+
+-- | Transcribe a string value straight from the input text: the opening
+-- quote was peeked, so the body is captured verbatim (escapes
+-- preserved) and transcribed without decoding or re-encoding.
+takeRawStringChunks ::
+  EncoderConfig ->
+  Text ->
+  DecoderState ->
+  StreamIO Text () ->
+  EncoderState ->
+  ChunkStream (ExceptT HQError IO) (EncoderState, Cursor)
+takeRawStringChunks config afterQuote dec txt st = do
+  (remainder, rawB, rawS, rest) <- lift (skipStringCollect afterQuote txt)
+  let (chunk, st') = transcribeRawString config st rawB rawS
+  S.yield chunk
+  pure (st', Cursor [] (finishValue dec {decoderInput = remainder}) rest)
 
 -- | Batch threshold for transcribed chunks, in estimated chars: past
 -- this, pending builders yield as one chunk instead of accumulating.

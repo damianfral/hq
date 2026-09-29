@@ -4,6 +4,7 @@
 module HQ.JSON.SkipSpec (spec) where
 
 import Control.Monad.Error.Class (throwError)
+import Data.ByteString.Builder (toLazyByteString)
 import qualified Data.Text as T
 import HQ.JSON.Decoder
 import HQ.JSON.Depth (NestDepth (NestDepth), initialDepth)
@@ -18,6 +19,7 @@ spec :: Spec
 spec = describe "HQ.JSON.Skip" $ do
   skipTextSpec
   skipContainerTextSpec
+  collectSpec
 
 -- | Map a decoded event list to the skip-result shape: errors pass
 -- through, successes mean exact consumption.
@@ -112,6 +114,65 @@ pullRemaining decoder text = do
   case pulled of
     EndOfInput -> pure []
     NextEvent event decoder' rest -> (event :) <$> pullRemaining decoder' rest
+
+-- | Skip a string body over chunks starting after the opening quote.
+runSkipString :: [Text] -> IO (Either Text Text)
+runSkipString [] = pure (Left "empty chunk list")
+runSkipString (c : cs) = do
+  result <- runExceptT $ do
+    (remHead, rest) <- skipStringText c (S.each cs)
+    remChunks <- S.toList_ rest
+    pure (remHead <> T.concat remChunks)
+  pure (first renderHQError result)
+
+-- | Capture a string body over the same chunks: remainder, captured
+-- bytes and estimated size.
+runCollectString :: [Text] -> IO (Either Text (Text, Text, Int))
+runCollectString [] = pure (Left "empty chunk list")
+runCollectString (c : cs) = do
+  result <- runExceptT $ do
+    (remHead, rawB, rawS, rest) <- skipStringCollect c (S.each cs)
+    remChunks <- S.toList_ rest
+    pure (remHead <> T.concat remChunks, decodeUtf8 (toStrict (toLazyByteString rawB)), rawS)
+  pure (first renderHQError result)
+
+collectSpec :: Spec
+collectSpec = describe "skipStringCollect" $ do
+  it "captures exactly the bytes it skips across every split" $ do
+    forM_ collectCorpus $ \full ->
+      forM_ (splits (T.drop 1 full)) $ \chunks -> do
+        skipped <- runSkipString chunks
+        collected <- runCollectString chunks
+        case (skipped, collected) of
+          (Left err1, Left err2) -> err1 `shouldBe` err2
+          (Right rem1, Right (rem2, bytes, size)) -> do
+            rem1 `shouldBe` rem2
+            let total = T.concat chunks
+                consumed = T.take (T.length total - T.length rem2) total
+                -- The capture excludes quotes: drop the closing one.
+                body = T.dropEnd 1 consumed
+            bytes `shouldBe` body
+            size `shouldBe` T.length body
+          (a, b) -> expectationFailure $ "mismatch: " <> show (a, b)
+  where
+    collectCorpus :: [Text]
+    collectCorpus =
+      [ "\"\"",
+        "\"hello\"",
+        "\"x\"",
+        "\"lorem ipsum dolor sit amet\"",
+        "\"a\\\"b\\\\c\\/d\\be\\ff\\ng\\rh\\ti\"",
+        "\"\\\"\"",
+        "\"\\\\\"",
+        "\"tab\\there\"",
+        "\"\\u00e9\"",
+        "\"\\ud83d\\ude00\"",
+        "\"\\x\"",
+        "\"abc",
+        "\"\\u00z1\"",
+        "\"\\ud83d\"",
+        "\"\\ud83dX\""
+      ]
 
 skipContainerTextSpec :: Spec
 skipContainerTextSpec = describe "skipContainerText" $ do
