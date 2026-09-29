@@ -388,6 +388,9 @@ encodeRawString :: Text -> Chunk
 encodeRawString text =
   Chunk (stringUtf8 (toString text)) (Text.length text)
 
+-- | Encode a string body with a character scan: safe runs share the
+-- input slice via 'encodeUtf8Builder' (no copy), with the char count as
+-- the flush-heuristic size.
 encodeStringBody :: Text -> Chunk
 encodeStringBody text = let Chunk b s = go text in Chunk b s
   where
