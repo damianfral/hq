@@ -293,12 +293,18 @@ elementSeparator (Pretty width) seen (NestDepth depth) =
       prefix = if seen then commaNewline else newline
    in Chunk (prefix <> indentSpaces size) (size + 1 + fromEnum seen)
 
--- | Indentation body of 'size' spaces as a builder. 'BS.replicate'
--- is a memset, avoiding the two-words-per-space 'Char'-list that
--- 'replicate' would allocate (and that 'string7' would then
--- traverse again).
+-- | Indentation body of 'size' spaces as a builder.
+--
+-- Real documents nest shallowly, so indentation slices a shared
+-- padding string in O(1) instead of allocating plus memset
+-- ('BS.replicate') on every pretty-printed element or key.
+indentPadding :: BS.ByteString
+indentPadding = BS.replicate 256 0x20
+
 indentSpaces :: Int -> Builder
-indentSpaces size = byteString (BS.replicate size 0x20)
+indentSpaces size
+  | size <= BS.length indentPadding = byteString (BS.take size indentPadding)
+  | otherwise = byteString (BS.replicate size 0x20)
 
 -- | Constant output fragments as shared builders. 'string7'/'char7'
 -- on a literal re-unpacks it and rebuilds the builder on every
@@ -375,7 +381,7 @@ encodeStringBody text = let Chunk b s = go text in Chunk b s
            in case Text.uncons rest of
                 Nothing -> safeChunk
                 Just (c, rest') ->
-                  mconcat [safeChunk, encodeEscapedChar c, go rest']
+                  safeChunk <> encodeEscapedChar c <> go rest'
 
 isSafe :: Char -> Bool
 isSafe c = c >= '\x20' && c /= '"' && c /= '\\'
