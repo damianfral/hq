@@ -2,11 +2,13 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE StrictData #-}
+{-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 
 module HQ.CLI (CLIOptions (..), optParserInfo, runCLI) where
 
 import Data.Aeson (Value)
+import Data.FileEmbed (embedStringFile, makeRelativeToProject)
 import Data.Text.IO (hPutStrLn)
 import Data.Version (showVersion)
 import HQ.JSON.Encoder (Join (..), Raw (..))
@@ -72,10 +74,19 @@ optParser = do
     joinMod = long "join" <> short 'j' <> help "Print without separators"
     fromBool falseV trueV b = if b then trueV else falseV
 
+langHelp :: String
+langHelp = $(embedStringFile =<< makeRelativeToProject "./docs/LANG.txt")
+
 optParserInfo :: ParserInfo CLIOptions
 optParserInfo = info (optParser <**> helper) infoMod
   where
-    infoMod = fullDesc <> progDesc headerMsg <> header description
+    infoMod =
+      mconcat
+        [ fullDesc,
+          progDesc headerMsg,
+          header description,
+          footerDoc $ Just $ fromString langHelp
+        ]
     headerMsg = "Query JSON using optics"
     description = "hq v" <> showVersion version
 

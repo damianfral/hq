@@ -5,6 +5,9 @@ version: 0.0.0.1
 
 license: MIT
 
+extra-source-files:
+  - docs/*.txt
+
 library:
   source-dirs: ./src/
   dependencies:
@@ -13,6 +16,7 @@ library:
     - bytestring
     - data-fix
     - free
+    - file-embed
     - megaparsec
     - mtl
     - optparse-applicative

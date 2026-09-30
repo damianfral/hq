@@ -10,6 +10,71 @@ never load fully into memory.
 hq [OPTIONS] COMMAND OPTIC [ARGS] < input.json
 ```
 
+```text
+hq --help
+
+hq v0.0.0.1
+
+Usage: hq [-f|--file FILE] [-r|--raw] [-c|--compact] [-j|--join] COMMAND
+
+  Query JSON using optics
+
+Available options:
+  -f,--file FILE           Input JSON file, or '-' for stdin
+  -r,--raw                 Print strings without JSON quotes
+  -c,--compact             Print compact JSON
+  -j,--join                Print without separators
+  -h,--help                Show this help text
+
+Available commands:
+  fold                     
+  preview                  
+  set                      
+  over                     
+  delete                   
+
+OPTIC LANGUAGE
+
+  Optics select and traverse JSON values. Optics are composed with .;
+  each component focuses on a new set of values.
+  
+  @field : Focus an object field
+  each : Focus every element of an array
+  keys : Focus every key of an object
+  values : Focus every value of an object
+
+  Examples:
+
+  @name : Focus the "name" field.
+  
+  @users . each . @name : Focus the "name" field of every element in "users".
+  
+  @users . each . @age : Focus the "age" field of every element in "users".
+  
+  Optics can be used with different queries:
+  
+  fold OPTIC : Print every value focused by the optic.
+  
+  preview OPTIC : Print the first value focused by the optic.
+  
+  set OPTIC VALUE : Replace every focused value with VALUE.
+  
+  over OPTIC TRANSFORMATION : Transform every focused value.
+  
+  delete OPTIC : Delete every focused value.
+
+TRANSFORMATIONS
+  
+  Transformations describe how a focused value is changed. They can be
+  composed and can themselves use optics to obtain values from the input.
+  
+  For example:
+  
+  over '@users . each . @age' '(+ 1)'
+  
+  increments every user's age.
+```
+
 Commands:
 
 | Command | Meaning |
