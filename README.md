@@ -122,11 +122,22 @@ Example: `filter @age '== 30'` keeps objects with `age` 30;
 | `++"s"` | Append string `s` |
 | `concat [...]` | Append array elements |
 | `trim` | Strip surrounding whitespace from a string |
+| `stripPrefix "p"` | Remove prefix `p` from a string (unchanged if absent) |
+| `stripSuffix "s"` | Remove suffix `s` from a string (unchanged if absent) |
+| `isPrefixOf "p"` | Test whether a string starts with `p` (yields a boolean) |
+| `isSuffixOf "s"` | Test whether a string ends with `s` (yields a boolean) |
+| `isInfixOf "i"` | Test whether a string contains `i` (yields a boolean) |
+| `isEmpty` | Test whether an array is empty (yields a boolean) |
+| `length` | Array length (yields a number) |
+| `reverse` | Reverse an array |
+| `unique` | Drop duplicate array elements, keeping first occurrences |
 | `not` | Negate a boolean |
 | `replace "a" "b"` | Replace occurrences of `a` with `b` in a string |
 | `== VALUE` or `= VALUE` | Test equality with a JSON value (yields a boolean) |
 | `const VALUE` | Replace with `VALUE` regardless of input |
 | `A or B` / `A \|\| B` | Boolean disjunction of two transformations |
+| `A and B` / `A && B` | Boolean conjunction of two transformations |
+| `A xor B` / `A ^^ B` | Boolean exclusive disjunction of two transformations |
 | `A . B` | Composition: apply `B` first, then `A` over its result |
 
 ## Examples

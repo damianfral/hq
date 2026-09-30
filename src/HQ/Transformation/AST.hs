@@ -29,6 +29,10 @@ data TransformationTypeError
     InvalidCombine Transformation ValueType ValueType
   | -- | An 'Or' branch does not produce a boolean; offender kept.
     InvalidOr Transformation ValueType
+  | -- | An 'And' branch does not produce a boolean; offender kept.
+    InvalidAnd Transformation ValueType
+  | -- | A 'Xor' branch does not produce a boolean; offender kept.
+    InvalidXor Transformation ValueType
   | -- | A @filter@ predicate does not produce a boolean; offender kept.
     InvalidFilter Transformation ValueType
   deriving (Eq, Show)
@@ -57,23 +61,31 @@ buildTransformationAST (Transformation transformation) =
     algebra Trim = pure $ TransformationType ValueString ValueString :< Trim
     algebra (Replace a b) =
       pure $ TransformationType ValueString ValueString :< Replace a b
+    algebra (StripPrefix p) =
+      pure $ TransformationType ValueString ValueString :< StripPrefix p
+    algebra (StripSuffix s) =
+      pure $ TransformationType ValueString ValueString :< StripSuffix s
+    algebra (IsPrefixOf p) =
+      pure $ TransformationType ValueString ValueBool :< IsPrefixOf p
+    algebra (IsSuffixOf s) =
+      pure $ TransformationType ValueString ValueBool :< IsSuffixOf s
+    algebra (IsInfixOf i) =
+      pure $ TransformationType ValueString ValueBool :< IsInfixOf i
+    algebra IsEmpty =
+      pure $ TransformationType ValueArray ValueBool :< IsEmpty
+    algebra ArrayLength =
+      pure $ TransformationType ValueArray ValueNumber :< ArrayLength
+    algebra ArrayReverse =
+      pure $ TransformationType ValueArray ValueArray :< ArrayReverse
+    algebra ArrayUnique =
+      pure $ TransformationType ValueArray ValueArray :< ArrayUnique
     algebra (Equal v) = pure $ TransformationType ValueAny ValueBool :< Equal v
     algebra (Const v) =
       pure $ TransformationType ValueAny (valueType v) :< Const v
     algebra Not = pure $ TransformationType ValueBool ValueBool :< Not
-    algebra (Or left right) = do
-      l <- left
-      r <- right
-      let lt = view _extract l
-          rt = view _extract r
-      case (transformationOutput lt, transformationOutput rt) of
-        (ValueBool, ValueBool) ->
-          let inputType = transformationInput $ view _extract l
-           in pure $ TransformationType inputType ValueBool :< Or l r
-        (ValueBool, other) ->
-          Left $ InvalidOr (subTransformation (Or l r)) other
-        (other, _) ->
-          Left $ InvalidOr (subTransformation (Or l r)) other
+    algebra (Or left right) = boolPair Or InvalidOr left right
+    algebra (And left right) = boolPair And InvalidAnd left right
+    algebra (Xor left right) = boolPair Xor InvalidXor left right
     algebra (Combine left right) = do
       l <- left
       r <- right
@@ -94,6 +106,28 @@ buildTransformationAST (Transformation transformation) =
               (subTransformation (Combine l r))
               (transformationOutput rt)
               (transformationInput lt)
+
+-- | Check a boolean connective: both branches must produce booleans;
+-- the input type comes from the left branch.
+boolPair ::
+  (AST -> AST -> TransformationF AST) ->
+  (Transformation -> ValueType -> TransformationTypeError) ->
+  Either TransformationTypeError AST ->
+  Either TransformationTypeError AST ->
+  Either TransformationTypeError AST
+boolPair ctor toErr left right = do
+  l <- left
+  r <- right
+  let lt = view _extract l
+      rt = view _extract r
+  case (transformationOutput lt, transformationOutput rt) of
+    (ValueBool, ValueBool) ->
+      let inputType = transformationInput $ view _extract l
+       in pure $ TransformationType inputType ValueBool :< ctor l r
+    (ValueBool, other) ->
+      Left $ toErr (subTransformation (ctor l r)) other
+    (other, _) ->
+      Left $ toErr (subTransformation (ctor l r)) other
 
 -- | The 'ValueType' of an embedded JSON literal.
 valueType :: Value -> ValueType

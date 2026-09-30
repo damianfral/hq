@@ -6,7 +6,7 @@ module HQ.Transformation.ParserSpec (spec) where
 import Data.Aeson (Value (..))
 import HQ.Transformation
 import HQ.Transformation.Parser (parseTransformation)
-import Relude hiding (not, or, subtract)
+import Relude hiding (and, isPrefixOf, length, not, or, reverse, subtract, xor)
 import Test.Syd
 
 spec :: Spec
@@ -36,6 +36,34 @@ spec = describe "HQ.Transformation.Parser" $ do
     it "parses replace" $ do
       parseTransformation "replace \"ab\" \"bc\""
         `shouldBe` Right (replace "ab" "bc")
+
+  describe "affixes and predicates" $ do
+    it "parses stripPrefix" $ do
+      parseTransformation "stripPrefix \"pre\""
+        `shouldBe` Right (stripPrefix "pre")
+    it "parses stripSuffix" $ do
+      parseTransformation "stripSuffix \"suf\""
+        `shouldBe` Right (stripSuffix "suf")
+    it "parses isPrefixOf" $ do
+      parseTransformation "isPrefixOf \"pre\""
+        `shouldBe` Right (isPrefixOf "pre")
+    it "parses isSuffixOf" $ do
+      parseTransformation "isSuffixOf \"suf\""
+        `shouldBe` Right (isSuffixOf "suf")
+    it "parses isInfixOf" $ do
+      parseTransformation "isInfixOf \"fix\""
+        `shouldBe` Right (isInfixOf "fix")
+    it "parses isEmpty" $ do
+      parseTransformation "isEmpty" `shouldBe` Right isEmpty
+    it "parses length" $ do
+      parseTransformation "length" `shouldBe` Right length
+    it "parses reverse" $ do
+      parseTransformation "reverse" `shouldBe` Right reverse
+    it "parses unique" $ do
+      parseTransformation "unique" `shouldBe` Right unique
+    it "composes stripPrefix after trim" $ do
+      parseTransformation "stripPrefix \"a\" . trim"
+        `shouldBe` Right (combine (stripPrefix "a") trim)
 
   describe "constants" $ do
     it "parses a constant number" $ do
@@ -67,6 +95,30 @@ spec = describe "HQ.Transformation.Parser" $ do
     it "parses double bar" $ do
       parseTransformation "== 1 || == 2"
         `shouldBe` Right (or (equal (Number 1)) (equal (Number 2)))
+    it "parses and" $ do
+      parseTransformation "== 1 and == 1"
+        `shouldBe` Right (and (equal (Number 1)) (equal (Number 1)))
+    it "parses double ampersand" $ do
+      parseTransformation "== 1 && == 1"
+        `shouldBe` Right (and (equal (Number 1)) (equal (Number 1)))
+    it "parses xor" $ do
+      parseTransformation "== 1 xor == 2"
+        `shouldBe` Right (xor (equal (Number 1)) (equal (Number 2)))
+    it "parses double caret" $ do
+      parseTransformation "== 1 ^^ == 2"
+        `shouldBe` Right (xor (equal (Number 1)) (equal (Number 2)))
+    it "binds and tighter than or" $ do
+      parseTransformation "== 1 and == 1 or == 3"
+        `shouldBe` Right
+          (or (and (equal (Number 1)) (equal (Number 1))) (equal (Number 3)))
+    it "binds xor tighter than or" $ do
+      parseTransformation "== 1 or == 2 xor == 2"
+        `shouldBe` Right
+          (or (equal (Number 1)) (xor (equal (Number 2)) (equal (Number 2))))
+    it "binds and tighter than xor" $ do
+      parseTransformation "== 1 xor == 2 and == 2"
+        `shouldBe` Right
+          (xor (equal (Number 1)) (and (equal (Number 2)) (equal (Number 2))))
 
   describe "composition and precedence" $ do
     it "composes with dot" $ do
@@ -102,6 +154,10 @@ spec = describe "HQ.Transformation.Parser" $ do
       parseTransformation "+ \"x\"" `shouldSatisfy` isLeft
     it "rejects numbers where strings are expected" $ do
       parseTransformation "replace 1 2" `shouldSatisfy` isLeft
+    it "rejects a number where an affix is expected" $ do
+      parseTransformation "stripPrefix 1" `shouldSatisfy` isLeft
+    it "rejects an operand for a bare keyword" $ do
+      parseTransformation "isEmpty \"x\"" `shouldSatisfy` isLeft
     it "rejects a non-array concat operand" $ do
       parseTransformation "concat 3" `shouldSatisfy` isLeft
     it "rejects trailing garbage" $ do

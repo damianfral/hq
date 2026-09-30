@@ -112,6 +112,8 @@ instance Show Optic where
       isAtomOptic _ = True
       isAtomTrans (Transformation (Fix (Combine _ _))) = False
       isAtomTrans (Transformation (Fix (Or _ _))) = False
+      isAtomTrans (Transformation (Fix (And _ _))) = False
+      isAtomTrans (Transformation (Fix (Xor _ _))) = False
       isAtomTrans _ = True
 
 -- | Focus on a named field of a JSON object (affine traversal).

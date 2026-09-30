@@ -15,6 +15,10 @@ data TransformationError
   | ExpectedBoolean
   | -- | A non-boolean branch of @or@.
     OrBranchNotBoolean
+  | -- | A non-boolean left branch of @and@.
+    AndBranchNotBoolean
+  | -- | A non-boolean branch of @xor@.
+    XorBranchNotBoolean
   | -- | A key rewrite yielding a non-string.
     KeyNotString
   | -- | A @filter@ predicate yielding a non-boolean.
@@ -28,5 +32,7 @@ renderTransformationError err = case err of
   ExpectedArray -> "expected an array"
   ExpectedBoolean -> "expected a boolean"
   OrBranchNotBoolean -> "expected a boolean result from the left side of or"
+  AndBranchNotBoolean -> "expected a boolean result from the left side of and"
+  XorBranchNotBoolean -> "expected a boolean result from each side of xor"
   KeyNotString -> "key transformation must yield a string"
   FilterNotBoolean -> "filter transformation must produce a boolean"

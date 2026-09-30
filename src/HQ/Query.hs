@@ -60,6 +60,16 @@ renderTypeError (InvalidTransformationType (InvalidOr t out)) =
     <> show t
     <> ": both sides of or must produce booleans, but a branch produces "
     <> valueTypeName out
+renderTypeError (InvalidTransformationType (InvalidAnd t out)) =
+  "transformation mismatch in "
+    <> show t
+    <> ": both sides of and must produce booleans, but a branch produces "
+    <> valueTypeName out
+renderTypeError (InvalidTransformationType (InvalidXor t out)) =
+  "transformation mismatch in "
+    <> show t
+    <> ": both sides of xor must produce booleans, but a branch produces "
+    <> valueTypeName out
 renderTypeError (InvalidTransformationType (InvalidFilter t out)) =
   "filter transformation "
     <> show t

@@ -14,7 +14,7 @@ import HQ.Optic.Parser (parseOptic)
 import HQ.Runner.Cursor (Cursor (..), RewriteContinuation)
 import HQ.Runner.Rewrite (runDelete, runOver)
 import HQ.Transformation
-import Relude hiding (Compose, id, many, not, or, some, subtract, toStrict)
+import Relude hiding (Compose, and, id, isPrefixOf, length, many, not, or, reverse, some, subtract, toStrict, xor)
 import Streaming (Of (..))
 import qualified Streaming.Prelude as S
 import Test.HQ (chunkSplits)
@@ -397,6 +397,39 @@ overSpec = describe "over" $ do
         JSONEndArray
       ]
 
+  it "conjoins two transformations with and" $ do
+    runOverTest "each" (and (equal (Number 1)) (equal (Number 1))) "[1,2]"
+    `shouldReturn` Right [JSONBeginArray, JSONBool True, JSONBool False, JSONEndArray]
+
+  it "conjoins to true when both branches hold" $ do
+    runOverTest "each" (and (isPrefixOf "a") (isSuffixOf "c")) "[\"abc\",\"ab\"]"
+    `shouldReturn` Right [JSONBeginArray, JSONBool True, JSONBool False, JSONEndArray]
+
+  it "short-circuits and on false" $ do
+    -- The right branch would fail on a number; a false left branch
+    -- must return False without running it.
+    runOverTest "each" (and (equal (Number 2)) not) "[1]"
+    `shouldReturn` Right [JSONBeginArray, JSONBool False, JSONEndArray]
+
+  it "exclusive-disjoins two transformations with xor" $ do
+    runOverTest "each" (xor (isPrefixOf "a") (isSuffixOf "a")) "[\"a\",\"ab\",\"ba\",\"b\"]"
+    `shouldReturn` Right
+      [ JSONBeginArray,
+        JSONBool False,
+        JSONBool True,
+        JSONBool True,
+        JSONBool False,
+        JSONEndArray
+      ]
+
+  it "fails and with a non-boolean left branch" $ do
+    runOverTest "each" (and (add 1) (equal (Number 1))) "[0]"
+    `shouldReturn` Left "expected a boolean result from the left side of and"
+
+  it "fails xor with a non-boolean branch" $ do
+    runOverTest "each" (xor (equal (Number 1)) (add 1)) "[1]"
+    `shouldReturn` Left "expected a boolean result from each side of xor"
+
   it "composes transformations right-to-left" $ do
     runOverTest "each" (combine (equal (Number 3)) (add 1)) "[1,2,3]"
     `shouldReturn` Right
@@ -432,6 +465,77 @@ overSpec = describe "over" $ do
   it "fails when the transformation does not fit the value" $ do
     runOverTest "each" (add 1) "[\"a\",1]"
     `shouldReturn` Left "expected a number"
+
+  it "strips a matching prefix" $ do
+    runOverTest "each" (stripPrefix "pre") "[\"prefix\",\"pre\",\"other\"]"
+    `shouldReturn` Right
+      [ JSONBeginArray,
+        JSONString "fix",
+        JSONString "",
+        JSONString "other",
+        JSONEndArray
+      ]
+
+  it "strips a matching suffix" $ do
+    runOverTest "each" (stripSuffix ".json") "[\"a.json\",\"json\"]"
+    `shouldReturn` Right
+      [JSONBeginArray, JSONString "a", JSONString "json", JSONEndArray]
+
+  it "tests prefix membership" $ do
+    runOverTest "each" (isPrefixOf "pre") "[\"prefix\",\"other\"]"
+    `shouldReturn` Right
+      [JSONBeginArray, JSONBool True, JSONBool False, JSONEndArray]
+
+  it "tests suffix membership" $ do
+    runOverTest "each" (isSuffixOf ".json") "[\"a.json\",\"other\"]"
+    `shouldReturn` Right
+      [JSONBeginArray, JSONBool True, JSONBool False, JSONEndArray]
+
+  it "tests infix membership" $ do
+    runOverTest "each" (isInfixOf "fix") "[\"prefix\",\"other\"]"
+    `shouldReturn` Right
+      [JSONBeginArray, JSONBool True, JSONBool False, JSONEndArray]
+
+  it "tests array emptiness" $ do
+    runOverTest "each" isEmpty "[[],[1]]"
+    `shouldReturn` Right
+      [JSONBeginArray, JSONBool True, JSONBool False, JSONEndArray]
+
+  it "computes array lengths" $ do
+    runOverTest "each" length "[[1,2],[]]"
+    `shouldReturn` Right
+      [JSONBeginArray, JSONNumber 2, JSONNumber 0, JSONEndArray]
+
+  it "reverses arrays" $ do
+    runOverTest "each" reverse "[[1,2,3]]"
+    `shouldReturn` Right
+      [ JSONBeginArray,
+        JSONBeginArray,
+        JSONNumber 3,
+        JSONNumber 2,
+        JSONNumber 1,
+        JSONEndArray,
+        JSONEndArray
+      ]
+
+  it "drops duplicate array elements" $ do
+    runOverTest "each" unique "[[1,1,2,1]]"
+    `shouldReturn` Right
+      [ JSONBeginArray,
+        JSONBeginArray,
+        JSONNumber 1,
+        JSONNumber 2,
+        JSONEndArray,
+        JSONEndArray
+      ]
+
+  it "fails stripPrefix on numbers" $ do
+    runOverTest "each" (stripPrefix "a") "[1]"
+    `shouldReturn` Left "expected a string"
+
+  it "fails length on strings" $ do
+    runOverTest "each" length "[\"a\"]"
+    `shouldReturn` Left "expected an array"
 
 -------------------------------------------------------------------------------
 -- keys rewrite (object key renaming; array indices are read-only)
