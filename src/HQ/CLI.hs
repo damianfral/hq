@@ -24,15 +24,12 @@ import Relude
 import System.IO hiding (hPutStrLn, hSetBuffering)
 import Text.Megaparsec (errorBundlePretty)
 
-data NullInput = NoNullInput | UseNullInput deriving (Show, Eq)
-
 data CLIOptions = CLIOptions
   { optQuery :: Query,
     optFile :: Maybe FilePath,
     optRaw :: Raw,
     optCompact :: Enc.EncodeStyle,
-    optJoin :: Join,
-    optNullInput :: NullInput
+    optJoin :: Join
   }
   deriving (Show, Eq)
 
@@ -65,16 +62,14 @@ optParser = do
   raw <- fromBool NoRaw Raw <$> switch rawMod
   compact <- fromBool (Enc.Pretty 2) Enc.Compact <$> switch compactMod
   join' <- fromBool NoJoin Join <$> switch joinMod
-  nullInput <- fromBool NoNullInput UseNullInput <$> switch nullMod
   query <- queryParser
-  pure $ CLIOptions query file raw compact join' nullInput
+  pure $ CLIOptions query file raw compact join'
   where
     fileHelp = "Input JSON file, or '-' for stdin"
     fileMod = long "file" <> short 'f' <> metavar "FILE" <> help fileHelp
     rawMod = long "raw" <> short 'r' <> help "Print strings without JSON quotes"
     compactMod = long "compact" <> short 'c' <> help "Print compact JSON"
     joinMod = long "join" <> short 'j' <> help "Print without separators"
-    nullMod = long "null-input" <> short '0' <> help "Use null as input"
     fromBool falseV trueV b = if b then trueV else falseV
 
 optParserInfo :: ParserInfo CLIOptions
@@ -103,8 +98,6 @@ runCLI = do
   query <- case typecheckQuery optQuery of
     Left err -> hPutStrLn stderr (renderTypeError err) >> exitFailure
     Right q -> pure q
-  handle <- case optNullInput of
-    UseNullInput -> pure stdin
-    NoNullInput -> readInput optFile
+  handle <- readInput optFile
   let cfg = Enc.EncoderConfig optCompact $ Enc.ValueOptions optRaw optJoin
   runRunnerIOWith jsonRunner query cfg handle
