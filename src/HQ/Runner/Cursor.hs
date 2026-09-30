@@ -9,7 +9,7 @@ import Control.Monad.Error.Class (MonadError (throwError))
 import HQ.Error (HQError (..))
 import HQ.JSON.Decoder (DecoderState (..), Next (..), StreamIO, finishValue, pullEvent)
 import HQ.JSON.Encoder (ChunkStream, EncoderState)
-import HQ.JSON.Event (JSONEvent (..))
+import HQ.JSON.Event (JSONEvent (..), matchingClose)
 import HQ.JSON.Skip (skipContainerText, skipMemberValueText)
 import HQ.Runner.Error (RunnerError (..))
 import Relude hiding (Compose, id, many, some, state)
@@ -89,17 +89,15 @@ skipValueE input = do
     Just (event, Cursor buffered decoder text) ->
       skipEvent event buffered decoder text
   where
-    skipEvent event buffered decoder text = case event of
-      JSONBeginArray
+    skipEvent event buffered decoder text = case matchingClose event of
+      Just closing
         | null buffered -> skipOpened event decoder text buffered
-        | otherwise -> drainNested JSONEndArray (Cursor buffered decoder text)
-      JSONBeginObject
-        | null buffered -> skipOpened event decoder text buffered
-        | otherwise -> drainNested JSONEndObject (Cursor buffered decoder text)
-      JSONEndArray -> throwError $ HQRunnerError UnexpectedEndOfArray
-      JSONEndObject -> throwError $ HQRunnerError UnexpectedEndOfObject
-      JSONObjectKey _ -> throwError $ HQRunnerError UnexpectedObjectKey
-      _ -> pure (Cursor buffered decoder text)
+        | otherwise -> drainNested closing (Cursor buffered decoder text)
+      Nothing -> case event of
+        JSONEndArray -> throwError $ HQRunnerError UnexpectedEndOfArray
+        JSONEndObject -> throwError $ HQRunnerError UnexpectedEndOfObject
+        JSONObjectKey _ -> throwError $ HQRunnerError UnexpectedObjectKey
+        _ -> pure (Cursor buffered decoder text)
     skipOpened event decoder text buffered = do
       (decoder', rest) <- skipContainerText event decoder text
       pure (Cursor buffered decoder' rest)
@@ -109,15 +107,16 @@ skipValueE input = do
       result <- pullCursor stream
       case result of
         Nothing -> throwError $ HQRunnerError UnexpectedEndOfInput
-        Just (JSONBeginArray, rest) -> drainNested JSONEndArray rest
-        Just (JSONBeginObject, rest) -> drainNested JSONEndObject rest
-        Just (JSONEndArray, _) ->
-          throwError $ HQRunnerError UnexpectedEndOfArray
-        Just (JSONEndObject, _) ->
-          throwError $ HQRunnerError UnexpectedEndOfObject
-        Just (JSONObjectKey _, _) ->
-          throwError $ HQRunnerError UnexpectedObjectKey
-        Just (_, rest) -> pure rest
+        Just (event, rest) -> case matchingClose event of
+          Just closing -> drainNested closing rest
+          Nothing -> case event of
+            JSONEndArray ->
+              throwError $ HQRunnerError UnexpectedEndOfArray
+            JSONEndObject ->
+              throwError $ HQRunnerError UnexpectedEndOfObject
+            JSONObjectKey _ ->
+              throwError $ HQRunnerError UnexpectedObjectKey
+            _ -> pure rest
     -- \| Consume a container body event by event up to its closing event.
     drainNested :: JSONEvent -> Cursor -> ExceptT HQError IO Cursor
     drainNested closing stream = do
@@ -147,3 +146,51 @@ skipMemberValueE (Cursor buffered decoder@DecoderState {..} text)
         skipMemberValueText decoderNestDepth decoderStack decoderInput text
       pure $ Cursor [] (finishValue decoder {decoderInput = remainder}) rest
   | otherwise = skipValueE (Cursor buffered decoder text)
+
+--------------------------------------------------------------------------------
+-- Shared walk combinators (single implementation for Fold/Rewrite)
+--------------------------------------------------------------------------------
+
+-- | Pull one event; on end return the input unchanged, otherwise run the handler.
+-- Unifies the 7x preamble in Fold (@runField/runEach/...@).
+onEventOrEnd :: Cursor -> ((JSONEvent, Cursor) -> EventStream Cursor) -> EventStream Cursor
+onEventOrEnd input f = do
+  result <- lift (pullCursor input)
+  case result of
+    Nothing -> pure input
+    Just pair -> f pair
+
+-- | Walk an object body step by step; @body@ handles each member key,
+-- returning the cursor to continue from. Emits nothing, returns the
+-- cursor after @JSONEndObject@.
+traverseObject :: Cursor -> ((Text, Cursor) -> EventStream Cursor) -> EventStream Cursor
+traverseObject input body = go input
+  where
+    go stream = do
+      step <- lift (expectObjectStep stream)
+      case step of
+        Left rest -> pure rest
+        Right (key, rest) -> do
+          after <- body (key, rest)
+          go after
+
+-- | Walk an array body step by step; @body@ handles each element event,
+-- returning the cursor to continue from.
+traverseArray :: Cursor -> ((JSONEvent, Cursor) -> EventStream Cursor) -> EventStream Cursor
+traverseArray input body = go input
+  where
+    go stream = do
+      step <- lift (expectArrayStep stream)
+      case step of
+        Left rest -> pure rest
+        Right (event, rest) -> do
+          after <- body (event, rest)
+          go after
+
+-- | Consume the rest of an object body (all remaining members).
+skipRestOfObject :: Cursor -> EventStream Cursor
+skipRestOfObject input = traverseObject input $ \(_, rest) -> skipMemberValue rest
+
+-- | Consume the rest of an array body (all remaining elements).
+skipRestOfArray :: Cursor -> EventStream Cursor
+skipRestOfArray input = traverseArray input $ \(event, rest) -> skipValue (pushCursor event rest)

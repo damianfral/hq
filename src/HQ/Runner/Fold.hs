@@ -1,3 +1,4 @@
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 
 module HQ.Runner.Fold where
@@ -12,7 +13,7 @@ import HQ.Error (HQError (..))
 import HQ.JSON.Decoder (initialDecoder)
 import HQ.JSON.Event
 import HQ.Optic (Optic (..), OpticF (..), PrismKind, prismPredicate)
-import HQ.Runner.Cursor (Continuation, Cursor (..), EventStream, expectArrayStep, expectObjectStep, pullCursor, pushCursor, skipMemberValue, skipValue)
+import HQ.Runner.Cursor (Continuation, Cursor (..), expectArrayStep, expectObjectStep, onEventOrEnd, pushCursor, skipMemberValue, skipRestOfArray, skipRestOfObject, skipValue, traverseArray, traverseObject)
 import HQ.Runner.Error (RunnerError (..))
 import HQ.Runner.Take (takeFirstValue, takeValue)
 import HQ.Transformation (Transformation, runTransformation)
@@ -66,108 +67,58 @@ runFold (Optic optic) = run optic takeValue
       Ix i -> runIndex i k input
 
     runField :: Text -> Continuation -> Continuation
-    runField name k input = do
-      result <- lift (pullCursor input)
-      case result of
-        Nothing -> pure input
-        Just (JSONBeginObject, rest) -> findField name k rest
-        Just (event, rest) -> skipValue (pushCursor event rest)
+    runField name k input =
+      onEventOrEnd input $ \case
+        (JSONBeginObject, rest) -> findField name k rest
+        (event, rest) -> skipValue (pushCursor event rest)
 
     findField :: Text -> Continuation -> Continuation
     findField name k = go
       where
-        go input = do
-          step <- lift (expectObjectStep input)
+        go stream = do
+          step <- lift (expectObjectStep stream)
           case step of
             Left rest -> pure rest
             Right (key, rest)
-              | key == name -> do
-                  afterField <- k rest
-                  skipRestOfObject afterField
-              | otherwise -> do
-                  afterValue <- skipMemberValue rest
-                  go afterValue
-
-    -- \| Consume the rest of an object after a matched member value.
-    skipRestOfObject :: Cursor -> EventStream Cursor
-    skipRestOfObject input = do
-      step <- lift (expectObjectStep input)
-      case step of
-        Left rest -> pure rest
-        Right (_, rest) -> do
-          afterValue <- skipMemberValue rest
-          skipRestOfObject afterValue
+              | key == name -> k rest >>= skipRestOfObject
+              | otherwise -> skipMemberValue rest >>= go
 
     ----------------------------------------------------------------
     -- Each
     ----------------------------------------------------------------
 
     runEach :: Continuation -> Continuation
-    runEach k input = do
-      result <- lift (pullCursor input)
-      case result of
-        Nothing -> pure input
-        Just (JSONBeginArray, rest) -> eachArray rest
-        Just (JSONBeginObject, rest) -> eachObject rest
-        Just (event, rest) -> skipValue (pushCursor event rest)
-      where
-        eachArray stream = do
-          step <- lift (expectArrayStep stream)
-          case step of
-            Left rest -> pure rest
-            Right (event, rest) -> do
-              afterElement <- k (pushCursor event rest)
-              eachArray afterElement
-
-        eachObject stream = do
-          step <- lift (expectObjectStep stream)
-          case step of
-            Left rest -> pure rest
-            Right (_, rest) -> do
-              afterValue <- k rest -- cursor is already at the value
-              eachObject afterValue
+    runEach k input =
+      onEventOrEnd input $ \case
+        (JSONBeginArray, rest) ->
+          traverseArray rest $ \(event, rest') -> k (pushCursor event rest')
+        (JSONBeginObject, rest) ->
+          traverseObject rest $ \(_, rest') -> k rest'
+        (event, rest) -> skipValue (pushCursor event rest)
 
     ----------------------------------------------------------------
     -- Keys: object keys as strings (objects only)
     ----------------------------------------------------------------
 
     runKeys :: Continuation -> Continuation
-    runKeys k input = do
-      result <- lift (pullCursor input)
-      case result of
-        Nothing -> pure input
-        Just (JSONBeginObject, rest) -> keysObject rest
-        Just (event, rest) -> skipValue (pushCursor event rest)
-      where
-        keysObject :: Cursor -> EventStream Cursor
-        keysObject stream = do
-          step <- lift (expectObjectStep stream)
-          case step of
-            Left rest -> pure rest
-            Right (key, rest) -> do
-              _ <- k (Cursor [JSONString key] initialDecoder (pure ()))
-              afterValue <- skipMemberValue rest
-              keysObject afterValue
+    runKeys k input =
+      onEventOrEnd input $ \case
+        (JSONBeginObject, rest) ->
+          traverseObject rest $ \(key, rest') -> do
+            _ <- k (Cursor [JSONString key] initialDecoder (pure ()))
+            skipMemberValue rest'
+        (event, rest) -> skipValue (pushCursor event rest)
 
     ----------------------------------------------------------------
     -- Values: object member values only (arrays focus on nothing)
     ----------------------------------------------------------------
 
     runValues :: Continuation -> Continuation
-    runValues k input = do
-      result <- lift (pullCursor input)
-      case result of
-        Nothing -> pure input
-        Just (JSONBeginObject, rest) -> valuesObject rest
-        Just (event, rest) -> skipValue (pushCursor event rest)
-      where
-        valuesObject stream = do
-          step <- lift (expectObjectStep stream)
-          case step of
-            Left rest -> pure rest
-            Right (_, rest) -> do
-              afterValue <- k rest -- cursor is already at the value
-              valuesObject afterValue
+    runValues k input =
+      onEventOrEnd input $ \case
+        (JSONBeginObject, rest) ->
+          traverseObject rest $ \(_, rest') -> k rest'
+        (event, rest) -> skipValue (pushCursor event rest)
 
     ----------------------------------------------------------------
     -- Filter: keep the value when the predicate holds of the
@@ -175,16 +126,13 @@ runFold (Optic optic) = run optic takeValue
     ----------------------------------------------------------------
 
     runFilter :: Fix OpticF -> Transformation -> Continuation -> Continuation
-    runFilter o t k input = do
-      result <- lift (pullCursor input)
-      case result of
-        Nothing -> pure input
-        Just (event, rest0) -> do
-          (v, events, rest) <- lift (materializeValue (pushCursor event rest0))
-          keep <- lift (gateValue o t v)
-          if keep
-            then k (Cursor events (cursorDecoder rest) (cursorText rest))
-            else pure rest
+    runFilter o t k input =
+      onEventOrEnd input $ \(event, rest0) -> do
+        (v, events, rest) <- lift (materializeValue (pushCursor event rest0))
+        keep <- lift (gateValue o t v)
+        if keep
+          then k (Cursor events (cursorDecoder rest) (cursorText rest))
+          else pure rest
       where
         cursorDecoder (Cursor _ dec _) = dec
         cursorText (Cursor _ _ txt) = txt
@@ -194,37 +142,31 @@ runFold (Optic optic) = run optic takeValue
     ----------------------------------------------------------------
 
     runScalar :: (JSONEvent -> Bool) -> Continuation -> Continuation
-    runScalar predicate k input = do
-      result <- lift (pullCursor input)
-      case result of
-        Nothing -> pure input
-        Just (event, rest)
-          | predicate event -> k (pushCursor event rest)
-          | otherwise -> skipValue (pushCursor event rest) -- not a match; consume anyway
+    runScalar predicate k input =
+      onEventOrEnd input $ \(event, rest) ->
+        if predicate event
+          then k (pushCursor event rest)
+          else skipValue (pushCursor event rest) -- not a match; consume anyway
 
     ----------------------------------------------------------------
     -- PrismJust
     ----------------------------------------------------------------
 
     runJust :: Continuation -> Continuation
-    runJust k input = do
-      result <- lift (pullCursor input)
-      case result of
-        Nothing -> pure input
-        Just (JSONNull, rest) -> pure rest
-        Just (event, rest) -> k (pushCursor event rest)
+    runJust k input =
+      onEventOrEnd input $ \case
+        (JSONNull, rest) -> pure rest
+        (event, rest) -> k (pushCursor event rest)
 
     ----------------------------------------------------------------
     -- Array index
     ----------------------------------------------------------------
 
     runIndex :: Int -> Continuation -> Continuation
-    runIndex index k input = do
-      result <- lift (pullCursor input)
-      case result of
-        Nothing -> pure input
-        Just (JSONBeginArray, rest) -> findIndex index rest
-        Just (event, rest) -> skipValue (pushCursor event rest)
+    runIndex index k input =
+      onEventOrEnd input $ \case
+        (JSONBeginArray, rest) -> findIndex index rest
+        (event, rest) -> skipValue (pushCursor event rest)
       where
         findIndex n stream
           | n < 0 = skipRestOfArray stream
@@ -233,22 +175,8 @@ runFold (Optic optic) = run optic takeValue
               case step of
                 Left rest -> pure rest
                 Right (event, rest) -> case n of
-                  0 -> do
-                    afterField <- k (pushCursor event rest)
-                    skipRestOfArray afterField
-                  _ -> do
-                    afterValue <- skipValue (pushCursor event rest)
-                    findIndex (n - 1) afterValue
-
-    -- \| Consume the rest of an array after a matched element.
-    skipRestOfArray :: Cursor -> EventStream Cursor
-    skipRestOfArray input = do
-      step <- lift (expectArrayStep input)
-      case step of
-        Left rest -> pure rest
-        Right (event, rest) -> do
-          afterValue <- skipValue (pushCursor event rest)
-          skipRestOfArray afterValue
+                  0 -> k (pushCursor event rest) >>= skipRestOfArray
+                  _ -> skipValue (pushCursor event rest) >>= findIndex (n - 1)
 
 --------------------------------------------------------------------------------
 -- Pure navigation: the same optic semantics over in-memory values.

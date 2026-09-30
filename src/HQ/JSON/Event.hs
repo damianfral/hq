@@ -62,6 +62,14 @@ isObject = \case
   JSONBeginObject -> True
   _ -> False
 
+-- | Matching close for a container open; 'Nothing' for non-opens.
+-- Single table for the 5x open/close dispatch in Take/Cursor.
+matchingClose :: JSONEvent -> Maybe JSONEvent
+matchingClose = \case
+  JSONBeginArray -> Just JSONEndArray
+  JSONBeginObject -> Just JSONEndObject
+  _ -> Nothing
+
 -- | Parse exactly one value from events; trailing events are rejected.
 eventsToValue :: [JSONEvent] -> Either RunnerError Value
 eventsToValue events =
