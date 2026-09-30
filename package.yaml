@@ -18,8 +18,8 @@ library:
     - base
     - bytestring
     - data-fix
-    - free
     - file-embed
+    - free
     - megaparsec
     - mtl
     - optparse-applicative
