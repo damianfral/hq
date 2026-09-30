@@ -4,13 +4,14 @@
 module HQ.Runner.Take where
 
 import Control.Monad.Error.Class (MonadError (throwError))
+import Data.Char (isDigit)
 import qualified Data.Text as T
 import HQ.Error (HQError (..))
 import HQ.JSON.Decoder (DecodeError (..), DecoderPhase (..), DecoderResult (..), DecoderState (..), Next (..), StreamIO, finish, finishValue, isWhitespace, pullEvent)
 import qualified HQ.JSON.Decoder as Decoder
-import HQ.JSON.Encoder (Builder, Chunk (..), ChunkStream, EncoderConfig, EncoderState, formatEvent, transcribeRawString)
+import HQ.JSON.Encoder (Builder, Chunk (..), ChunkStream, EncoderConfig, EncoderState, formatEvent, transcribeRawBytes, transcribeRawString)
 import HQ.JSON.Event (JSONEvent (..))
-import HQ.JSON.Skip (skipStringCollect)
+import HQ.JSON.Skip (skipNumberCollect, skipStringCollect)
 import HQ.Runner.Cursor (Continuation, Cursor (..), EventStream)
 import HQ.Runner.Error (RunnerError (..))
 import Relude hiding (Compose, id, many, some, state)
@@ -133,8 +134,9 @@ takeValueChunks ::
   EncoderState ->
   ChunkStream (ExceptT HQError IO) (EncoderState, Cursor)
 takeValueChunks config cursor st = do
-  case peekRawString cursor of
-    Just (afterQuote, dec, txt) -> takeRawStringChunks config afterQuote dec txt st
+  case peekRawScalar cursor of
+    Just (RawString afterQuote, dec, txt) -> takeRawStringChunks config afterQuote dec txt st
+    Just (RawNumber atNumber, dec, txt) -> takeRawNumberChunks config atNumber dec txt st
     Nothing -> do
       (event, cursor') <- lift (pullOne cursor)
       st' <- emitChunk config event st
@@ -146,28 +148,37 @@ takeValueChunks config cursor st = do
         JSONObjectKey _ -> throwError $ HQRunnerError UnexpectedObjectKey
         _ -> pure (st', cursor')
 
--- | If the cursor sits at the start of a string value, return the text
--- after its opening quote with the decoder and stream positioned there.
--- Anything else (including buffered replay cursors, where the text is
--- already consumed) declines, leaving the existing paths to pull and
--- report errors.
-peekRawString :: Cursor -> Maybe (Text, DecoderState, StreamIO Text ())
-peekRawString (Cursor buf dec@DecoderState {decoderInput = input, decoderPhase = phase} txt)
+-- | A string or number value peeked straight from the input text: the
+-- payload starts after the opening quote (strings) or at the first
+-- digit (numbers), with any pending colon already skipped.
+data RawScalar = RawString Text | RawNumber Text
+
+-- | If the cursor sits at the start of a string or number value, return
+-- its payload with the decoder and stream positioned there. Anything
+-- else (including buffered replay cursors, where the text is already
+-- consumed) declines, leaving the existing paths to pull and report
+-- errors.
+peekRawScalar :: Cursor -> Maybe (RawScalar, DecoderState, StreamIO Text ())
+peekRawScalar cursor
   | null buf,
-    Just afterQuote <- peekValue phase input =
-      Just (afterQuote, dec, txt)
+    Just start <- peekValue phase input,
+    Just (c, rest) <- T.uncons start = case c of
+      '"' -> Just (RawString rest, decoder, txt)
+      '-' -> Just (RawNumber start, decoder, txt)
+      _ | isDigit c -> Just (RawNumber start, decoder, txt)
+      _ -> Nothing
   | otherwise = Nothing
   where
+    Cursor buf decoder txt = cursor
+    DecoderState {decoderInput = input, decoderPhase = phase} = decoder
     -- Member values hide behind their colon; anything else must already
     -- be in value position.
-    peekValue DecoderPhaseValue inp = atQuote (T.dropWhile isWhitespace inp)
-    peekValue DecoderPhaseObjectColon inp = case T.uncons (T.dropWhile isWhitespace inp) of
-      Just (':', rest) -> atQuote (T.dropWhile isWhitespace rest)
-      _ -> Nothing
+    peekValue DecoderPhaseValue inp = Just (T.dropWhile isWhitespace inp)
+    peekValue DecoderPhaseObjectColon inp =
+      case T.uncons (T.dropWhile isWhitespace inp) of
+        Just (':', rest) -> Just (T.dropWhile isWhitespace rest)
+        _ -> Nothing
     peekValue _ _ = Nothing
-    atQuote t = case T.uncons t of
-      Just ('"', rest) -> Just rest
-      _ -> Nothing
 
 -- | Transcribe a string value straight from the input text: the opening
 -- quote was peeked, so the body is captured verbatim (escapes
@@ -182,6 +193,22 @@ takeRawStringChunks ::
 takeRawStringChunks config afterQuote dec txt st = do
   (remainder, rawB, rawS, rest) <- lift (skipStringCollect afterQuote txt)
   let (chunk, st') = transcribeRawString config st rawB rawS
+  S.yield chunk
+  pure (st', Cursor [] (finishValue dec {decoderInput = remainder}) rest)
+
+-- | Transcribe a number value straight from the input text: the first
+-- digit was peeked, so the bytes are captured verbatim and transcribed
+-- without 'Scientific' roundtrips.
+takeRawNumberChunks ::
+  EncoderConfig ->
+  Text ->
+  DecoderState ->
+  StreamIO Text () ->
+  EncoderState ->
+  ChunkStream (ExceptT HQError IO) (EncoderState, Cursor)
+takeRawNumberChunks config atNumber dec txt st = do
+  (remainder, rawB, rawS, rest) <- lift (skipNumberCollect atNumber txt)
+  let (chunk, st') = transcribeRawBytes config st rawB rawS
   S.yield chunk
   pure (st', Cursor [] (finishValue dec {decoderInput = remainder}) rest)
 

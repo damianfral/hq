@@ -7,6 +7,7 @@ import Control.Monad.Error.Class (throwError)
 import Data.ByteString.Builder (toLazyByteString)
 import qualified Data.Text as T
 import HQ.JSON.Decoder
+import HQ.JSON.Decoder.Number (startNumberState)
 import HQ.JSON.Depth (NestDepth (NestDepth), initialDepth)
 import HQ.JSON.Event (JSONEvent (..))
 import HQ.JSON.Skip
@@ -20,6 +21,7 @@ spec = describe "HQ.JSON.Skip" $ do
   skipTextSpec
   skipContainerTextSpec
   collectSpec
+  collectNumberSpec
 
 -- | Map a decoded event list to the skip-result shape: errors pass
 -- through, successes mean exact consumption.
@@ -203,4 +205,69 @@ skipContainerTextSpec = describe "skipContainerText" $ do
         "[1,{\"a\":[2]}]",
         "[[[]]]",
         "{\"a\":[1,{\"b\":2}]}"
+      ]
+
+-- | Skip a number over chunks starting at its first character.
+runSkipNumber :: [Text] -> IO (Either Text Text)
+runSkipNumber [] = pure (Left "empty chunk list")
+runSkipNumber (c : cs) = case T.uncons c of
+  Nothing -> pure (Left "empty first chunk")
+  Just (d, _) -> do
+    result <- runExceptT $ do
+      (remHead, rest) <- skipNumberText (startNumberState d) (T.drop 1 c) (S.each cs)
+      remChunks <- S.toList_ rest
+      pure (remHead <> T.concat remChunks)
+    pure (first renderHQError result)
+
+-- | Collect a number over the same chunks: remainder, captured bytes
+-- and estimated size.
+runCollectNumber :: [Text] -> IO (Either Text (Text, Text, Int))
+runCollectNumber [] = pure (Left "empty chunk list")
+runCollectNumber (c : cs) = case T.uncons c of
+  Nothing -> pure (Left "empty first chunk")
+  Just _ -> do
+    result <- runExceptT $ do
+      (remHead, rawB, rawS, rest) <- skipNumberCollect c (S.each cs)
+      remChunks <- S.toList_ rest
+      pure (remHead <> T.concat remChunks, decodeUtf8 (toStrict (toLazyByteString rawB)), rawS)
+    pure (first renderHQError result)
+
+collectNumberSpec :: Spec
+collectNumberSpec = describe "skipNumberCollect" $ do
+  it "captures exactly the bytes it skips across every split" $ do
+    forM_ collectNumberCorpus $ \full ->
+      forM_ (splits full) $ \chunks -> do
+        skipped <- runSkipNumber chunks
+        collected <- runCollectNumber chunks
+        case (skipped, collected) of
+          (Left err1, Left err2) -> err1 `shouldBe` err2
+          (Right rem1, Right (rem2, bytes, size)) -> do
+            rem1 `shouldBe` rem2
+            let total = T.concat chunks
+                consumed = T.take (T.length total - T.length rem2) total
+            bytes `shouldBe` consumed
+            size `shouldBe` T.length consumed
+          (a, b) -> expectationFailure $ "mismatch: " <> show (a, b)
+  where
+    collectNumberCorpus :: [Text]
+    collectNumberCorpus =
+      [ "42",
+        "-42",
+        "0",
+        "3.14",
+        "-3.14",
+        "0.15",
+        "1e10",
+        "1E10",
+        "1e-2",
+        "1e+2",
+        "1.5e2",
+        "-1.5e-6",
+        "-1e5",
+        "01",
+        "1e",
+        "1e+",
+        "-",
+        "--1",
+        "12a"
       ]

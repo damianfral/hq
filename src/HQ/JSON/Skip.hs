@@ -13,7 +13,7 @@ import qualified Data.Text as T
 import Data.Text.Encoding (encodeUtf8Builder)
 import HQ.JSON.Decoder
 import HQ.JSON.Decoder.Keyword (advanceKeyword, keywordState)
-import HQ.JSON.Decoder.Number (advanceNumber, isValidNumberFinal, startNumberState)
+import HQ.JSON.Decoder.Number
 import HQ.JSON.Depth (NestDepth (..), deeper, shallower)
 import HQ.JSON.Event (JSONEvent (..))
 import Relude hiding (Compose, id, many, some, state)
@@ -435,6 +435,63 @@ skipNumberText numState =
                         <> one c
                     NumberStep p' -> loop (c : r) p' (pos + 1)
 
+-- | Skip a number starting at its first character, returning the text
+-- after it plus the raw consumed bytes (for rewrite passthrough without
+-- 'Scientific' roundtrips) and their size. Mirrors 'skipNumberText'
+-- exactly (same phases, same error payloads): digits accumulate as
+-- input slices rather than a reversed 'String', concatenated only for
+-- error payloads and the final builder.
+skipNumberCollect ::
+  Text ->
+  StreamIO Text () ->
+  ExceptT HQError IO (Text, Builder, Int, StreamIO Text ())
+skipNumberCollect input text = case T.uncons input of
+  Nothing -> do
+    (chunk, rest) <- pullSkipText mempty text
+    skipNumberCollect chunk rest
+  Just (c, rest) ->
+    let phase = fromMaybe NumberSign (numberPhaseFromFirstChar c)
+     in collectNumber [one c] 1 phase rest text
+
+collectNumber ::
+  [Text] ->
+  Int ->
+  NumberPhase ->
+  Text ->
+  StreamIO Text () ->
+  ExceptT HQError IO (Text, Builder, Int, StreamIO Text ())
+collectNumber frags size phase inp txt
+  | T.null inp = do
+      result <- S.next txt
+      case result of
+        Left ()
+          | isValidNumberFinal phase -> pure (mempty, build frags, size, txt)
+          | otherwise ->
+              throwError $ HQDecodeError $ InvalidNumber (T.concat frags)
+        Right (chunk, rest) -> collectNumber frags size phase chunk rest
+  | otherwise = loop frags size phase 0
+  where
+    len = T.length inp
+    loop f s p pos
+      | pos >= len = collectNumber (f <> [inp]) (s + len) p mempty txt
+      | otherwise =
+          let c = T.index inp pos
+           in case advanceNumber p c of
+                NumberEnd
+                  | isValidNumberFinal p ->
+                      let frags' = f <> [T.take pos inp]
+                       in pure (T.drop pos inp, build frags', s + pos, txt)
+                  | otherwise ->
+                      throwError
+                        $ HQDecodeError
+                        $ InvalidNumber (T.concat (f <> [T.take pos inp]))
+                NumberError ->
+                  throwError
+                    $ HQDecodeError
+                    $ InvalidNumber (T.concat (f <> [T.take pos inp]) <> one c)
+                NumberStep p' -> loop f s p' (pos + 1)
+    build = foldMap encodeUtf8Builder
+
 -- | Skip a keyword from its saved state. Mirrors 'stepKeyword',
 -- including its end-of-input rules: a complete keyword at
 -- exhaustion succeeds, an incomplete one is 'InvalidKeyword'.
@@ -505,7 +562,9 @@ skipKeywordText state input text =
 -- after the closing quote plus the raw consumed bytes (quotes excluded)
 -- and their estimated size.
 skipStringCollect ::
-  Text -> StreamIO Text () -> ExceptT HQError IO (Text, Builder, Int, StreamIO Text ())
+  Text ->
+  StreamIO Text () ->
+  ExceptT HQError IO (Text, Builder, Int, StreamIO Text ())
 skipStringCollect = collectStringGo mempty 0
 
 collectStringGo ::

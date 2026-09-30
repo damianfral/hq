@@ -11,6 +11,7 @@ module HQ.JSON.Encoder
     encode,
     encodeChunks,
     formatEvent,
+    transcribeRawBytes,
     transcribeRawString,
     Builder,
     Chunk (..),
@@ -232,20 +233,30 @@ finishTopValue joinOpt (EncoderState ctxs' _)
   | joinOpt == NoJoin && null ctxs' = ChunkFragment newline 1
   | otherwise = ChunkFragment mempty 0
 
+-- | Transcribe a pre-encoded scalar body (raw input bytes, quotes
+-- included or not): separator, body and top-level terminator in a single
+-- 'Chunk', advancing the state exactly as 'formatEvent' would for the
+-- equivalent scalar event.
+transcribeRawBytes ::
+  EncoderConfig -> EncoderState -> Builder -> Int -> (Chunk, EncoderState)
+transcribeRawBytes (EncoderConfig style valueOpts) st bodyB bodyS =
+  (Chunk (sepB <> bodyB <> finB) (sepS + bodyS + finS), st2)
+  where
+    (ChunkFragment sepB sepS, st1) = beforeValue style st
+    st2 = afterValue st1
+    ChunkFragment finB finS = finishTopValue joinOpt st2
+    (ValueOptions _ joinOpt) = valueOpts
+
 -- | Transcribe a pre-encoded string body (raw input bytes without their
 -- quotes, captured straight from the text): separator, quoted body and
 -- top-level terminator in a single 'Chunk', advancing the state exactly
 -- as 'formatEvent' would for the equivalent scalar event. Rewrite
 -- passthrough uses this to re-emit strings without decoding and
 -- re-encoding them; escape sequences stay verbatim.
-transcribeRawString :: EncoderConfig -> EncoderState -> Builder -> Int -> (Chunk, EncoderState)
-transcribeRawString (EncoderConfig style (ValueOptions _ joinOpt)) st rawB rawS =
-  case beforeValue style st of
-    (ChunkFragment sepB sepS, st1) ->
-      let st2 = afterValue st1
-       in case finishTopValue joinOpt st2 of
-            ChunkFragment finB finS ->
-              (Chunk (sepB <> char7 '"' <> rawB <> char7 '"' <> finB) (sepS + rawS + 2 + finS), st2)
+transcribeRawString ::
+  EncoderConfig -> EncoderState -> Builder -> Int -> (Chunk, EncoderState)
+transcribeRawString config st rawB rawS =
+  transcribeRawBytes config st (char7 '"' <> rawB <> char7 '"') (rawS + 2)
 
 -- | The structural pieces to emit before an object key: a separator for
 -- the first or any following key, and the switch to
