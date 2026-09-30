@@ -96,14 +96,14 @@ runPreviewChunks optic chunks = do
 previewSpec :: Spec
 previewSpec = describe "preview" $ do
   it "returns a field value" $ do
-    runQueryPreviewTest "#name" "{\"name\":\"alice\",\"age\":30}"
+    runQueryPreviewTest "@name" "{\"name\":\"alice\",\"age\":30}"
     `shouldReturn` Right [JSONString "alice"]
 
   it "returns nothing when the field is missing" $ do
-    runQueryPreviewTest "#name" "{\"age\":30}" `shouldReturn` Right []
+    runQueryPreviewTest "@name" "{\"age\":30}" `shouldReturn` Right []
 
   it "returns nothing for non-object input" $ do
-    runQueryPreviewTest "#name" "42" `shouldReturn` Right []
+    runQueryPreviewTest "@name" "42" `shouldReturn` Right []
 
   it "returns the first element of an array" $ do
     runQueryPreviewTest "each" "[1,2,3]" `shouldReturn` Right [JSONNumber 1]
@@ -116,7 +116,7 @@ previewSpec = describe "preview" $ do
     runQueryPreviewTest "each" "[]" `shouldReturn` Right []
 
   it "returns the first composed match" $ do
-    runQueryPreviewTest "each . #name" "[{\"name\":\"alice\"},{\"name\":\"bob\"}]"
+    runQueryPreviewTest "each . @name" "[{\"name\":\"alice\"},{\"name\":\"bob\"}]"
     `shouldReturn` Right [JSONString "alice"]
 
   it "returns the first array element with ix 0" $ do
@@ -129,7 +129,7 @@ previewSpec = describe "preview" $ do
     runQueryPreviewTest "each" "[]" `shouldReturn` Right []
 
   it "returns the first composed match"
-    $ runQueryPreviewTest "each . #name" "[{\"name\":\"alice\"},{\"name\":\"bob\"}]"
+    $ runQueryPreviewTest "each . @name" "[{\"name\":\"alice\"},{\"name\":\"bob\"}]"
     `shouldReturn` Right [JSONString "alice"]
 
   it "returns the proper array element with ix" $ do
@@ -148,7 +148,7 @@ previewSpec = describe "preview" $ do
     runQueryPreviewTest "_String" "42" `shouldReturn` Right []
 
   it "returns a whole container value" $ do
-    runQueryPreviewTest "#obj" "{\"obj\":{\"a\":1},\"next\":2}"
+    runQueryPreviewTest "@obj" "{\"obj\":{\"a\":1},\"next\":2}"
     `shouldReturn` Right
       [ JSONBeginObject,
         JSONObjectKey "a",
@@ -189,7 +189,7 @@ keysSpec = describe "keys" $ do
     runQueryTest "keys . _Number" "{\"a\":1}" `shouldReturn` Right []
 
   it "composes after a field" $ do
-    runQueryTest "#obj . keys" "{\"obj\":{\"a\":1}}"
+    runQueryTest "@obj . keys" "{\"obj\":{\"a\":1}}"
     `shouldReturn` Right [JSONString "a"]
 
   it "previews the first key" $ do
@@ -228,11 +228,11 @@ valuesSpec = describe "values" $ do
       ]
 
   it "composes with a field" $ do
-    runQueryTest "values . #x" "{\"a\":{\"x\":1},\"b\":{\"x\":2}}"
+    runQueryTest "values . @x" "{\"a\":{\"x\":1},\"b\":{\"x\":2}}"
     `shouldReturn` Right [JSONNumber 1, JSONNumber 2]
 
   it "returns empty when the field is missing in all values" $ do
-    runQueryTest "values . #x" "{\"a\":1}" `shouldReturn` Right []
+    runQueryTest "values . @x" "{\"a\":1}" `shouldReturn` Right []
 
   it "previews the first value" $ do
     runQueryPreviewTest "values" "{\"a\":1,\"b\":2}"
@@ -267,7 +267,7 @@ ixSpec = describe "ix" $ do
 filterSpec :: Spec
 filterSpec = describe "filter" $ do
   it "keeps array elements when the test holds" $ do
-    runQueryTest "each . filter #age == 30" "[{\"age\":30},{\"age\":20}]"
+    runQueryTest "each . filter @age == 30" "[{\"age\":30},{\"age\":20}]"
     `shouldReturn` Right [JSONBeginObject, JSONObjectKey "age", JSONNumber 30, JSONEndObject]
 
   it "keeps the whole value on any match" $ do
@@ -275,35 +275,35 @@ filterSpec = describe "filter" $ do
     `shouldReturn` Right [JSONBeginArray, JSONNumber 1, JSONNumber 2, JSONNumber 1, JSONEndArray]
 
   it "drops values when nothing matches" $ do
-    runQueryTest "each . filter #age == 30" "[{\"age\":20}]" `shouldReturn` Right []
+    runQueryTest "each . filter @age == 30" "[{\"age\":20}]" `shouldReturn` Right []
 
   it "drops values with a missing focus" $ do
-    runQueryTest "filter #age == 30" "{\"b\":1}" `shouldReturn` Right []
+    runQueryTest "filter @age == 30" "{\"b\":1}" `shouldReturn` Right []
 
   it "filters scalars" $ do
     runQueryTest "filter id == 1" "1" `shouldReturn` Right [JSONNumber 1]
     runQueryTest "filter id == 1" "2" `shouldReturn` Right []
 
   it "composes after a filter" $ do
-    runQueryTest "each . filter #age == 30 . #name" "[{\"age\":30,\"name\":\"a\"},{\"age\":20,\"name\":\"b\"}]"
+    runQueryTest "each . filter @age == 30 . @name" "[{\"age\":30,\"name\":\"a\"},{\"age\":20,\"name\":\"b\"}]"
     `shouldReturn` Right [JSONString "a"]
 
   it "keeps nested filtered values" $ do
-    runQueryTest "filter (filter #a == 1 == {\"a\":1})" "{\"a\":1}"
+    runQueryTest "filter (filter @a == 1 == {\"a\":1})" "{\"a\":1}"
     `shouldReturn` Right [JSONBeginObject, JSONObjectKey "a", JSONNumber 1, JSONEndObject]
 
   it "fails when the predicate does not fit" $ do
-    runQueryTest "each . filter #a +1" "[{\"a\":\"x\"}]" `shouldReturn` Left "expected a number"
+    runQueryTest "each . filter @a +1" "[{\"a\":\"x\"}]" `shouldReturn` Left "expected a number"
 
   it "fails when the predicate is not boolean" $ do
-    runQueryTest "each . filter #a +1" "[{\"a\":1}]" `shouldReturn` Left "filter transformation must produce a boolean"
+    runQueryTest "each . filter @a +1" "[{\"a\":1}]" `shouldReturn` Left "filter transformation must produce a boolean"
 
   it "previews the first kept value" $ do
-    runQueryPreviewTest "each . filter #age == 30" "[{\"age\":20},{\"age\":30}]"
+    runQueryPreviewTest "each . filter @age == 30" "[{\"age\":20},{\"age\":30}]"
     `shouldReturn` Right [JSONBeginObject, JSONObjectKey "age", JSONNumber 30, JSONEndObject]
 
   it "skips replayed containers looking for later members" $ do
-    runQueryTest "filter #a == 1 . #zzz" "{\"a\":1,\"big\":[1,2,3]}" `shouldReturn` Right []
+    runQueryTest "filter @a == 1 . @zzz" "{\"a\":1,\"big\":[1,2,3]}" `shouldReturn` Right []
 
 --------------------------------------------------------------------------------
 -- pure vs streaming folds
@@ -333,19 +333,19 @@ differentialOptics =
     "each",
     "keys",
     "values",
-    "#a",
-    "#missing",
+    "@a",
+    "@missing",
     "ix 0",
     "ix 2",
     "_String",
     "_Number",
     "_Just",
     "_Null",
-    "each . #x",
-    "#a . each",
-    "filter #a == 1",
-    "filter (each . #x == 2)",
-    "each . filter #b == 2"
+    "each . @x",
+    "@a . each",
+    "filter @a == 1",
+    "filter (each . @x == 2)",
+    "each . filter @b == 2"
   ]
 
 differentialDocs :: [Text]
@@ -369,14 +369,14 @@ differentialDocs =
 fieldSpec :: Spec
 fieldSpec = describe "field" $ do
   it "extracts a field from an object" $ do
-    runQueryTest "#name" "{\"name\":\"alice\"}"
+    runQueryTest "@name" "{\"name\":\"alice\"}"
     `shouldReturn` Right [JSONString "alice"]
 
   it "returns empty when field is missing" $ do
-    runQueryTest "#name" "{\"age\":30}" `shouldReturn` Right []
+    runQueryTest "@name" "{\"age\":30}" `shouldReturn` Right []
 
   it "returns empty for non-object input" $ do
-    runQueryTest "#name" "42" `shouldReturn` Right []
+    runQueryTest "@name" "42" `shouldReturn` Right []
 
 --------------------------------------------------------------------------------
 -- id
@@ -445,26 +445,26 @@ eachObjectSpec = describe "each on objects" $ do
 eachCompositionSpec :: Spec
 eachCompositionSpec = describe "each . field composition" $ do
   it "extracts field from each array element" $ do
-    runQueryTest "each . #name" "[{\"name\":\"alice\"},{\"name\":\"bob\"}]"
+    runQueryTest "each . @name" "[{\"name\":\"alice\"},{\"name\":\"bob\"}]"
     `shouldReturn` Right [JSONString "alice", JSONString "bob"]
 
   it "extracts field from each object value" $ do
-    runQueryTest "each . #x" "{\"a\":{\"x\":1},\"b\":{\"x\":2}}"
+    runQueryTest "each . @x" "{\"a\":{\"x\":1},\"b\":{\"x\":2}}"
     `shouldReturn` Right [JSONNumber 1, JSONNumber 2]
 
   it "returns empty when field is missing in some elements" $ do
-    runQueryTest "each . #name" "[{\"name\":\"alice\"},{\"age\":30}]"
+    runQueryTest "each . @name" "[{\"name\":\"alice\"},{\"age\":30}]"
     `shouldReturn` Right [JSONString "alice"]
 
   it "returns empty when field missing in all elements" $ do
-    runQueryTest "each . #name" "[{\"a\":1},{\"b\":2}]" `shouldReturn` Right []
+    runQueryTest "each . @name" "[{\"a\":1},{\"b\":2}]" `shouldReturn` Right []
 
   it "extracts field from each element with multiple fields" $ do
-    runQueryTest "each . #id" "[{\"name\":\"alice\",\"id\":\"1\"},{\"name\":\"bob\",\"id\":\"2\"}]"
+    runQueryTest "each . @id" "[{\"name\":\"alice\",\"id\":\"1\"},{\"name\":\"bob\",\"id\":\"2\"}]"
     `shouldReturn` Right [JSONString "1", JSONString "2"]
 
   it "field . each distributes field then each" $ do
-    runQueryTest "#items . each" "{\"items\":[1,2,3]}"
+    runQueryTest "@items . each" "{\"items\":[1,2,3]}"
     `shouldReturn` Right [JSONNumber 1, JSONNumber 2, JSONNumber 3]
 
   it "each . each flattens nested arrays" $ do
@@ -507,23 +507,23 @@ runPreviewChunks' opticStr chunks =
 
 foldChunkCases :: [(Text, Text)]
 foldChunkCases =
-  [ ("each . #name", "[{\"name\":\"alice\"},{\"age\":30}]"),
-    ("#users.each.#name", "{\"users\":[{\"name\":\"a\",\"age\":1},{\"name\":\"b\"}]}"),
+  [ ("each . @name", "[{\"name\":\"alice\"},{\"age\":30}]"),
+    ("@users.each.@name", "{\"users\":[{\"name\":\"a\",\"age\":1},{\"name\":\"b\"}]}"),
     ("each", "[[1,2],[3]]"),
-    ("#a", "{\"a\":{\"b\":[1,2]},\"c\":3}"),
-    ("#missing", "{\"a\":1}"),
+    ("@a", "{\"a\":{\"b\":[1,2]},\"c\":3}"),
+    ("@missing", "{\"a\":1}"),
     ("ix 2", "[1,2,3,4]"),
     ("each . each", "[[1,2],[3,4]]"),
-    ("#a.#b", "{\"a\":{\"b\":[1,{\"c\":2}]}}"),
+    ("@a.@b", "{\"a\":{\"b\":[1,{\"c\":2}]}}"),
     ("keys", "{\"a\":1,\"b\":2}"),
     ("keys", "[10,20,30]"),
     ("keys . _String", "{\"a\":1}"),
     ("values", "{\"a\":1,\"b\":2}"),
-    ("values . #x", "{\"a\":{\"x\":1},\"b\":2}"),
+    ("values . @x", "{\"a\":{\"x\":1},\"b\":2}"),
     ("ix 0", "{\"a\":1}"),
-    ("each . filter #age == 30", "[{\"age\":30},{\"age\":20}]"),
+    ("each . filter @age == 30", "[{\"age\":30},{\"age\":20}]"),
     ("filter each == 1", "[1,2,1]"),
-    ("each . filter #age == 30 . #name", "[{\"age\":30,\"name\":\"a\"}]"),
+    ("each . filter @age == 30 . @name", "[{\"age\":30,\"name\":\"a\"}]"),
     -- Surrogate pairs inside containers: the take loops must step
     -- mid-value pauses (high surrogate) instead of finishing early.
     ("id", "[\"\\uD83D\\uDE00\"]"),
@@ -533,13 +533,13 @@ foldChunkCases =
 
 malformedChunkCases :: [(Text, Text)]
 malformedChunkCases =
-  [ ("#b", "{\"a\":1,\"b\":tru}"),
-    ("#a", "{\"a\":1,\"b\":tru}"),
+  [ ("@b", "{\"a\":1,\"b\":tru}"),
+    ("@a", "{\"a\":1,\"b\":tru}"),
     ("each", "[1,,2]"),
-    ("#a", "{\"a\":01}"),
+    ("@a", "{\"a\":01}"),
     ("keys", "[1,,2]"),
     ("values", "{\"a\":tru}"),
-    ("filter #a == 1", "{\"a\":1,\"b\":tru}"),
+    ("filter @a == 1", "{\"a\":1,\"b\":tru}"),
     ("id", "[\"\\uD83D\"]"),
     ("id", "[\"\\uD83D\\uxyz\"]")
   ]

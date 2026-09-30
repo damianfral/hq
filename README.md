@@ -27,7 +27,7 @@ Options: `-f FILE` (input file, `-` for stdin), `-r` (raw strings), `-c`
 
 | Optic | Meaning |
 | --- | --- |
-| `#name` | Field of an object |
+| `@name` | Field of an object |
 | `each` | Each array element, or each object value |
 | `keys` | Each object key as a string (objects only) |
 | `values` | Each object value (objects only) |
@@ -43,8 +43,8 @@ Options: `-f FILE` (input file, `-` for stdin), `-r` (raw strings), `-c`
 | `filter O T` | Keep the input when `T` holds for some focus of `O` |
 | `A . B` | Composition: focus `A`, then `B` within each target |
 
-Example: `filter #age '== 30'` keeps objects with `age` 30;
-`filter (each.#age '== 30')` keeps documents containing one.
+Example: `filter @age '== 30'` keeps objects with `age` 30;
+`filter (each.@age '== 30')` keeps documents containing one.
 
 ## Transformations
 
@@ -67,16 +67,16 @@ Example: `filter #age '== 30'` keeps objects with `age` 30;
 ## Examples
 
 ```sh
-echo '{"name":"ada","age":36}' | hq fold '#name'
+echo '{"name":"ada","age":36}' | hq fold '@name'
 # "ada"
 
-echo '{"a":[1,2,3]}' | hq fold '#a.each'
+echo '{"a":[1,2,3]}' | hq fold '@a.each'
 # 1 2 3 (one per line, pretty-printed)
 
-echo '{"a":1}' | hq over '#a' '+1' -c
+echo '{"a":1}' | hq over '@a' '+1' -c
 # {"a":2}
 
-echo '{"a":1,"b":2}' | hq delete '#b' -c
+echo '{"a":1,"b":2}' | hq delete '@b' -c
 # {"a":1}
 ```
 

@@ -34,13 +34,13 @@ opticAtomParser =
       groupedOptic
     ]
 
--- | A parenthesized optic, e.g. @(#a)@ or @(#a . #b)@: tolerates
+-- | A parenthesized optic, e.g. @(@a)@ or @(@a . @b)@: tolerates
 -- redundant parentheses anywhere an optic atom is accepted.
 groupedOptic :: Parser Optic
 groupedOptic = parens opticParser
 
 fieldParser :: Parser Optic
-fieldParser = char '#' >> field <$> identifier
+fieldParser = char '@' >> field <$> identifier
 
 identifier :: Parser Text
 identifier = lexeme $ fromString <$> some (alphaNumChar <|> char '_' <|> char '-')
@@ -55,9 +55,9 @@ valuesParser :: Parser Optic
 valuesParser = keyword "values" values
 
 -- | @filter OPTIC TRANSFORMATION@: either a single group wrapping
--- both sides, or two bare single atoms, e.g. @filter (#age == 30)@,
--- @filter (each . #age == 30)@ or @filter #public not@. A @.@ after a
--- bare optic starts an outer composition (@filter #a ... . #b@), so
+-- both sides, or two bare single atoms, e.g. @filter (@age == 30)@,
+-- @filter (each . @age == 30)@ or @filter @public not@. A @.@ after a
+-- bare optic starts an outer composition (@filter @a ... . @b@), so
 -- dotted optics need the group form.
 filterParser :: Parser Optic
 filterParser = symbol "filter" >> (try grouped <|> bare)

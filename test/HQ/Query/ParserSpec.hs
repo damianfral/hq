@@ -22,14 +22,14 @@ parserSpec :: Spec
 parserSpec = describe "parseQuery" $ do
   describe "fold operation" $ do
     it "parses fold with a field" $ do
-      parseQuery "fold #foo" `shouldBe` Right (Fold (field "foo"))
+      parseQuery "fold @foo" `shouldBe` Right (Fold (field "foo"))
 
     it "parses fold with each" $ do
       parseQuery "fold each" `shouldBe` Right (Fold each)
 
     it "parses fold with composed optics" $ do
       let expected = Fold (compose (compose (field "foo") each) (field "bar"))
-      parseQuery "fold #foo.each.#bar" `shouldBe` Right expected
+      parseQuery "fold @foo.each.@bar" `shouldBe` Right expected
 
   describe "each optic" $ do
     it "parses each standalone" $ do
@@ -37,24 +37,24 @@ parserSpec = describe "parseQuery" $ do
 
     it "parses each in composition" $ do
       let expected = Preview $ compose (field "foo") each
-      parseQuery "preview #foo.each" `shouldBe` Right expected
+      parseQuery "preview @foo.each" `shouldBe` Right expected
 
     it "parses each at the start of composition" $ do
       let expected = Preview $ compose each (field "foo")
-      parseQuery "preview each.#foo" `shouldBe` Right expected
+      parseQuery "preview each.@foo" `shouldBe` Right expected
 
   describe "field optic" $ do
     it "parses a simple field" $ do
-      parseQuery "preview #name" `shouldBe` Right (Preview (field "name"))
+      parseQuery "preview @name" `shouldBe` Right (Preview (field "name"))
 
     it "parses a field with underscores" $ do
-      parseQuery "fold #my_field" `shouldBe` Right (Fold (field "my_field"))
+      parseQuery "fold @my_field" `shouldBe` Right (Fold (field "my_field"))
 
     it "parses a field with numbers" $ do
-      parseQuery "preview #field123" `shouldBe` Right (Preview (field "field123"))
+      parseQuery "preview @field123" `shouldBe` Right (Preview (field "field123"))
 
     it "parses a field with mixed alphanumeric and underscores" $ do
-      parseQuery "preview #foo_bar_1" `shouldBe` Right (Preview (field "foo_bar_1"))
+      parseQuery "preview @foo_bar_1" `shouldBe` Right (Preview (field "foo_bar_1"))
 
   describe "id optic" $ do
     it "parses id standalone" $ do
@@ -62,7 +62,7 @@ parserSpec = describe "parseQuery" $ do
 
     it "parses id in composition" $ do
       let composed = Preview $ compose id (field "foo")
-      parseQuery "preview id.#foo" `shouldBe` Right composed
+      parseQuery "preview id.@foo" `shouldBe` Right composed
 
   describe "keys/values/ix optics" $ do
     it "parses keys standalone" $ do
@@ -72,7 +72,7 @@ parserSpec = describe "parseQuery" $ do
       parseQuery "fold values" `shouldBe` Right (Fold values)
 
     it "parses keys in composition" $ do
-      parseQuery "preview #obj.keys"
+      parseQuery "preview @obj.keys"
         `shouldBe` Right (Preview (compose (field "obj") keys))
 
     it "parses keys with a prism" $ do
@@ -80,35 +80,35 @@ parserSpec = describe "parseQuery" $ do
         `shouldBe` Right (Preview (compose keys _String))
 
     it "parses values in composition" $ do
-      parseQuery "fold values.#x"
+      parseQuery "fold values.@x"
         `shouldBe` Right (Fold (compose values (field "x")))
 
     it "parses ix with an index" $ do
       parseQuery "fold ix 10" `shouldBe` Right (Fold (ix 10))
 
     it "parses filter with single words" $ do
-      parseQuery "fold filter #age == 30"
+      parseQuery "fold filter @age == 30"
         `shouldBe` Right (Fold (filter (field "age") (equal (Number 30))))
 
     it "parses filter with parens" $ do
       let inner = filter (compose each (field "age")) (equal (Number 30))
           expected = Fold (compose (field "users") inner)
-      parseQuery "fold #users.filter (each . #age == 30)" `shouldBe` Right expected
+      parseQuery "fold @users.filter (each . @age == 30)" `shouldBe` Right expected
 
     it "parses filter mid-path with a trailing transformation" $ do
       let inner = filter (field "age") (equal (Number 30))
           expected = Over (compose each inner) (add 1)
-      parseQuery "over each.filter #age == 30 +1" `shouldBe` Right expected
+      parseQuery "over each.filter @age == 30 +1" `shouldBe` Right expected
 
     it "tolerates redundant parentheses around optics" $ do
-      parseQuery "fold (#foo)" `shouldBe` Right (Fold (field "foo"))
-      parseQuery "fold ((#foo))" `shouldBe` Right (Fold (field "foo"))
-      parseQuery "fold (#foo . #bar)"
+      parseQuery "fold (@foo)" `shouldBe` Right (Fold (field "foo"))
+      parseQuery "fold ((@foo))" `shouldBe` Right (Fold (field "foo"))
+      parseQuery "fold (@foo . @bar)"
         `shouldBe` Right (Fold (compose (field "foo") (field "bar")))
 
     it "tolerates redundant parentheses around filter sides" $ do
       let expected = Fold (filter (field "age") (equal (Number 30)))
-      parseQuery "fold filter (#age) (== 30)" `shouldBe` Right expected
+      parseQuery "fold filter (@age) (== 30)" `shouldBe` Right expected
 
     it "rejects empty parentheses" $ case parseQuery "fold ()" of
       Left _ -> pure ()
@@ -122,24 +122,24 @@ parserSpec = describe "parseQuery" $ do
 
   describe "whitespace handling" $ do
     it "handles extra whitespace around the query" $ do
-      parseQuery "  preview #foo  " `shouldBe` Right (Preview (field "foo"))
+      parseQuery "  preview @foo  " `shouldBe` Right (Preview (field "foo"))
 
     it "handles whitespace around the dot separator" $ do
       let expected = Preview $ compose (field "foo") (field "bar")
-      parseQuery "preview #foo . #bar" `shouldBe` Right expected
+      parseQuery "preview @foo . @bar" `shouldBe` Right expected
 
     it "handles no whitespace" $ do
-      parseQuery "preview#foo" `shouldBe` Right (Preview (field "foo"))
+      parseQuery "preview@foo" `shouldBe` Right (Preview (field "foo"))
 
     it "handles tabs" $ do
-      parseQuery "\tpreview\t#foo\t" `shouldBe` Right (Preview (field "foo"))
+      parseQuery "\tpreview\t@foo\t" `shouldBe` Right (Preview (field "foo"))
 
   describe "error cases" $ do
     it "rejects empty input" $ case parseQuery "" of
       Left _ -> pure ()
       Right q -> expectationFailure $ "Expected parse error, got: " <> show q
 
-    it "rejects unknown operation" $ case parseQuery "unknown #foo" of
+    it "rejects unknown operation" $ case parseQuery "unknown @foo" of
       Left _ -> pure ()
       Right q -> expectationFailure $ "Expected parse error, got: " <> show q
 
@@ -147,11 +147,11 @@ parserSpec = describe "parseQuery" $ do
       Left _ -> pure ()
       Right q -> expectationFailure $ "Expected parse error, got: " <> show q
 
-    it "rejects field without hash" $ case parseQuery "fold foo" of
+    it "rejects field without at" $ case parseQuery "fold foo" of
       Left _ -> pure ()
       Right q -> expectationFailure $ "Expected parse error, got: " <> show q
 
-    it "rejects hash without identifier" $ case parseQuery "fold #" of
+    it "rejects at without identifier" $ case parseQuery "fold @" of
       Left _ -> pure ()
       Right q -> expectationFailure $ "Expected parse error, got: " <> show q
 
@@ -182,7 +182,7 @@ prismParserSpec = describe "parseQuery (prisms)" $ do
       `shouldBe` Right (Fold (compose each _String))
 
   it "parses prism in composition with field" $ do
-    parseQuery "fold #data._Number"
+    parseQuery "fold @data._Number"
       `shouldBe` Right (Fold (compose (field "data") _Number))
 
   it "parses prism composed with an index" $ do
@@ -191,41 +191,41 @@ prismParserSpec = describe "parseQuery (prisms)" $ do
 overParserSpec :: Spec
 overParserSpec = describe "parseQuery (over)" $ do
   it "parses over with a field" $ do
-    parseQuery "over #foo +1" `shouldBe` Right (Over (field "foo") (add 1))
+    parseQuery "over @foo +1" `shouldBe` Right (Over (field "foo") (add 1))
 
   it "parses over with each" $ do
     parseQuery "over each trim" `shouldBe` Right (Over each trim)
 
   it "parses over with composed optics" $ do
-    parseQuery "over #foo.each +1"
+    parseQuery "over @foo.each +1"
       `shouldBe` Right (Over (compose (field "foo") each) (add 1))
 
   it "parses over with a composed transformation" $ do
-    parseQuery "over #n +1 . == 3"
+    parseQuery "over @n +1 . == 3"
       `shouldBe` Right (Over (field "n") (combine (add 1) (equal (Number 3))))
 
   it "parses over with a string concatenation" $ do
-    parseQuery "over #title ++\"!\""
+    parseQuery "over @title ++\"!\""
       `shouldBe` Right (Over (field "title") (concatString "!"))
 
   it "parses over with no whitespace" $ do
-    parseQuery "over#foo+1" `shouldBe` Right (Over (field "foo") (add 1))
+    parseQuery "over@foo+1" `shouldBe` Right (Over (field "foo") (add 1))
 
-  it "rejects over without a transformation" $ case parseQuery "over #foo" of
+  it "rejects over without a transformation" $ case parseQuery "over @foo" of
     Left _ -> pure ()
     Right q -> expectationFailure $ "Expected parse error, got: " <> show q
 
 setParserSpec :: Spec
 setParserSpec = describe "parseQuery (set)" $ do
   it "parses set as a constant over" $ do
-    parseQuery "set #name \"bob\""
+    parseQuery "set @name \"bob\""
       `shouldBe` Right (Over (field "name") (constValue (String "bob")))
 
   it "parses set with a number value" $ do
     parseQuery "set each 0" `shouldBe` Right (Over each (constValue (Number 0)))
 
   it "parses set with a composed optic" $ do
-    parseQuery "set #users.each.#name \"anon\""
+    parseQuery "set @users.each.@name \"anon\""
       `shouldBe` Right
         ( Over
             (compose (compose (field "users") each) (field "name"))

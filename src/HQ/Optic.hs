@@ -39,7 +39,7 @@ data OpticF a
     Field Text
   | -- | Traverse all elements of a JSON array, or the values of an object.
     -- Composed with another optic, it distributes that optic over each element:
-    -- @#users.each.#name@ focuses on the @name@ field of each array element.
+    -- @@users.each.@name@ focuses on the @name@ field of each array element.
     Each
   | -- | Traverse object keys as string values (objects only).
     -- Focuses on each member name (@JSONString@) in document order.
@@ -92,7 +92,7 @@ instance Eq Optic where
 
 instance Show Optic where
   showsPrec d (Optic (Fix (Field name))) =
-    showParen (d > appPrec) $ showString "#" . showsPrec (appPrec + 1) name
+    showParen (d > appPrec) $ showString "@" . showsPrec (appPrec + 1) name
   showsPrec _ (Optic (Fix Each)) = showString "each"
   showsPrec _ (Optic (Fix Keys)) = showString "keys"
   showsPrec _ (Optic (Fix Values)) = showString "values"
@@ -114,8 +114,8 @@ instance Show Optic where
       . showsArgs o t
     where
       filterPrec = appPrec
-      -- Single atoms stay bare (@filter #age == 30@); anything longer
-      -- goes in one paren group (@filter (each . #age == 30)@).
+      -- Single atoms stay bare (@filter @age == 30@); anything longer
+      -- goes in one paren group (@filter (each . @age == 30)@).
       showsArgs oo tt
         | isAtomOptic oo && isAtomTrans tt =
             showsPrec (filterPrec + 1) (Optic oo)
@@ -139,7 +139,7 @@ field = Optic . Fix . Field
 
 -- | Traverse all elements of a JSON array, or all values of an object.
 -- Composed with another optic, it distributes that optic over each element:
--- @#users.each.#name@ focuses on the @name@ field of each array element.
+-- @@users.each.@name@ focuses on the @name@ field of each array element.
 each :: Optic
 each = Optic (Fix Each)
 
@@ -250,8 +250,8 @@ prismName PObject = "_Object"
 -- | Keep the focused value when the transformation holds of the
 -- sub-optic's focus (@filter o p@ focuses its input when @p@ maps some
 -- value focused by @o@ to true). For example,
--- @each . filter #age == 30@ focuses the array elements having an
--- @age@ field equal to 30, while @filter (each . #age == 30)@ keeps
+-- @each . filter @age == 30@ focuses the array elements having an
+-- @age@ field equal to 30, while @filter (each . @age == 30)@ keeps
 -- whole documents containing such a value. Single atoms stay bare;
 -- anything longer goes in one paren group.
 filter :: Optic -> Transformation -> Optic

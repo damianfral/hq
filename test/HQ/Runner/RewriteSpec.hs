@@ -101,7 +101,7 @@ runOverTest opticStr transformation jsonInput = case parseOptic opticStr of
 setSpec :: Spec
 setSpec = describe "set" $ do
   it "replaces a field value" $ do
-    runSetTest "#name" "\"bob\"" "{\"name\":\"alice\",\"age\":30}"
+    runSetTest "@name" "\"bob\"" "{\"name\":\"alice\",\"age\":30}"
     `shouldReturn` Right
       [ JSONBeginObject,
         JSONObjectKey "name",
@@ -112,12 +112,12 @@ setSpec = describe "set" $ do
       ]
 
   it "leaves the document unchanged when the field is missing" $ do
-    runSetTest "#name" "5" "{\"age\":30}"
+    runSetTest "@name" "5" "{\"age\":30}"
     `shouldReturn` Right
       [JSONBeginObject, JSONObjectKey "age", JSONNumber 30, JSONEndObject]
 
   it "leaves non-object input unchanged" $ do
-    runSetTest "#name" "5" "[1,2]"
+    runSetTest "@name" "5" "[1,2]"
     `shouldReturn` Right [JSONBeginArray, JSONNumber 1, JSONNumber 2, JSONEndArray]
 
   it "replaces every array element" $ do
@@ -158,7 +158,7 @@ setSpec = describe "set" $ do
     runSetTest "_String" "\"x\"" "5" `shouldReturn` Right [JSONNumber 5]
 
   it "replaces fields in a composed traversal" $ do
-    runSetTest "#users.each.#name" "\"anon\"" "{\"users\":[{\"name\":\"a\",\"age\":1},{\"name\":\"b\"}]}"
+    runSetTest "@users.each.@name" "\"anon\"" "{\"users\":[{\"name\":\"a\",\"age\":1},{\"name\":\"b\"}]}"
     `shouldReturn` Right
       [ JSONBeginObject,
         JSONObjectKey "users",
@@ -178,7 +178,7 @@ setSpec = describe "set" $ do
       ]
 
   it "keeps members unchanged when the composed target is missing" $ do
-    runSetTest "#users.each.#name" "\"anon\"" "{\"users\":[{\"age\":1}]}"
+    runSetTest "@users.each.@name" "\"anon\"" "{\"users\":[{\"age\":1}]}"
     `shouldReturn` Right
       [ JSONBeginObject,
         JSONObjectKey "users",
@@ -216,7 +216,7 @@ setSpec = describe "set" $ do
       [JSONBeginObject, JSONObjectKey "x", JSONNumber 1, JSONEndObject]
 
   it "replaces a nested container value wholesale"
-    $ runSetTest "#a" "5" "{\"a\":{\"b\":[1,2]},\"c\":3}"
+    $ runSetTest "@a" "5" "{\"a\":{\"b\":[1,2]},\"c\":3}"
     `shouldReturn` Right
       [ JSONBeginObject,
         JSONObjectKey "a",
@@ -237,17 +237,17 @@ setSpec = describe "set" $ do
 deleteSpec :: Spec
 deleteSpec = describe "delete" $ do
   it "removes a field" $ do
-    runDeleteTest "#name" "{\"name\":\"alice\",\"age\":30}"
+    runDeleteTest "@name" "{\"name\":\"alice\",\"age\":30}"
     `shouldReturn` Right
       [JSONBeginObject, JSONObjectKey "age", JSONNumber 30, JSONEndObject]
 
   it "leaves the document unchanged when the field is missing" $ do
-    runDeleteTest "#name" "{\"age\":30}"
+    runDeleteTest "@name" "{\"age\":30}"
     `shouldReturn` Right
       [JSONBeginObject, JSONObjectKey "age", JSONNumber 30, JSONEndObject]
 
   it "leaves non-object input unchanged" $ do
-    runDeleteTest "#name" "[1,2]"
+    runDeleteTest "@name" "[1,2]"
     `shouldReturn` Right [JSONBeginArray, JSONNumber 1, JSONNumber 2, JSONEndArray]
 
   it "removes every array element" $ do
@@ -280,12 +280,12 @@ deleteSpec = describe "delete" $ do
     `shouldReturn` Right [JSONBeginArray, JSONNumber 20, JSONEndArray]
 
   it "removes a member whose value is targeted by a composed optic" $ do
-    runDeleteTest "#a._String" "{\"a\":\"x\",\"b\":\"y\"}"
+    runDeleteTest "@a._String" "{\"a\":\"x\",\"b\":\"y\"}"
     `shouldReturn` Right
       [JSONBeginObject, JSONObjectKey "b", JSONString "y", JSONEndObject]
 
   it "keeps a member whose value does not match the composed prism" $ do
-    runDeleteTest "#a._String" "{\"a\":5,\"b\":\"y\"}"
+    runDeleteTest "@a._String" "{\"a\":5,\"b\":\"y\"}"
     `shouldReturn` Right
       [ JSONBeginObject,
         JSONObjectKey "a",
@@ -296,7 +296,7 @@ deleteSpec = describe "delete" $ do
       ]
 
   it "removes composed fields but keeps the container" $ do
-    runDeleteTest "#users.each.#name" "{\"users\":[{\"name\":\"a\",\"age\":1},{\"age\":2}]}"
+    runDeleteTest "@users.each.@name" "{\"users\":[{\"name\":\"a\",\"age\":1},{\"age\":2}]}"
     `shouldReturn` Right
       [ JSONBeginObject,
         JSONObjectKey "users",
@@ -317,7 +317,7 @@ deleteSpec = describe "delete" $ do
     runDeleteTest "id" "[1,2]" `shouldReturn` Right []
 
   it "leaves a value alone when the composed optic does not reach it" $ do
-    runDeleteTest "#a.#b" "{\"a\":{\"c\":1},\"b\":2}"
+    runDeleteTest "@a.@b" "{\"a\":{\"c\":1},\"b\":2}"
     `shouldReturn` Right
       [ JSONBeginObject,
         JSONObjectKey "a",
@@ -342,7 +342,7 @@ overSpec = describe "over" $ do
       [JSONBeginArray, JSONNumber 2, JSONNumber 3, JSONNumber 4, JSONEndArray]
 
   it "adds to a field value" $ do
-    runOverTest "#age" (add 1) "{\"name\":\"alice\",\"age\":30}"
+    runOverTest "@age" (add 1) "{\"name\":\"alice\",\"age\":30}"
     `shouldReturn` Right
       [ JSONBeginObject,
         JSONObjectKey "name",
@@ -368,7 +368,7 @@ overSpec = describe "over" $ do
       [JSONBeginArray, JSONString "hi", JSONNumber 5, JSONEndArray]
 
   it "replaces substrings in string values" $ do
-    runOverTest "#name" (replace "a" "e") "{\"name\":\"alice\"}"
+    runOverTest "@name" (replace "a" "e") "{\"name\":\"alice\"}"
     `shouldReturn` Right
       [JSONBeginObject, JSONObjectKey "name", JSONString "elice", JSONEndObject]
 
@@ -408,7 +408,7 @@ overSpec = describe "over" $ do
       ]
 
   it "rewrites values focused by a composed optic" $ do
-    runOverTest "#users.each.#age" (add 1) "{\"users\":[{\"age\":1},{\"age\":2}]}"
+    runOverTest "@users.each.@age" (add 1) "{\"users\":[{\"age\":1},{\"age\":2}]}"
     `shouldReturn` Right
       [ JSONBeginObject,
         JSONObjectKey "users",
@@ -585,12 +585,12 @@ ixRewriteSpec = describe "ix rewrite" $ do
 filterRewriteSpec :: Spec
 filterRewriteSpec = describe "filter rewrite" $ do
   it "replaces kept values" $ do
-    runOverTest "each . filter #age == 30" (constValue (Number 0)) "[{\"age\":30},{\"age\":20}]"
+    runOverTest "each . filter @age == 30" (constValue (Number 0)) "[{\"age\":30},{\"age\":20}]"
     `shouldReturn` Right
       [JSONBeginArray, JSONNumber 0, JSONBeginObject, JSONObjectKey "age", JSONNumber 20, JSONEndObject, JSONEndArray]
 
   it "rewrites through a filter into kept values" $ do
-    runOverTest "each . filter #age == 30 . #score" (add 100) "[{\"age\":30,\"score\":1},{\"age\":20,\"score\":2}]"
+    runOverTest "each . filter @age == 30 . @score" (add 100) "[{\"age\":30,\"score\":1},{\"age\":20,\"score\":2}]"
     `shouldReturn` Right
       [ JSONBeginArray,
         JSONBeginObject,
@@ -609,17 +609,17 @@ filterRewriteSpec = describe "filter rewrite" $ do
       ]
 
   it "sets kept values" $ do
-    runSetTest "each . filter #age == 30" "0" "[{\"age\":30},{\"age\":20}]"
+    runSetTest "each . filter @age == 30" "0" "[{\"age\":30},{\"age\":20}]"
     `shouldReturn` Right
       [JSONBeginArray, JSONNumber 0, JSONBeginObject, JSONObjectKey "age", JSONNumber 20, JSONEndObject, JSONEndArray]
 
   it "removes kept elements" $ do
-    runDeleteTest "each . filter #age == 30" "[{\"age\":30},{\"age\":20}]"
+    runDeleteTest "each . filter @age == 30" "[{\"age\":30},{\"age\":20}]"
     `shouldReturn` Right
       [JSONBeginArray, JSONBeginObject, JSONObjectKey "age", JSONNumber 20, JSONEndObject, JSONEndArray]
 
   it "removes kept members but keeps the container" $ do
-    runDeleteTest "#users . each . filter #age == 30" "{\"users\":[{\"age\":30},{\"age\":20}],\"b\":2}"
+    runDeleteTest "@users . each . filter @age == 30" "{\"users\":[{\"age\":30},{\"age\":20}],\"b\":2}"
     `shouldReturn` Right
       [ JSONBeginObject,
         JSONObjectKey "users",
@@ -635,24 +635,24 @@ filterRewriteSpec = describe "filter rewrite" $ do
       ]
 
   it "removes the whole member when the gate keeps it" $ do
-    runDeleteTest "#users . filter (each == 1)" "{\"users\":[1],\"b\":2}"
+    runDeleteTest "@users . filter (each == 1)" "{\"users\":[1],\"b\":2}"
     `shouldReturn` Right
       [JSONBeginObject, JSONObjectKey "b", JSONNumber 2, JSONEndObject]
 
   it "removes the whole document when the gate keeps it" $ do
-    runDeleteTest "filter #age == 30" "{\"age\":30}" `shouldReturn` Right []
+    runDeleteTest "filter @age == 30" "{\"age\":30}" `shouldReturn` Right []
 
   it "leaves the document unchanged when the gate drops it" $ do
-    runDeleteTest "filter #age == 30" "{\"age\":20}"
+    runDeleteTest "filter @age == 30" "{\"age\":20}"
     `shouldReturn` Right
       [JSONBeginObject, JSONObjectKey "age", JSONNumber 20, JSONEndObject]
 
   it "fails when the predicate does not fit" $ do
-    runOverTest "each . filter #a +1" (constValue (Number 0)) "[{\"a\":\"x\"}]"
+    runOverTest "each . filter @a +1" (constValue (Number 0)) "[{\"a\":\"x\"}]"
     `shouldReturn` Left "expected a number"
 
   it "fails when the predicate is not boolean" $ do
-    runOverTest "each . filter #a +1" (constValue (Number 0)) "[{\"a\":1}]"
+    runOverTest "each . filter @a +1" (constValue (Number 0)) "[{\"a\":1}]"
     `shouldReturn` Left "filter transformation must produce a boolean"
 
 chunkedRewriteSpec :: Spec
@@ -679,21 +679,21 @@ chunkedRewriteSpec = describe "chunked input" $ do
 
 overChunkCases :: [(Text, Transformation, Text)]
 overChunkCases =
-  [ ("#users.each.#age", add 1, "{\"users\":[{\"age\":1},{\"age\":2}]}"),
+  [ ("@users.each.@age", add 1, "{\"users\":[{\"age\":1},{\"age\":2}]}"),
     ("each", add 1, "[1,2,3]"),
     ("each . _String", concatString "!", "[1,\"a\",\"b\"]"),
     ("keys", concatString "!", "{\"a\":1,\"b\":2}"),
     ("values", add 1, "{\"a\":1,\"b\":2}"),
     ("ix 1", add 1, "[1,2,3]"),
-    ("each . filter #age == 30", constValue (Number 0), "[{\"age\":30},{\"age\":20}]")
+    ("each . filter @age == 30", constValue (Number 0), "[{\"age\":30},{\"age\":20}]")
   ]
 
 deleteChunkCases :: [(Text, Text)]
 deleteChunkCases =
-  [ ("#users.each.#name", "{\"users\":[{\"name\":\"a\",\"age\":1},{\"age\":2}]}"),
+  [ ("@users.each.@name", "{\"users\":[{\"name\":\"a\",\"age\":1},{\"age\":2}]}"),
     ("each", "[1,2,3]"),
-    ("#a", "{\"a\":{\"b\":[1,2]},\"c\":3}"),
+    ("@a", "{\"a\":{\"b\":[1,2]},\"c\":3}"),
     ("keys", "{\"a\":1,\"b\":2}"),
     ("values", "{\"a\":1,\"b\":2}"),
-    ("each . filter #age == 30", "[{\"age\":30},{\"age\":20}]")
+    ("each . filter @age == 30", "[{\"age\":30},{\"age\":20}]")
   ]

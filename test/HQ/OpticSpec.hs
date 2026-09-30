@@ -23,8 +23,8 @@ opticTypeOf optic = t
 spec :: Spec
 spec = describe "HQ.Optic" $ do
   it "show and read are inverses" $ do
-    -- NOTE: 'field' is excluded: its 'Show' quotes the name (#"a")
-    -- while the parser accepts bare identifiers (#a), so fields never
+    -- NOTE: 'field' is excluded: its 'Show' quotes the name (@"a")
+    -- while the parser accepts bare identifiers (@a), so fields never
     -- round-tripped (pre-existing mismatch, unrelated to this change).
     let optics =
           [ id,

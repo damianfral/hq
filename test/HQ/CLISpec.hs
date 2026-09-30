@@ -24,7 +24,7 @@ spec = do
             CompletionInvoked _ -> Left "completion invoked"
 
     it "parses preview with a field optic" $ do
-      optQuery <$> parseCLI ["preview", "#name"]
+      optQuery <$> parseCLI ["preview", "@name"]
       `shouldBe` Right (Preview (field "name"))
 
     it "parses preview with each" $ do
@@ -32,7 +32,7 @@ spec = do
       `shouldBe` Right (Preview each)
 
     it "parses preview with a composed optic" $ do
-      optQuery <$> parseCLI ["preview", "#a . #b"]
+      optQuery <$> parseCLI ["preview", "@a . @b"]
       `shouldBe` Right (Preview (compose (field "a") (field "b")))
 
     it "parses fold" $ do
@@ -40,14 +40,14 @@ spec = do
       `shouldBe` Right (Fold each)
 
     it "combines preview with compact"
-      $ case parseCLI ["preview", "#name", "-c"] of
+      $ case parseCLI ["preview", "@name", "-c"] of
         Left err -> expectationFailure (toString err)
         Right opts -> do
           optQuery opts `shouldBe` Preview (field "name")
           optCompact opts `shouldBe` Compact
 
     it "combines preview with raw and join" $ do
-      case parseCLI ["preview", "#name", "-r", "-j"] of
+      case parseCLI ["preview", "@name", "-r", "-j"] of
         Left err -> expectationFailure (toString err)
         Right opts -> do
           optQuery opts `shouldBe` Preview (field "name")
@@ -55,7 +55,7 @@ spec = do
           optJoin opts `shouldBe` Join
 
     it "parses set with a field optic and value" $ do
-      optQuery <$> parseCLI ["set", "#name", "\"bob\""]
+      optQuery <$> parseCLI ["set", "@name", "\"bob\""]
       `shouldBe` Right (Over (field "name") (constValue (String "bob")))
 
     it "parses set with each and a number" $ do
@@ -63,7 +63,7 @@ spec = do
       `shouldBe` Right (Over each (constValue (Number 0)))
 
     it "parses set with a composed optic" $ do
-      optQuery <$> parseCLI ["set", "#users.each.#name", "\"anon\""]
+      optQuery <$> parseCLI ["set", "@users.each.@name", "\"anon\""]
       `shouldBe` Right
         ( Over
             (compose (compose (field "users") each) (field "name"))
@@ -71,7 +71,7 @@ spec = do
         )
 
     it "parses delete with a field optic" $ do
-      optQuery <$> parseCLI ["delete", "#name"]
+      optQuery <$> parseCLI ["delete", "@name"]
       `shouldBe` Right (Delete (field "name"))
 
     it "parses delete with each" $ do
@@ -79,7 +79,7 @@ spec = do
       `shouldBe` Right (Delete each)
 
     it "combines set with compact" $ do
-      case parseCLI ["set", "#name", "\"bob\"", "-c"] of
+      case parseCLI ["set", "@name", "\"bob\"", "-c"] of
         Left err -> expectationFailure (toString err)
         Right opts -> do
           optQuery opts `shouldBe` Over (field "name") (constValue (String "bob"))
