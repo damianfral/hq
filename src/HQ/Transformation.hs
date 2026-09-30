@@ -1,4 +1,6 @@
 {-# LANGUAGE DeriveFunctor #-}
+{-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE DerivingVia #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE StrictData #-}
 {-# LANGUAGE NoImplicitPrelude #-}
@@ -14,11 +16,13 @@ import Data.Aeson (ToJSON, Value (..))
 import Data.Aeson.Text (encodeToLazyText)
 import qualified Data.Bool (not)
 import Data.Fix
+import Data.Functor.Classes (Eq1)
 import Data.Scientific (Scientific)
 import Data.Text (strip, unpack)
 import qualified Data.Text as T
 import Data.Text.Lazy (toStrict)
 import Data.Vector (Vector)
+import GHC.Generics (Generic1, Generically1 (..))
 import GHC.Show (ShowS, appPrec)
 import HQ.Transformation.Error (TransformationError (..))
 import Relude hiding (Const, many, not, or, some, subtract, toStrict)
@@ -58,28 +62,11 @@ data TransformationF a
     Or a a
   | -- | @a . b@: apply @b@, then apply @a@ over its result.
     Combine a a
-  deriving (Eq, Show, Functor)
+  deriving (Eq, Show, Functor, Generic1)
+  deriving (Eq1) via Generically1 TransformationF
 
 -- | A transformation expression over JSON values.
-newtype Transformation = Transformation (Fix TransformationF)
-
-instance Eq Transformation where
-  Transformation (Fix (Add a)) == Transformation (Fix (Add b)) = a == b
-  Transformation (Fix (Multiply a)) == Transformation (Fix (Multiply b)) = a == b
-  Transformation (Fix (Subtract a)) == Transformation (Fix (Subtract b)) = a == b
-  Transformation (Fix (Divide a)) == Transformation (Fix (Divide b)) = a == b
-  Transformation (Fix (ConcatString a)) == Transformation (Fix (ConcatString b)) = a == b
-  Transformation (Fix (ConcatArray a)) == Transformation (Fix (ConcatArray b)) = a == b
-  Transformation (Fix Trim) == Transformation (Fix Trim) = True
-  Transformation (Fix (Replace a b)) == Transformation (Fix (Replace c d)) = a == c && b == d
-  Transformation (Fix (Equal a)) == Transformation (Fix (Equal b)) = a == b
-  Transformation (Fix (Const a)) == Transformation (Fix (Const b)) = a == b
-  Transformation (Fix Not) == Transformation (Fix Not) = True
-  Transformation (Fix (Or a b)) == Transformation (Fix (Or c d)) =
-    Transformation a == Transformation c && Transformation b == Transformation d
-  Transformation (Fix (Combine a b)) == Transformation (Fix (Combine c d)) =
-    Transformation a == Transformation c && Transformation b == Transformation d
-  _ == _ = False
+newtype Transformation = Transformation (Fix TransformationF) deriving (Eq)
 
 instance Show Transformation where
   showsPrec d (Transformation (Fix (Add n))) =

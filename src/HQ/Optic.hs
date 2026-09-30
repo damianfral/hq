@@ -1,4 +1,6 @@
 {-# LANGUAGE DeriveFunctor #-}
+{-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE DerivingVia #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE StrictData #-}
 {-# LANGUAGE NoImplicitPrelude #-}
@@ -6,6 +8,8 @@
 module HQ.Optic where
 
 import Data.Fix
+import Data.Functor.Classes (Eq1)
+import GHC.Generics (Generic1, Generically1 (..))
 import GHC.Show (Show (showsPrec), appPrec, showParen, showString, shows)
 import HQ.JSON.Event (JSONEvent, isArray, isBool, isNull, isNumber, isObject, isString)
 import HQ.Transformation (Transformation (..), TransformationF (..))
@@ -61,25 +65,11 @@ data OpticF a
     -- Focusing is existential ('any'): one passing sub-value keeps the
     -- whole input. Affine traversal (zero or one of its input).
     Filter a Transformation
-  deriving (Eq, Show, Functor)
+  deriving (Eq, Show, Functor, Generic1)
+  deriving (Eq1) via Generically1 OpticF
 
 -- | An optic path over JSON values.
-newtype Optic = Optic {unOptic :: Fix OpticF}
-
-instance Eq Optic where
-  Optic (Fix (Field a)) == Optic (Fix (Field b)) = a == b
-  Optic (Fix Each) == Optic (Fix Each) = True
-  Optic (Fix Id) == Optic (Fix Id) = True
-  Optic (Fix (Compose a b)) == Optic (Fix (Compose c d)) =
-    Optic a == Optic c && Optic b == Optic d
-  Optic (Fix (Prism a)) == Optic (Fix (Prism b)) = a == b
-  Optic (Fix PrismJust) == Optic (Fix PrismJust) = True
-  Optic (Fix Keys) == Optic (Fix Keys) = True
-  Optic (Fix Values) == Optic (Fix Values) = True
-  Optic (Fix (Ix a)) == Optic (Fix (Ix b)) = a == b
-  Optic (Fix (Filter o1 t1)) == Optic (Fix (Filter o2 t2)) =
-    Optic o1 == Optic o2 && t1 == t2
-  _ == _ = False
+newtype Optic = Optic {unOptic :: Fix OpticF} deriving (Eq)
 
 instance Show Optic where
   showsPrec d (Optic (Fix (Field name))) =
