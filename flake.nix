@@ -44,7 +44,7 @@
       overlays.default = final: prev: let
         # Haskell package set with profiling enabled throughout the
         # dependency closure, so executables can be linked for profiling.
-        profHaskellPackages = prev.haskell.packages.ghc9124.override (old: {
+        profHaskellPackages = prev.haskellPackages.override (old: {
           overrides =
             final.lib.composeExtensions
             (old.overrides or (_: _: {}))
