@@ -1,7 +1,10 @@
 ---
 name: hq
-synopsis: haskell query - a JSON processor inspired by jq
+synopsis: A streaming JSON processor inspired by jq, with a lens-based query language.
 version: 0.0.0.1
+author: damianfral
+github: damianfral/hq
+category: JSON, CLI, lenses, optics, streaming
 
 license: MIT
 
@@ -55,7 +58,6 @@ executables:
       - -rtsopts
       - -threaded
       - -with-rtsopts=-qg
-      - -O2
     dependencies:
       - base
       - hq
@@ -70,7 +72,6 @@ tests:
       - -rtsopts
       - -threaded
       - -with-rtsopts=-N
-      - -O2
     dependencies:
       - aeson
       - base
