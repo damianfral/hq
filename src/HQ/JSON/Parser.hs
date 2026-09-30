@@ -24,12 +24,11 @@ parseValue :: Text -> Either (ParseErrorBundle Text Void) Value
 parseValue = parseTop "value" jsonValueParser
 
 -- | Parse a value into ordered events ('Value' forgets member order).
+-- Single streaming pass (no megaparsec pre-validation).
 parseValueEvents :: Text -> Either Text [JSONEvent]
-parseValueEvents input = case parseValue input of
-  Left err -> Left (fromString (errorBundlePretty err))
-  Right _ -> case decodeValueEvents input of
-    Left err -> Left (fromString (show err))
-    Right events -> Right events
+parseValueEvents input = case decodeValueEvents input of
+  Left err -> Left (fromString (show err))
+  Right events -> Right events
 
 decodeValueEvents :: Text -> Either Decoder.DecodeError [JSONEvent]
 decodeValueEvents input = runIdentity $ do

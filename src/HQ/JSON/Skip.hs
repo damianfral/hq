@@ -14,7 +14,6 @@ import Data.Text.Encoding (encodeUtf8Builder)
 import HQ.JSON.Decoder
 import HQ.JSON.Decoder.Keyword (advanceKeyword, keywordState)
 import HQ.JSON.Decoder.Number
-import HQ.JSON.Depth (NestDepth (..), deeper, shallower)
 import HQ.JSON.Event (JSONEvent (..))
 import Relude hiding (Compose, id, many, some, state)
 import qualified Streaming.Prelude as S
@@ -25,10 +24,11 @@ import qualified Streaming.Prelude as S
 --
 -- Skipping validates exactly like the decoder (same states, same
 -- errors) but materializes nothing: no events, no string 'Text's, no
--- 'Scientific' numbers. Numbers keep a small reversed buffer solely
--- so 'InvalidNumber' payloads match the decoder's. Every @skip*@ and
--- @collect*@ function below mirrors its decoder twin; only differences
--- from the twin are documented.
+-- 'Scientific' numbers. String/number skipping shares its validation
+-- with the @collect*@ raw-capture path (single implementation):
+-- 'skipStringText'/'skipNumberText' discard the captured bytes.
+-- String tables ('isStringChar', escapes, hex) live in
+-- "HQ.JSON.Decoder.Core".
 
 -- | Structural positions while skipping.
 data SkipExpect
@@ -242,176 +242,31 @@ afterValue base depth stack rest text'
       DecodeObject : _ -> skipExpect base depth stack ExpectObjComma rest text'
       [] -> pure (rest, text')
 
--- | Verbatim string bytes; shared so skip and collect split identically.
-isStringChar :: Char -> Bool
-isStringChar c = c /= '"' && c /= '\\' && ord c >= 0x20
+-- | Verbatim string bytes are shared via 'isStringChar' in
+-- "HQ.JSON.Decoder.Core" so skip and collect split identically.
 
 -- | Skip a string starting after its opening quote.
+-- Implemented via 'skipStringCollect' (single validation path):
+-- bytes are captured then discarded.
 skipStringText ::
   Text -> StreamIO Text () -> ExceptT HQError IO (Text, StreamIO Text ())
 skipStringText inp txt = do
-  let rest = T.dropWhile isStringChar inp
-  case T.uncons rest of
-    Nothing -> do
-      (chunk, rest') <- pullSkipText mempty txt
-      skipStringText chunk rest'
-    Just (c, rest')
-      | c == '"' -> pure (rest', txt)
-      | c == '\\' -> skipEscape rest' txt
-      | otherwise -> throwError (HQDecodeError (UnexpectedChar c))
+  (remainder, _, _, rest) <- skipStringCollect inp txt
+  pure (remainder, rest)
 
--- | Skip one escape sequence.
-skipEscape ::
-  Text -> StreamIO Text () -> ExceptT HQError IO (Text, StreamIO Text ())
-skipEscape input text = do
-  (chunk, rest) <- pullSkipText input text
-  case T.uncons chunk of
-    Nothing -> skipEscape mempty rest
-    Just (c, rest')
-      | c == '"' || c == '\\' || c == '/' -> skipStringText rest' rest
-      | c == 'b' || c == 'f' || c == 'n' || c == 'r' || c == 't' ->
-          skipStringText rest' rest
-      | c == 'u' -> skipUnicode 0 0 rest' rest
-      | otherwise -> throwError (HQDecodeError (InvalidEscape c))
-
--- | Skip a @\u@ escape's four hex digits.
-skipUnicode ::
-  Int ->
-  Int ->
-  Text ->
-  StreamIO Text () ->
-  ExceptT HQError IO (Text, StreamIO Text ())
-skipUnicode !value !digits !input !text = do
-  (chunk, rest0) <- pullSkipText input text
-  let needed = 4 - digits
-      hex = T.take needed (T.takeWhile isHexDigit chunk)
-      rest' = T.drop (T.length hex) chunk
-      value' = T.foldl' (\v c -> v * 16 + digitToInt c) value hex
-      digits' = digits + T.length hex
-  if digits' >= 4
-    then finishUnicodeSkip rest' rest0 value'
-    else
-      if T.null rest'
-        then skipUnicode value' digits' mempty rest0
-        else throwError (HQDecodeError InvalidUnicodeEscape)
-
--- | Validate a completed @\u@ escape. Mirrors 'finishUnicode' without
--- buffering.
-finishUnicodeSkip ::
-  Text -> StreamIO Text () -> Int -> ExceptT HQError IO (Text, StreamIO Text ())
-finishUnicodeSkip !input !text !value
-  | isHighSurrogate value = skipLowSurrogate input text value
-  | isLowSurrogate value = throwError (HQDecodeError InvalidSurrogatePair)
-  | otherwise = skipStringText input text
-
--- | Skip a low-surrogate escape after a high surrogate. Mirrors
--- 'consumeLowSurrogate' without buffering.
-skipLowSurrogate ::
-  Text -> StreamIO Text () -> Int -> ExceptT HQError IO (Text, StreamIO Text ())
-skipLowSurrogate !input !text !high = do
-  (chunk, rest) <- pullSkipText input text
-  case T.uncons chunk of
-    Nothing -> skipLowSurrogate mempty rest high
-    Just ('\\', rest') -> case T.uncons rest' of
-      Nothing -> skipLowSurrogateBackslash rest high
-      Just ('u', rest'') -> skipLowDigits rest'' rest high 0 0
-      _ -> throwError (HQDecodeError InvalidSurrogatePair)
-    _ -> throwError (HQDecodeError InvalidSurrogatePair)
-
--- | A low surrogate's backslash ended the chunk; the next one starts with @u@.
-skipLowSurrogateBackslash ::
-  StreamIO Text () -> Int -> ExceptT HQError IO (Text, StreamIO Text ())
-skipLowSurrogateBackslash text high = do
-  (chunk, rest) <- pullSkipText mempty text
-  case T.uncons chunk of
-    Nothing -> skipLowSurrogateBackslash rest high
-    Just ('u', rest') -> skipLowDigits rest' rest high 0 0
-    _ -> throwError (HQDecodeError InvalidSurrogatePair)
-
--- | Skip the low surrogate's four hex digits. Mirrors
--- 'consumeLowSurrogateDigits' without buffering, including forgetting
--- a pending high surrogate when digits stall at a chunk end.
-skipLowDigits ::
-  Text ->
-  StreamIO Text () ->
-  Int ->
-  Int ->
-  Int ->
-  ExceptT HQError IO (Text, StreamIO Text ())
-skipLowDigits !input !text !high !value !digits
-  | digits == 4 =
-      if isLowSurrogate value
-        then skipStringText input text
-        else throwError $ HQDecodeError InvalidSurrogatePair
-  | otherwise = do
-      (chunk, rest) <- pullSkipText input text
-      case T.uncons chunk of
-        Nothing -> skipLowDigits mempty rest high value digits
-        Just _ -> do
-          let remaining = 4 - digits
-              limited = T.take remaining chunk
-              (hexDigits, _) = T.span isHexDigit limited
-              consumed = T.length hexDigits
-              value' = T.foldl' (\ac c -> ac * 16 + digitToInt c) value hexDigits
-              digits' = digits + consumed
-              rest' = T.drop consumed chunk
-          if digits' == 4
-            then
-              if isLowSurrogate value'
-                then skipStringText rest' rest
-                else throwError $ HQDecodeError InvalidSurrogatePair
-            else
-              -- The chunk is exhausted mid-escape: keep the pending
-              -- high surrogate and continue with more input, mirroring
-              -- how feeding appends chunks before stepping.
-              if T.null rest'
-                then skipLowDigits mempty rest high value' digits'
-                else throwError $ HQDecodeError InvalidUnicodeEscape
-
--- | Skip a number; digits accumulate only for error payloads.
+-- | Skip a number; single validation path via 'skipNumberCollect'
+-- (bytes captured then discarded). The buffered prefix is prepended
+-- so the collect path re-validates from the number start.
 skipNumberText ::
   NumberState ->
   Text ->
   StreamIO Text () ->
   ExceptT HQError IO (Text, StreamIO Text ())
-skipNumberText numState =
-  go (numberBuffer numState) (numberPhase numState)
-  where
-    go ::
-      ReversedString ->
-      NumberPhase ->
-      Text ->
-      StreamIO Text () ->
-      ExceptT HQError IO (Text, StreamIO Text ())
-    go (ReversedString rev) !phase !inp !txt
-      | T.null inp = do
-          result <- S.next txt
-          case result of
-            Left ()
-              | isValidNumberFinal phase -> pure (mempty, txt)
-              | otherwise ->
-                  throwError
-                    $ HQDecodeError
-                    $ InvalidNumber (reversedStringToText (ReversedString rev))
-            Right (chunk, rest) -> go (ReversedString rev) phase chunk rest
-      | otherwise = loop rev phase 0
-      where
-        len = T.length inp
-        loop !r !p !pos
-          | pos >= len = go (ReversedString r) p mempty txt
-          | otherwise =
-              let c = T.index inp pos
-               in case advanceNumber p c of
-                    NumberEnd
-                      | isValidNumberFinal p -> pure (T.drop pos inp, txt)
-                      | otherwise -> throwError (HQDecodeError (InvalidNumber (reversedStringToText (ReversedString r))))
-                    NumberError ->
-                      throwError
-                        $ HQDecodeError
-                        $ InvalidNumber
-                        $ reversedStringToText (ReversedString r)
-                        <> one c
-                    NumberStep p' -> loop (c : r) p' (pos + 1)
+skipNumberText numState inp txt = do
+  let prefix = reversedStringToText (numberBuffer numState)
+      full = prefix <> inp
+  (remainder, _, _, rest) <- skipNumberCollect full txt
+  pure (remainder, rest)
 
 -- | Skip a number, capturing its raw bytes.
 skipNumberCollect ::
@@ -562,16 +417,14 @@ collectEscape !accB !accS !input !text = do
   case T.uncons chunk of
     Nothing -> collectEscape accB accS mempty rest
     Just (c, rest')
-      | c == '"' || c == '\\' || c == '/' -> collectString (esc c) rest' rest
-      | c == 'b' || c == 'f' || c == 'n' || c == 'r' || c == 't' ->
-          collectString (esc c) rest' rest
       | c == 'u' -> collectUnicode (esc 'u') rest' rest 0 0
+      | isSimpleEscape c -> collectString (esc c) rest' rest
       | otherwise -> throwError (HQDecodeError (InvalidEscape c))
   where
     esc c = (accB <> char7 '\\' <> charUtf8 c, accS + 2)
     collectString (b, s) = collectStringGo b s
 
--- | Capture a @\u@ escape's four hex digits. Mirrors 'skipUnicode'.
+-- | Capture a @\u@ escape's four hex digits. Single hex path via 'accumulateHex'.
 collectUnicode ::
   (Builder, Int) ->
   Text ->
@@ -581,13 +434,9 @@ collectUnicode ::
   ExceptT HQError IO (Text, Builder, Int, StreamIO Text ())
 collectUnicode (!accB, !accS) !input !text !value !digits = do
   (chunk, rest0) <- pullSkipText input text
-  let needed = 4 - digits
-      hex = T.take needed (T.takeWhile isHexDigit chunk)
-      rest' = T.drop (T.length hex) chunk
-      value' = T.foldl' (\v c -> v * 16 + digitToInt c) value hex
-      digits' = digits + T.length hex
-      accB' = accB <> encodeUtf8Builder hex
-      accS' = accS + T.length hex
+  let (value', digits', rest') = accumulateHex value digits chunk
+      accB' = accB <> encodeUtf8Builder (T.take (T.length chunk - T.length rest') chunk)
+      accS' = accS + (T.length chunk - T.length rest')
   if digits' >= 4
     then finishUnicodeCollect accB' accS' rest' rest0 value'
     else

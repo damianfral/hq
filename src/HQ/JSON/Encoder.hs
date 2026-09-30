@@ -32,7 +32,7 @@ import Data.ByteString.Builder (Builder, byteString, char7, charUtf8, integerDec
 import Data.Scientific (Scientific, base10Exponent, coefficient)
 import qualified Data.Text as Text
 import Data.Text.Encoding (encodeUtf8Builder)
-import HQ.JSON.Depth (NestDepth (..), deeper, initialDepth, shallower)
+import HQ.JSON.Decoder.Core (NestDepth (..), deeper, initialDepth, shallower)
 import HQ.JSON.Event (JSONEvent (..))
 import Relude hiding (Compose, id, many, some, state)
 import Streaming (Of, Stream)

@@ -12,7 +12,6 @@ import Data.Char (digitToInt, isHexDigit)
 import qualified Data.Text as T
 import HQ.JSON.Decoder.Core
 import HQ.JSON.Decoder.Error (DecodeError (..))
-import HQ.JSON.Decoder.StringBuffer
 import HQ.JSON.Event (JSONEvent (..))
 import Relude hiding (Compose, id, many, some, state)
 
@@ -37,7 +36,7 @@ consumeString target input buffer decoder = case T.uncons rest of
     | c == '\\' -> consumeStringEscape target rest' newBuffer decoder
     | otherwise -> Left (UnexpectedChar c)
   where
-    (chunk, rest) = T.span (\c -> c /= '"' && c /= '\\' && ord c >= 0x20) input
+    (chunk, rest) = T.span isStringChar input
     !newBuffer = appendStringBuffer chunk buffer
 
 consumeStringEscape ::
@@ -47,17 +46,11 @@ consumeStringEscape target input buffer decoder = case T.uncons input of
     let parserString =
           DecoderPhaseString $ AfterEscape $ BufferedStringTarget target buffer
      in Right $ NeedInput decoder {decoderInput = mempty, decoderPhase = parserString}
-  Just (c, rest) -> case c of
-    '"' -> consumeString target rest (appendCharStringBuffer '"' buffer) decoder
-    '\\' -> consumeString target rest (appendCharStringBuffer '\\' buffer) decoder
-    '/' -> consumeString target rest (appendCharStringBuffer '/' buffer) decoder
-    'b' -> consumeString target rest (appendCharStringBuffer '\b' buffer) decoder
-    'f' -> consumeString target rest (appendCharStringBuffer '\f' buffer) decoder
-    'n' -> consumeString target rest (appendCharStringBuffer '\n' buffer) decoder
-    'r' -> consumeString target rest (appendCharStringBuffer '\r' buffer) decoder
-    't' -> consumeString target rest (appendCharStringBuffer '\t' buffer) decoder
-    'u' -> consumeUnicode target rest buffer decoder
-    _ -> Left (InvalidEscape c)
+  Just (c, rest)
+    | c == 'u' -> consumeUnicode target rest buffer decoder
+    | isSimpleEscape c ->
+        consumeString target rest (appendCharStringBuffer (decodeSimpleEscape c) buffer) decoder
+    | otherwise -> Left (InvalidEscape c)
 
 consumeUnicode ::
   StringTarget -> Text -> StringBuffer -> DecoderState -> Either DecodeError DecoderResult
@@ -81,13 +74,9 @@ consumeUnicode' target input buffer value digits decoder
        in Right $ NeedInput newDecoder
   | otherwise = Left InvalidUnicodeEscape
   where
-    needed = 4 - digits
     -- Take at most the digits still needed to complete the escape: a
     -- further hex digit belongs to the text following the escape.
-    hex = T.take needed (T.takeWhile isHexDigit input)
-    rest = T.drop (T.length hex) input
-    newValue = T.foldl' (\v c -> v * 16 + digitToInt c) value hex
-    newDigits = digits + T.length hex
+    (newValue, newDigits, rest) = accumulateHex value digits input
 
 finishUnicode ::
   StringTarget ->

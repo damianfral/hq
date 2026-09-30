@@ -26,7 +26,6 @@ import HQ.JSON.Decoder.Error
 import HQ.JSON.Decoder.Keyword
 import HQ.JSON.Decoder.Number
 import HQ.JSON.Decoder.String
-import HQ.JSON.Depth (initialDepth)
 import HQ.JSON.Event (JSONEvent (..))
 import Relude hiding (Compose, id, many, some, state)
 import Streaming (Of, Stream)

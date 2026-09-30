@@ -8,7 +8,6 @@ import Data.ByteString.Builder (toLazyByteString)
 import qualified Data.Text as T
 import HQ.JSON.Decoder
 import HQ.JSON.Decoder.Number (startNumberState)
-import HQ.JSON.Depth (NestDepth (NestDepth), initialDepth)
 import HQ.JSON.Event (JSONEvent (..))
 import HQ.JSON.Skip
 import Relude hiding (Compose, id)
