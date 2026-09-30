@@ -21,19 +21,10 @@ data PrismKind
   | PObject
   deriving (Eq, Show)
 
--- | Base functor for optic paths over JSON values.
---
--- Optics are structured as a tree of constructors that describe
--- how to focus into a JSON value. 'Field', 'Ix' and '_Just' are
--- single-or-no-target optics (affine traversals); 'Id' is single-target
--- (lens); 'Each', 'Keys' and 'Values' are multi-target optics
--- (traversals); the remaining '_String'-style constructors are prisms.
--- 'Filter' keeps its input when a predicate holds (affine).
---
--- 'Null' plays the role of 'Nothing': '_Null' is the lawful prism for
--- the null case, while '_Just' matches any non-null value. '_Just' is
--- matching-only (its identity 'review' is not a section on 'Null'),
--- hence classified affine rather than prism.
+-- | Base functor for optic paths over JSON values. 'Field', 'Ix' and
+-- '_Just' are affine; 'Id' is a lens; 'Each', 'Keys', 'Values' are
+-- traversals; '_String'-style constructors are prisms; 'Filter' is
+-- affine. See 'OpticType' for the cardinality lattice.
 data OpticF a
   = -- | Focus on a named field of a JSON object. Fails on non-objects.
     Field Text
@@ -138,74 +129,52 @@ field :: Text -> Optic
 field = Optic . Fix . Field
 
 -- | Traverse all elements of a JSON array, or all values of an object.
--- Composed with another optic, it distributes that optic over each element:
--- @@users.each.@name@ focuses on the @name@ field of each array element.
 each :: Optic
 each = Optic (Fix Each)
 
 -- | Traverse object keys as strings (objects only).
--- @keys@ on @{"a":1}@ focuses @"a"@; arrays focus on nothing.
 keys :: Optic
 keys = Optic (Fix Keys)
 
 -- | Traverse object member values (objects only).
--- @values@ on @{"a":1}@ focuses @1@; arrays focus on nothing.
 values :: Optic
 values = Optic (Fix Values)
 
 -- | The identity optic: focuses on the whole value.
--- @id@ is the unit of optic composition: @compose id o = o@ and @compose o id = o@.
 id :: Optic
 id = Optic (Fix Id)
 
 -- | Compose two optics sequentially.
--- @compose l r@ first focuses where @l@ points, then within each target,
--- focuses where @r@ points.
 compose :: Optic -> Optic -> Optic
 compose (Optic a) (Optic b) = Optic (Fix (Compose a b))
 
--- | Prism: focus on a JSON String value.
 _String :: Optic
 _String = Optic (Fix (Prism PString))
 
--- | Prism: focus on a JSON Number value.
 _Number :: Optic
 _Number = Optic (Fix (Prism PNumber))
 
--- | Prism: focus on a JSON Bool value.
 _Bool :: Optic
 _Bool = Optic (Fix (Prism PBool))
 
--- | Prism: focus on a JSON null value. This is the lawful prism for
--- the null ('Nothing') case; see the '_Just' affine traversal for
--- the non-null case.
 _Null :: Optic
 _Null = Optic (Fix (Prism PNull))
 
--- | Prism: focus on a JSON Array value.
 _Array :: Optic
 _Array = Optic (Fix (Prism PArray))
 
--- | Prism: focus on a JSON Object value.
 _Object :: Optic
 _Object = Optic (Fix (Prism PObject))
 
--- | Focus on any non-null JSON value (the 'Just' case; see 'PrismNull'
--- for the null case). Matching-only: usable for folding and rewriting,
--- but classified as an affine traversal rather than a prism because its
--- identity 'review' is not a section on 'Null'.
+-- | Non-null focus ('Just' case); affine, not a lawful prism.
 _Just :: Optic
 _Just = Optic (Fix PrismJust)
 
--- | Focus on the element at the given index of a JSON array (arrays
--- only; objects and scalars focus on nothing).
+-- | Focus on the element at the given index of a JSON array.
 ix :: Int -> Optic
 ix = Optic . Fix . Ix
 
--- | First-event predicate for each type prism: the single source of
--- truth shared by folding, rewriting and 'focusesWhole' (in
--- "HQ.Runner.Fold" and "HQ.Runner.Rewrite"). Total over 'PrismKind',
--- so new shapes extend this table and every dispatch follows.
+-- | First-event predicate for each type prism; total over 'PrismKind'.
 prismPredicate :: PrismKind -> JSONEvent -> Bool
 prismPredicate PString = isString
 prismPredicate PNumber = isNumber
@@ -214,17 +183,12 @@ prismPredicate PNull = isNull
 prismPredicate PArray = isArray
 prismPredicate PObject = isObject
 
--- | Compose with 'Id' elimination: @appendOptic Id r = r@, otherwise
--- @Compose step rest@. Single place for the ad-hoc @Id@ handling
--- previously repeated in runners and typechecking.
+-- | Compose with 'Id' elimination.
 appendOptic :: Fix OpticF -> Fix OpticF -> Fix OpticF
 appendOptic (Fix Id) rest = rest
 appendOptic step rest = Fix (Compose step rest)
 
--- | Whether a suffix focuses the whole value whose first event is @event@.
--- Used by rewriting to decide if a key/member is dropped as a whole.
--- Total over 'OpticF', so new shapes extend this table and every
--- dispatch follows.
+-- | Whether a suffix focuses the whole value starting at @event@.
 focusesWhole :: Fix OpticF -> JSONEvent -> Bool
 focusesWhole (Fix opticF) event = case opticF of
   Id -> True
@@ -238,7 +202,6 @@ focusesWhole (Fix opticF) event = case opticF of
   Filter _ _ -> False
   Compose l r -> focusesWhole l event && focusesWhole r event
 
--- | DSL name of each type prism (@_String@, …).
 prismName :: PrismKind -> String
 prismName PString = "_String"
 prismName PNumber = "_Number"

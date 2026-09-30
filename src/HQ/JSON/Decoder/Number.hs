@@ -2,8 +2,7 @@
 {-# LANGUAGE StrictData #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 
--- | Number parsing for the streaming JSON decoder: the number state
--- machine plus stepping and finalization over a 'DecoderState'.
+-- | Number parsing: state machine plus stepping and finalization.
 module HQ.JSON.Decoder.Number where
 
 import Data.Char (digitToInt, isDigit)
@@ -66,19 +65,14 @@ numberPhaseFromFirstChar c
   | isDigit c = Just NumberNonZero
   | otherwise = Nothing
 
--- | Create an initial NumberState from the first character.
 startNumberState :: Char -> NumberState
 startNumberState c =
   NumberState
     (ReversedString $ one c)
     (fromMaybe NumberSign (numberPhaseFromFirstChar c))
 
--- | Continue parsing a number from the saved state.
---
--- The common case (the rest of the number sits in the current chunk)
--- is handled by a tight index loop: the chunk length is measured
--- once and no per-character 'T.uncons'.State is written back exactly once,
--- when the number ends, fails, or runs out of input.
+-- | Continue parsing a number: tight index loop, state written back
+-- once at end, failure, or input exhaustion.
 stepNumber :: DecoderState -> NumberState -> Either DecodeError DecoderResult
 stepNumber decoder numState = loop 0 rev0 phase0
   where
@@ -119,13 +113,7 @@ finalizeNumber decoder = case decoderPhase decoder of
     | otherwise -> Left (InvalidNumber (reversedStringToText $ numberBuffer numState))
   _ -> Left (InvalidNumber mempty)
 
--- | Parse the accumulated number buffer into a Scientific value.
--- We build it manually to stay within the JSON grammar.
---
--- The buffer is scanned once: every digit accumulates into a single
--- coefficient while post-dot digits are counted, so no @10 ^ n@
--- bignum power is needed. A leading @-@ sets only the overall sign;
--- @-@/@+@ later in the buffer is an exponent sign.
+-- | Parse the number buffer in one scan, without @10 ^ n@ powers.
 parseNumberBuffer :: Text -> Scientific
 parseNumberBuffer buf = go (0 :: Integer) (0 :: Integer) (0 :: Int) pos0 False False False
   where

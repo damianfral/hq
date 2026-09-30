@@ -23,13 +23,7 @@ import Text.Megaparsec.Char.Lexer (scientific, signed)
 parseValue :: Text -> Either (ParseErrorBundle Text Void) Value
 parseValue = parseTop "value" jsonValueParser
 
--- | Parse a single JSON value into the streaming event grammar,
--- preserving object member order.
---
--- 'parseValue' builds an Aeson 'Value', whose 'Object' preserves no
--- reliable member order; this variant accepts the same text and
--- returns the ordered events the streaming decoder would produce.
--- Used for the @set@ command's replacement value.
+-- | Parse a value into ordered events ('Value' forgets member order).
 parseValueEvents :: Text -> Either Text [JSONEvent]
 parseValueEvents input = case parseValue input of
   Left err -> Left (fromString (errorBundlePretty err))
@@ -37,7 +31,6 @@ parseValueEvents input = case parseValue input of
     Left err -> Left (fromString (show err))
     Right events -> Right events
 
--- | Decode a complete text as an event stream, run in 'Identity'.
 decodeValueEvents :: Text -> Either Decoder.DecodeError [JSONEvent]
 decodeValueEvents input = runIdentity $ do
   result <- S.toList (Decoder.decode (S.yield input))
@@ -57,10 +50,8 @@ boolParser = (symbol "true" $> Bool True) <|> (symbol "false" $> Bool False)
 numberParser :: Parser Value
 numberParser = lexeme $ Number <$> signed sc scientific
 
--- | Raw string contents without quotes, shared by values and object keys.
--- Mirrors the streaming decoder ("HQ.JSON.Decoder.String"): the full
--- JSON escape table plus @\uXXXX@ with surrogate pairs. Anything else,
--- including invalid escapes and raw control characters, fails.
+-- | Raw string contents without quotes; full escape table, fails on
+-- anything else.
 jsonStringContent :: Parser Text
 jsonStringContent = toText <$> many (escapedChar <|> nonEscapeChar)
   where
@@ -114,8 +105,6 @@ objectField = do
   val <- jsonValueParser
   pure (key, val)
 
--- | Parse a JSON value and project it, failing with @msg@ on mismatch.
--- Shared by transformation operands so @+1@, @++ \"s\"@ and @concat@ stay total.
 jsonTyped :: Text -> (Value -> Maybe a) -> Parser a
 jsonTyped msg project = do
   value <- jsonValueParser
@@ -123,19 +112,16 @@ jsonTyped msg project = do
     Just a -> pure a
     Nothing -> fail (toString msg)
 
--- | A JSON number literal, e.g. @1@ or @0.5@.
 jsonNumber :: Parser Scientific
 jsonNumber = jsonTyped "expected a JSON number" $ \case
   Number n -> Just n
   _ -> Nothing
 
--- | A JSON string literal, e.g. @\"hello\"@.
 jsonText :: Parser Text
 jsonText = jsonTyped "expected a JSON string" $ \case
   String t -> Just t
   _ -> Nothing
 
--- | A JSON array literal, e.g. @[1, \"two\"]@.
 jsonArray :: Parser [Value]
 jsonArray = jsonTyped "expected a JSON array" $ \case
   Array items -> Just (V.toList items)

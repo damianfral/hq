@@ -62,11 +62,7 @@ isObject = \case
   JSONBeginObject -> True
   _ -> False
 
--- | Parse a JSON value from a sequence of events.
---
--- The whole event list must form exactly one value: any trailing events
--- are rejected.  The input is expected to come from the JSON parser, so
--- the failure cases only guard against malformed event sequences.
+-- | Parse exactly one value from events; trailing events are rejected.
 eventsToValue :: [JSONEvent] -> Either RunnerError Value
 eventsToValue events =
   case parseValue events of

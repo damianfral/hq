@@ -5,7 +5,6 @@ module HQ.Optic.OpticType where
 
 import Relude hiding (Compose, id)
 
--- | OpticType of an optic: whether it focuses on one value or many.
 data OpticType = OpticLens | OpticPrism | OpticAffineTraversal | OpticTraversal
   deriving (Eq, Show)
 
@@ -18,9 +17,7 @@ Affine    | Affine    | Affine    | Affine    | Traversal
 Traversal | Traversal | Traversal | Traversal | Traversal
 -}
 
--- | OpticType combines via the rule: One + One = One, else Many.
--- This corresponds to the composition of optics: composing two
--- single-target optics yields a single-target optic.
+-- | Composition lattice: One + One = One, else Many (see table above).
 instance Semigroup OpticType where
   OpticTraversal <> _ = OpticTraversal
   _ <> OpticTraversal = OpticTraversal
@@ -36,14 +33,8 @@ instance Semigroup OpticType where
 
 instance Monoid OpticType where mempty = OpticLens
 
--- | Subsumption: can an optic of type @actual@ be used where @required@
--- is expected?
---
--- Every optic folds, so a 'OpticTraversal' accepts anything. An
--- at-most-one requirement ('OpticPrism', 'OpticAffineTraversal')
--- accepts everything except full traversals; in particular @preview@
--- rejects traversals and takes the first match only of what it
--- accepts. 'OpticLens' accepts only lenses.
+-- | Subsumption: everything folds, so traversals accept anything;
+-- at-most-one requirements reject traversals (@preview@ takes first match).
 canUseAs :: OpticType -> OpticType -> Bool
 canUseAs OpticTraversal _ = True
 canUseAs OpticPrism actual = actual /= OpticTraversal

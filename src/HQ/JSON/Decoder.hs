@@ -3,12 +3,7 @@
 {-# LANGUAGE StrictData #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 
--- | Streaming JSON decoder: incremental event parsing over text chunks.
---
--- The machine vocabulary lives in "HQ.JSON.Decoder.Core", the value
--- steppers in "HQ.JSON.Decoder.Number", "HQ.JSON.Decoder.String" and
--- "HQ.JSON.Decoder.Keyword". This module wires them together: stepping,
--- structural dispatch, the decode pipeline and event pulling.
+-- | Streaming JSON decoder over text chunks.
 module HQ.JSON.Decoder
   ( module HQ.Error,
     module HQ.JSON.Decoder.Core,
@@ -254,13 +249,7 @@ drainAtEnd decoder r = case finish decoder of
   Right (NeedInput _) -> pure (Left UnexpectedEnd)
   Right (Emit event nextDecoder) -> S.yield event >> drainAtEnd nextDecoder r
 
--- | Pull a single event from a decoder cursor.
---
--- This drives the same machine as 'decode' ('step'/'feed' with the
--- same end-of-input handling as 'runDecoder'/'drainTrailing'/'drainAtEnd'),
--- but returns one event at a time with the advanced cursor instead of
--- an event stream. Navigation peeks at events through this; bulk
--- take/skip loops drive 'step' directly.
+-- | Pull a single event; bulk loops drive 'step' directly.
 pullEvent :: DecoderState -> StreamIO Text () -> ExceptT HQError IO Next
 pullEvent decoder txtStream = case step decoder of
   Left err -> throwError (HQDecodeError err)

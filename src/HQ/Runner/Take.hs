@@ -17,8 +17,7 @@ import HQ.Runner.Error (RunnerError (..))
 import Relude hiding (Compose, id, many, some, state)
 import qualified Streaming.Prelude as S
 
--- | Pull a single event for bulk takes, with the advanced cursor.
--- Used once per taken value (not per event).
+-- | Pull a single event, with the advanced cursor.
 pullOne :: Cursor -> ExceptT HQError IO (JSONEvent, Cursor)
 pullOne (Cursor (event : buffered) decoder text) = pure (event, Cursor buffered decoder text)
 pullOne (Cursor [] decoder text) = do
@@ -27,9 +26,8 @@ pullOne (Cursor [] decoder text) = do
     EndOfInput -> throwError $ HQRunnerError UnexpectedEndOfInput
     NextEvent event decoder' rest -> pure (event, Cursor [] decoder' rest)
 
--- | Stream the events of exactly one complete JSON value, returning the
--- cursor positioned immediately after it. Lazy: a consumer that stops
--- early (e.g. @S.take 1@) pulls only what it needs.
+-- | Stream the events of exactly one complete JSON value. Lazy: stops
+-- pulling once the value is complete.
 takeValue :: Continuation
 takeValue cursor = do
   (event, cursor') <- lift (pullOne cursor)
@@ -64,9 +62,7 @@ takeFirstValue = go (0 :: Int)
               | depth == 0 -> pure ()
               | otherwise -> go depth rest
 
--- | Take a container body event by event, driving the decoder
--- directly with no tuples or wrappers on the hot path: the event,
--- buffer, decoder and text flow as explicit arguments.
+-- | Take a container body event by event, driving the decoder directly.
 takeContainerFrom :: JSONEvent -> Cursor -> EventStream Cursor
 takeContainerFrom closing = go
   where
@@ -116,7 +112,6 @@ takeContainerFrom closing = go
       Right (NeedInput _) -> throwError (HQDecodeError UnexpectedEnd)
       Right (Emit event dec') -> emit event $ Cursor [] dec' (pure ())
 
--- | Format one event and yield its chunk, returning advanced contexts.
 emitChunk ::
   EncoderConfig ->
   JSONEvent ->
@@ -148,16 +143,12 @@ takeValueChunks config cursor st = do
         JSONObjectKey _ -> throwError $ HQRunnerError UnexpectedObjectKey
         _ -> pure (st', cursor')
 
--- | A string or number value peeked straight from the input text: the
--- payload starts after the opening quote (strings) or at the first
--- digit (numbers), with any pending colon already skipped.
+-- | A peeked string or number value: payload after the quote / at the
+-- first digit, pending colon already skipped.
 data RawScalar = RawString Text | RawNumber Text
 
--- | If the cursor sits at the start of a string or number value, return
--- its payload with the decoder and stream positioned there. Anything
--- else (including buffered replay cursors, where the text is already
--- consumed) declines, leaving the existing paths to pull and report
--- errors.
+-- | Peek a string/number value; decline anything else (including
+-- buffered replay cursors) so existing paths report errors.
 peekRawScalar :: Cursor -> Maybe (RawScalar, DecoderState, StreamIO Text ())
 peekRawScalar cursor
   | null buf,
@@ -180,9 +171,7 @@ peekRawScalar cursor
         _ -> Nothing
     peekValue _ _ = Nothing
 
--- | Transcribe a string value straight from the input text: the opening
--- quote was peeked, so the body is captured verbatim (escapes
--- preserved) and transcribed without decoding or re-encoding.
+-- | Transcribe a peeked string value verbatim (escapes preserved).
 takeRawStringChunks ::
   EncoderConfig ->
   Text ->
@@ -196,9 +185,7 @@ takeRawStringChunks config afterQuote dec txt st = do
   S.yield chunk
   pure (st', Cursor [] (finishValue dec {decoderInput = remainder}) rest)
 
--- | Transcribe a number value straight from the input text: the first
--- digit was peeked, so the bytes are captured verbatim and transcribed
--- without 'Scientific' roundtrips.
+-- | Transcribe a peeked number value verbatim (no 'Scientific' roundtrip).
 takeRawNumberChunks ::
   EncoderConfig ->
   Text ->
@@ -212,19 +199,12 @@ takeRawNumberChunks config atNumber dec txt st = do
   S.yield chunk
   pure (st', Cursor [] (finishValue dec {decoderInput = remainder}) rest)
 
--- | Batch threshold for transcribed chunks, in estimated chars: past
--- this, pending builders yield as one chunk instead of accumulating.
--- Amortizes stream steps over many events; output bytes are
--- unaffected (chunk boundaries never change them).
+-- | Pending-builder flush threshold; chunk boundaries never change bytes.
 batchSize :: Int
 batchSize = 8192
 
--- | Take a container body, transcribing text straight to chunks: the
--- decode and format steps fuse per event with no intermediate event
--- stream. Formatted builders batch into one chunk per 'batchSize'
--- chars instead of one chunk per event, amortizing stream steps over
--- many events; output bytes are unaffected (chunk boundaries never
--- change them).
+-- | Take a container body, fusing decode and format per event with no
+-- intermediate event stream.
 takeContainerChunks ::
   EncoderConfig ->
   JSONEvent ->

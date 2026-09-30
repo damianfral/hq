@@ -30,9 +30,7 @@ getOptic (Preview optic) = optic
 getOptic (Over optic _) = optic
 getOptic (Delete optic) = optic
 
--- | The optic type a query requires: how many focus points it expects.
--- 'typecheckQuery' compares this against the type derived from the
--- optic itself.
+-- | The optic type a query requires.
 queryOpticType :: Query -> OpticType
 queryOpticType (Fold _) = OpticTraversal
 queryOpticType (Preview _) = OpticPrism
@@ -44,7 +42,6 @@ data TypeError
   | InvalidTransformationType TransformationTypeError
   deriving (Eq, Show)
 
--- | Render a 'TypeError' for the CLI.
 renderTypeError :: TypeError -> Text
 renderTypeError (InvalidOpticType expected actual) =
   "optic mismatch: this query needs "
@@ -69,14 +66,12 @@ renderTypeError (InvalidTransformationType (InvalidFilter t out)) =
     <> " must produce a boolean, but produces "
     <> valueTypeName out
 
--- | Human-readable cardinality names.
 opticTypeName :: OpticType -> Text
 opticTypeName OpticLens = "a lens (exactly one target)"
 opticTypeName OpticPrism = "a prism (at most one target)"
 opticTypeName OpticAffineTraversal = "an affine traversal (at most one target)"
 opticTypeName OpticTraversal = "a traversal"
 
--- | Human-readable JSON value type names.
 valueTypeName :: ValueType -> Text
 valueTypeName ValueObject = "object"
 valueTypeName ValueArray = "array"
@@ -86,10 +81,8 @@ valueTypeName ValueBool = "boolean"
 valueTypeName ValueNull = "null"
 valueTypeName ValueAny = "any value"
 
--- | Check a query before running it: the optic must be usable where the
--- query command expects it ('canUseAs'), every @filter@ predicate must
--- produce a boolean, and an 'Over' transformation must compose cleanly
--- ('buildTransformationAST').
+-- | Check a query before running it: optic cardinality, @filter@
+-- booleans, 'Over' composition.
 typecheckQuery :: Query -> Either TypeError Query
 typecheckQuery q =
   if canUseAs expected current
@@ -100,8 +93,6 @@ typecheckQuery q =
     expected = queryOpticType q
     OpticAST (current :< _) = buildOpticAST (getOptic q)
 
--- | Check every @filter@ predicate in the query's optic: each must
--- build cleanly and root-output a boolean.
 checkOptic :: Query -> Either TypeError Query
 checkOptic q = go (unOptic (getOptic q)) >> pure q
   where
@@ -118,8 +109,6 @@ checkOptic q = go (unOptic (getOptic q)) >> pure q
           then pure ()
           else Left (InvalidTransformationType (InvalidFilter t (transformationOutput tt)))
 
--- | Check that the transformation of an 'Over' query is internally
--- well-typed, i.e. that its composed steps line up.
 checkTransformation :: Query -> Either TypeError Query
 checkTransformation q@(Over _ transformation) =
   case buildTransformationAST transformation of

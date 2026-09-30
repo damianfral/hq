@@ -21,34 +21,22 @@ import Relude hiding (Compose, Const)
 -- Over and delete: document rewriting
 --------------------------------------------------------------------------------
 
--- | What happens to a value focused by an optic: it is removed entirely
--- (@delete@) or rewritten by a transformation (@over@, including @set@,
--- which is @over@ with a constant).
+-- | What happens to a focused value: removed (@delete@) or rewritten
+-- (@over@, including @set@ as @over@ with a constant).
 data Rewriter = RewriteDelete | RewriteTransform Transformation
   deriving (Show, Eq)
 
--- | What rewriting through @keys@ does to a single object key.
 data KeyAction = DropKey | KeepKey | RenameKey Text
   deriving (Show, Eq)
 
--- | Remove every value the optic focuses on from the document, passing
--- the rest of the document through unchanged (lens @delete@/@omit@).
 runDelete :: Optic -> EncoderConfig -> RewriteContinuation
 runDelete = runRewrite RewriteDelete
 
--- | Apply a transformation to every value the optic focuses on, rewriting
--- the document in place (lens @over@).
 runOver :: Optic -> Transformation -> EncoderConfig -> RewriteContinuation
 runOver optic transformation = runRewrite (RewriteTransform transformation) optic
 
--- | Rewrite the document at the cursor by rewriting every value that the
--- optic focuses on.
---
--- This is the streaming counterpart to 'runOptic': instead of
--- extracting the focused values, the @rewrite@ family re-emits the
--- document, replacing or omitting the focused values in place.  All
--- other events pass through unchanged, so the output is the input with
--- only the targeted values modified.
+-- | Rewrite the document at the cursor, replacing or omitting focused
+-- values in place; everything else passes through unchanged.
 runRewrite :: Rewriter -> Optic -> EncoderConfig -> RewriteContinuation
 runRewrite rewriter (Optic optic) config = run optic
   where
@@ -70,10 +58,8 @@ runRewrite rewriter (Optic optic) config = run optic
       Ix i -> rewriteIndex i suffix input st
       Filter o t -> rewriteFilter o t suffix input st
 
-    -- \| Materialize one value and test a @filter@ gate, returning
-    -- whether it is kept, its first event, a cursor replaying it, and
-    -- the cursor after it. Materialization and gating are shared with
-    -- 'HQ.Runner.Fold' ('materializeValue', 'gateValue').
+    -- \| Test a @filter@ gate, returning whether it is kept plus
+    -- replay/after cursors.
     gateTake ::
       Fix OpticF ->
       Transformation ->

@@ -1,14 +1,7 @@
 {-# LANGUAGE StrictData #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 
--- | Every error hq can report, as data.
---
--- Domain failures keep their own precise types ('DecodeError' in
--- "HQ.JSON.Decoder.Error" for the streaming grammar,
--- 'TransformationError' in "HQ.Transformation.Error" for value
--- rewrites, 'RunnerError' in "HQ.Runner.Error" for running a query
--- over the event stream); 'HQError' only wraps them. Use
--- 'renderHQError' at the CLI boundary; nothing else renders errors.
+-- | Every error hq can report, with per-domain precise types.
 module HQ.Error where
 
 import HQ.JSON.Decoder.Error (DecodeError)
@@ -22,9 +15,7 @@ data HQError
   | HQRunnerError RunnerError
   deriving (Eq, Show)
 
--- | Render an error exactly as hq has always printed it: decoder
--- failures keep their derived-'Show' shape, everything else keeps its
--- historical message.
+-- | Render an error for the CLI boundary; nothing else renders errors.
 renderHQError :: HQError -> Text
 renderHQError err = case err of
   HQDecodeError e -> show e

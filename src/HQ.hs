@@ -1,11 +1,6 @@
 {-# LANGUAGE NoImplicitPrelude #-}
 
--- | Public API facade for @hq@, a JSON processor inspired by jq.
---
--- Re-exports the top-level entry point ('HQ.CLI'), the optic language
--- ('HQ.Optic'), the query/typecheck layer ('HQ.Query') and the runner
--- ('HQ.Runner').  The streaming JSON plumbing in "HQ.JSON" is
--- considered internal and is not re-exported here.
+-- | Public API facade for @hq@; "HQ.JSON" plumbing stays internal.
 module HQ
   ( module HQ.CLI,
     module HQ.Optic,

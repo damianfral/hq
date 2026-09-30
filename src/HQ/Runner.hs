@@ -58,11 +58,7 @@ runRunner (Runner runner) query config handle = runReaderT runner env
   where
     env = RunnerEnv query (streamHandle 256 handle) config
 
--- | Run a query, encoding the selected values to stdout with the given
--- style and value options.
---
--- The stream is written to stdout; errors are reported on stderr with
--- a failing exit status.
+-- | Run a query to stdout; errors go to stderr with a failing exit.
 runRunnerIOWith :: Runner -> Query -> EncoderConfig -> Handle -> IO ()
 runRunnerIOWith runner query encConfig handle = do
   hSetBuffering stdout $ BlockBuffering Nothing
@@ -76,13 +72,9 @@ runRunnerIOWith runner query encConfig handle = do
   where
     write = liftIO . LBS.hPut stdout
 
--- | Read strict 'ByteString' chunks from a handle.
--- The input is never loaded into memory as a whole. Each chunk is pulled
--- only when the downstream parser needs more data.
---
--- NOTE: the 256-byte size is deliberate. Larger input chunks allocate
--- slightly less overall but run slower per byte (measured): the
--- decoder works better on small, cache-resident texts.
+-- | Read 'ByteString' chunks lazily from a handle. NOTE: 256 bytes is
+-- deliberate; larger chunks allocate less but run slower per byte
+-- (measured).
 streamHandle :: Int -> Handle -> StreamIO ByteString ()
 streamHandle size handle = do
   chunk <- liftIO $ BS.hGetSome handle size
@@ -129,13 +121,8 @@ decodeUtf8Stream = go mempty
       Left _ -> throwError (HQRunnerError InvalidUtf8)
       Right text -> S.yield text
 
--- | Compute the length of the longest prefix of a strict ByteString that
--- contains only complete UTF-8 sequences.
---
--- Any trailing partial multi-byte sequence is excluded so that the
--- remaining bytes can be carried over and decoded together with the next
--- chunk. Without this, a multi-byte code point straddling a chunk
--- boundary would be decoded as two invalid fragments.
+-- | Longest prefix of complete UTF-8 sequences; a trailing partial
+-- sequence carries over to the next chunk.
 safePrefixLen :: ByteString -> Int
 safePrefixLen bs = total - partialTail
   where

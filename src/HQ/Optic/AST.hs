@@ -10,8 +10,7 @@ import HQ.Optic.OpticType
 import Relude hiding (Compose, id)
 import Relude.Extra (view)
 
--- | An optic annotated with cardinality information at each node.
--- Used for static validation that optic compositions are well-typed.
+-- | Optic annotated with cardinality per node, for static validation.
 newtype OpticAST = OpticAST {unOpticAST :: Cofree OpticF OpticType}
 
 buildOpticAST :: Optic -> OpticAST

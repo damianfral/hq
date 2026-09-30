@@ -34,8 +34,7 @@ opticAtomParser =
       groupedOptic
     ]
 
--- | A parenthesized optic, e.g. @(@a)@ or @(@a . @b)@: tolerates
--- redundant parentheses anywhere an optic atom is accepted.
+-- | Redundant parentheses are tolerated around any optic atom.
 groupedOptic :: Parser Optic
 groupedOptic = parens opticParser
 
@@ -54,11 +53,9 @@ keysParser = keyword "keys" keys
 valuesParser :: Parser Optic
 valuesParser = keyword "values" values
 
--- | @filter OPTIC TRANSFORMATION@: either a single group wrapping
--- both sides, or two bare single atoms, e.g. @filter (@age == 30)@,
--- @filter (each . @age == 30)@ or @filter @public not@. A @.@ after a
--- bare optic starts an outer composition (@filter @a ... . @b@), so
--- dotted optics need the group form.
+-- | @filter OPTIC TRANSFORMATION@: one group wrapping both sides, or
+-- two bare atoms. A @.@ after a bare optic starts an outer composition,
+-- so dotted optics need the group form.
 filterParser :: Parser Optic
 filterParser = symbol "filter" >> (try grouped <|> bare)
   where

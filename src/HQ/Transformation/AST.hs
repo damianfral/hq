@@ -18,34 +18,23 @@ import HQ.Transformation.TransformationType
 import Relude hiding (Const, many, not, or, some, subtract, toStrict)
 import Relude.Extra (view)
 
--- | A transformation annotated with input and output value types at each
--- node. Used for static validation that transformation compositions are
--- well-typed.
+-- | Type-annotated transformation ASTs for static validation.
 newtype TransformationAST = TransformationAST {unTransformationAST :: AST}
 
 type AST = Cofree TransformationF TransformationType
 
--- | The type error produced when the composed steps of a transformation do
--- not line up.
+-- | Mismatched 'Combine' steps, keeping the offender for reporting.
 data TransformationTypeError
-  = -- | @InvalidCombine transformation out in@: the output type of the right
-    -- step of a 'Combine' does not match the input type of the left step.
-    -- The offending 'Combine' is kept so callers can report it to the user.
+  = -- | Right output vs left input mismatch; offender kept for reporting.
     InvalidCombine Transformation ValueType ValueType
-  | -- | @InvalidOr transformation out@: a branch of an 'Or' does not
-    -- produce a boolean, so the disjunction is ill-typed. The offending
-    -- 'Or' is kept so callers can report it to the user.
+  | -- | An 'Or' branch does not produce a boolean; offender kept.
     InvalidOr Transformation ValueType
-  | -- | @InvalidFilter transformation out@: a @filter@ predicate does not
-    -- produce a boolean. The offending transformation is kept so callers
-    -- can report it to the user.
+  | -- | A @filter@ predicate does not produce a boolean; offender kept.
     InvalidFilter Transformation ValueType
   deriving (Eq, Show)
 
--- | Build the type-annotated AST of a transformation, failing when the steps
--- of a 'Combine' do not line up: the output type of the right step must
--- match the input type of the left step, unless the left step accepts any
--- value (a constant).
+-- | Build the annotated AST; 'Combine' steps must line up (constants
+-- accept anything).
 buildTransformationAST ::
   Transformation -> Either TransformationTypeError TransformationAST
 buildTransformationAST (Transformation transformation) =

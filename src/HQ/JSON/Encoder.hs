@@ -63,22 +63,12 @@ data Raw = NoRaw | Raw deriving (Show, Eq)
 -- jq); 'Join' concatenates them without separators (like @jq -j@).
 data Join = NoJoin | Join deriving (Show, Eq)
 
--- | Options controlling how complete top-level values are rendered, on
--- top of the base 'EncodeStyle'.
---
--- The encoder's event stream may carry several top-level JSON values
--- back to back (this is what a streaming query produces).  These
--- options control how such a stream is rendered: whether each value is
--- terminated with a newline (like @jq@) and whether top-level strings
--- are emitted without surrounding quotes (like @jq -r@).
+-- | How back-to-back top-level values are rendered: newlines like
+-- @jq@, and bare strings like @jq -r@.
 data ValueOptions = ValueOptions Raw Join deriving (Eq, Show)
 
--- | The encoder's container stack; the head is the innermost container.
---
--- The 'Bool' distinguishes an empty container (which stays on one line
--- even in 'Pretty' mode) from one that has already emitted a value, and
--- 'EncodeObjectAfterKey' remembers that a key still needs its colon and
--- value.
+-- | Container stack, head innermost. The 'Bool' marks a container that
+-- already emitted a value; 'EncodeObjectAfterKey' awaits a key's value.
 data EncodeContext
   = -- | Inside an array; 'True' once at least one element was emitted.
     EncodeArray !Bool
@@ -94,7 +84,6 @@ data EncodeContext
 data EncoderState = EncoderState [EncodeContext] NestDepth
   deriving (Eq, Show)
 
--- | The state outside all containers.
 initialEncoderState :: EncoderState
 initialEncoderState = EncoderState [] initialDepth
 
@@ -155,17 +144,8 @@ integerDigits x = go x (0 :: Int)
       | v < 10 = acc + 1
       | otherwise = go (v `quot` 10) (acc + 1)
 
--- | Encode a stream of 'JSONEvent's into a stream of 'Chunk's.
---
--- A small formatting state machine walks the event stream, emitting
--- structural separators (commas, colons, and in 'Pretty' mode newlines
--- and indentation) around the raw event encodings produced by
--- 'encodeEvent'.  It never materializes the document: each event is
--- turned into output as soon as it arrives.
---
--- 'ValueOptions' additionally controls how back-to-back top-level
--- values are rendered: a newline may separate them, and top-level
--- strings may be emitted bare.
+-- | Encode an event stream to chunks via 'formatEvent', never
+-- materializing the document.
 encodeToChunks :: (Monad m) => EncoderConfig -> JSONStream m r -> ChunkStream m r
 encodeToChunks config = go initialEncoderState
   where
@@ -225,18 +205,14 @@ formatEvent (EncoderConfig style (ValueOptions rawOpt joinOpt)) st event =
       | rawOpt == Raw && null valueCtxs = encodeRawString text
     valueChunk ev _ = encodeEvent ev
 
--- | Separator emitted after a complete top-level value: a newline
--- separates back-to-back top-level values unless 'Join' concatenates
--- them without separators.
+-- | Separator after a complete top-level value: newline unless 'Join'.
 finishTopValue :: Join -> EncoderState -> ChunkFragment
 finishTopValue joinOpt (EncoderState ctxs' _)
   | joinOpt == NoJoin && null ctxs' = ChunkFragment newline 1
   | otherwise = ChunkFragment mempty 0
 
--- | Transcribe a pre-encoded scalar body (raw input bytes, quotes
--- included or not): separator, body and top-level terminator in a single
--- 'Chunk', advancing the state exactly as 'formatEvent' would for the
--- equivalent scalar event.
+-- | Transcribe a pre-encoded scalar body in one 'Chunk', exactly as
+-- 'formatEvent' would for the equivalent scalar event.
 transcribeRawBytes ::
   EncoderConfig -> EncoderState -> Builder -> Int -> (Chunk, EncoderState)
 transcribeRawBytes (EncoderConfig style valueOpts) st bodyB bodyS =
@@ -247,20 +223,12 @@ transcribeRawBytes (EncoderConfig style valueOpts) st bodyB bodyS =
     ChunkFragment finB finS = finishTopValue joinOpt st2
     (ValueOptions _ joinOpt) = valueOpts
 
--- | Transcribe a pre-encoded string body (raw input bytes without their
--- quotes, captured straight from the text): separator, quoted body and
--- top-level terminator in a single 'Chunk', advancing the state exactly
--- as 'formatEvent' would for the equivalent scalar event. Rewrite
--- passthrough uses this to re-emit strings without decoding and
--- re-encoding them; escape sequences stay verbatim.
+-- | Transcribe a raw string body; escapes stay verbatim.
 transcribeRawString ::
   EncoderConfig -> EncoderState -> Builder -> Int -> (Chunk, EncoderState)
 transcribeRawString config st rawB rawS =
   transcribeRawBytes config st (char7 '"' <> rawB <> char7 '"') (rawS + 2)
 
--- | The structural pieces to emit before an object key: a separator for
--- the first or any following key, and the switch to
--- 'EncodeObjectAfterKey' so the upcoming value gets its colon.
 beforeKey :: EncodeStyle -> EncoderState -> (ChunkFragment, EncoderState)
 beforeKey style st@(EncoderState ctxs depth) = case ctxs of
   EncodeObject seen : rest ->
@@ -333,11 +301,7 @@ elementSeparator (Pretty width) seen (NestDepth depth) =
       prefix = if seen then commaNewline else newline
    in ChunkFragment (prefix <> indentSpaces size) (size + 1 + fromEnum seen)
 
--- | Indentation body of 'size' spaces as a builder.
---
--- Real documents nest shallowly, so indentation slices a shared
--- padding string in O(1) instead of allocating plus memset
--- ('BS.replicate') on every pretty-printed element or key.
+-- | Indentation via O(1) slices of a shared padding string.
 indentPadding :: BS.ByteString
 indentPadding = BS.replicate 256 0x20
 
@@ -346,9 +310,7 @@ indentSpaces size
   | size <= BS.length indentPadding = byteString (BS.take size indentPadding)
   | otherwise = byteString (BS.replicate size 0x20)
 
--- | Constant output fragments as shared builders. 'string7'/'char7'
--- on a literal re-unpacks it and rebuilds the builder on every
--- event; these are built once and reused across the whole document.
+-- | Shared output fragments, built once and reused per event.
 commaNewline, newline, colonSpace, colon :: Builder
 commaNewline = string7 ",\n"
 newline = char7 '\n'
@@ -402,15 +364,11 @@ encodeString text =
   case encodeStringBody text of
     Chunk body bodySize -> ChunkFragment (char7 '"' <> body <> char7 '"') (bodySize + 2)
 
--- | Render a string value as raw UTF-8, without surrounding quotes or
--- escaping.  Used for raw top-level string output (like @jq -r@).
 encodeRawString :: Text -> ChunkFragment
 encodeRawString text =
   ChunkFragment (stringUtf8 (toString text)) (Text.length text)
 
--- | Encode a string body with a character scan: safe runs share the
--- input slice via 'encodeUtf8Builder' (no copy), with the char count as
--- the flush-heuristic size.
+-- | String body; safe runs share the input slice (no copy).
 encodeStringBody :: Text -> Chunk
 encodeStringBody text = let Chunk b s = go text in Chunk b s
   where
@@ -472,19 +430,12 @@ type BSStream m r = Stream (Of LByteString) m r
 
 type ChunkStream m r = Stream (Of Chunk) m r
 
--- | Encode a stream of 'JSONEvent's into a stream of 'ByteString'
--- chunks, applying 'style' and 'ValueOptions' and flushing output once
--- roughly @cSize@ bytes have accumulated in the buffer.
---
--- An individual output chunk may be larger than @cSize@ when a single
--- encoded event exceeds the target size; the stream contents are
--- unaffected by the chunk size.
+-- | Events to 'ByteString' chunks, flushing roughly every @cSize@ bytes.
 encode :: (Monad m) => EncoderConfig -> Int -> JSONStream m r -> BSStream m r
 encode config size = encodeChunks size . encodeToChunks config
 
--- | Buffer a stream of 'Chunk's into 'ByteString' output, flushing
--- once roughly @cSize@ bytes have accumulated. Fused pipelines feed
--- this directly without an intermediate event stream.
+-- | Buffer 'Chunk's into 'ByteString' output, flushing roughly every
+-- @cSize@ bytes.
 encodeChunks :: (Monad m) => Int -> ChunkStream m r -> BSStream m r
 encodeChunks size = go mempty 0
   where

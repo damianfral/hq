@@ -2,9 +2,6 @@
 {-# LANGUAGE StrictData #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 
--- | What can go wrong while running a query over the event stream:
--- navigation, structural walks, input decoding and event
--- materialization.
 module HQ.Runner.Error where
 
 import Relude hiding (Compose, Const)
@@ -29,7 +26,6 @@ data RunnerError
   | ExpectedObjectKeyEvent
   deriving (Eq, Show)
 
--- | Render a runner failure with its historical message.
 renderRunnerError :: RunnerError -> Text
 renderRunnerError err = case err of
   UnexpectedEndOfInput -> "unexpected end of JSON input"

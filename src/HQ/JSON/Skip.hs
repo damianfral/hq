@@ -26,10 +26,11 @@ import qualified Streaming.Prelude as S
 -- Skipping validates exactly like the decoder (same states, same
 -- errors) but materializes nothing: no events, no string 'Text's, no
 -- 'Scientific' numbers. Numbers keep a small reversed buffer solely
--- so 'InvalidNumber' payloads match the decoder's.
+-- so 'InvalidNumber' payloads match the decoder's. Every @skip*@ and
+-- @collect*@ function below mirrors its decoder twin; only differences
+-- from the twin are documented.
 
--- | Structural positions while skipping, mirroring the decoder states
--- that can precede a skipped region.
+-- | Structural positions while skipping.
 data SkipExpect
   = ExpectValue
   | ExpectKey
@@ -38,23 +39,20 @@ data SkipExpect
   | ExpectArrComma
   deriving (Eq, Show)
 
--- | Keyword literals as shared CAFs: fresh overloaded literals would be
--- repacked on every skipped keyword.
+-- | Keyword literals as shared CAFs (fresh literals repack per keyword).
 trueKeyword, falseKeyword, nullKeyword :: Text
 trueKeyword = "true"
 falseKeyword = "false"
 nullKeyword = "null"
 
--- | Match a keyword remainder (first character already consumed) with
--- total 'T.uncons' steps only: no 'HasCallStack' costs, and no
--- allocation beyond the input suffix slices the old loop built anyway.
+-- | Match a keyword remainder with total 'T.uncons' steps (no
+-- 'HasCallStack' costs, unlike 'T.stripPrefix').
 matchKeyword :: Text -> Text -> Maybe Text
 matchKeyword keyword inp
   | keyword == trueKeyword = match3 'r' 'u' 'e' inp
   | keyword == falseKeyword = match4 'a' 'l' 's' 'e' inp
   | otherwise = match3 'u' 'l' 'l' inp
 
--- | Match three literal characters, returning the text after them.
 match3 :: Char -> Char -> Char -> Text -> Maybe Text
 match3 c1 c2 c3 t = case T.uncons t of
   Just (d1, r1) | d1 == c1 -> case T.uncons r1 of
@@ -76,9 +74,8 @@ match4 c1 c2 c3 c4 t = case T.uncons t of
     _ -> Nothing
   _ -> Nothing
 
--- | Pull the next chunk when the current text is empty, skipping empty
--- chunks. Exhaustion inside a skipped region is 'UnexpectedEnd',
--- exactly like the decoder stalling on 'NeedInput' at end of input.
+-- | Pull the next chunk, skipping empties. Exhaustion here is
+-- 'UnexpectedEnd'.
 pullSkipText ::
   Text -> StreamIO Text () -> ExceptT HQError IO (Text, StreamIO Text ())
 pullSkipText !input !text
@@ -100,8 +97,7 @@ nextSkipChar input text = case T.uncons (T.dropWhile isWhitespace input) of
       Left () -> throwError (HQDecodeError UnexpectedEnd)
       Right (chunk, rest) -> nextSkipChar chunk rest
 
--- | Skip an object member value: the text starts where the key ended,
--- so a colon is required first (mirroring 'ParserStateObjectColon').
+-- | Skip an object member value; a colon is required first.
 skipMemberValueText ::
   NestDepth ->
   [DecodeContext] ->
@@ -114,10 +110,7 @@ skipMemberValueText !depth !stack !input !text = do
     ':' -> skipExpect depth depth stack ExpectValue rest text'
     _ -> throwError (HQDecodeError ExpectedColon)
 
--- | Skip the rest of the container whose opening event was just
--- emitted (decoder positioned after it). Pops the container and
--- advances past the value, like 'emitContainerEnd' followed by
--- 'finishValue', but validates without materializing anything.
+-- | Skip the rest of the container whose opening event was just emitted.
 skipContainerText ::
   JSONEvent ->
   DecoderState ->
@@ -141,10 +134,7 @@ skipContainerText open decoder@DecoderState {..} text = case open of
            in pure (finishValue newDecoder, rest)
         [] -> pure (finishValue decoder {decoderInput = remainder}, rest)
 
--- | Structural skip loop. A value completing when the depth is back at
--- its entry level ends the skip and returns the remainder. The depth
--- mirrors 'length' of the stack; pushes add one, pops subtract one,
--- and every other step threads it unchanged.
+-- | Structural skip loop; ends when the depth pops back to its entry level.
 skipExpect ::
   NestDepth ->
   NestDepth ->
@@ -173,11 +163,8 @@ skipExpect base depth stack ExpectValue input text = do
           _ -> throwError (HQDecodeError (UnexpectedChar c))
       | otherwise -> throwError (HQDecodeError (UnexpectedChar c))
   where
-    -- \| Fast path for @true@/@false@/@null@: when the rest of the
-    -- literal and its trailing delimiter sit in the current chunk, one
-    -- prefix check replaces an 'ExceptT' roundtrip per character.
-    -- Split literals and invalid input fall back to the char-at-a-time
-    -- loop, which reports exactly the same errors.
+    -- \| Fast path for @true@/@false@/@null@ via one prefix check;
+    -- split literals fall back with identical errors.
     skipKeywordFast ::
       Text ->
       Int ->
@@ -223,9 +210,8 @@ skipExpect base depth stack ExpectArrComma input text = do
       [] -> throwError (HQDecodeError ExpectedCommaOrEnd)
     _ -> throwError (HQDecodeError ExpectedCommaOrEnd)
 
--- | The char-at-a-time keyword loop behind 'skipKeywordFast': split
--- literals and invalid input, with exactly the historical errors.
--- Top-level so the fast path allocates no per-keyword fallback closure.
+-- | Fallback for split/invalid keywords; top-level to avoid a
+-- per-keyword closure.
 skipKeywordSlow ::
   Text ->
   Int ->
@@ -240,8 +226,8 @@ skipKeywordSlow keyword consumed base depth stack inp txt = do
     skipKeywordText (keywordState keyword consumed) inp txt
   afterValue base depth stack rest' txt'
 
--- | A value just completed: return when back at the entry depth,
--- otherwise expect the enclosing container's separator.
+-- | A value just completed: return at entry depth, else expect the
+-- enclosing separator.
 afterValue ::
   NestDepth ->
   NestDepth ->
@@ -256,13 +242,11 @@ afterValue base depth stack rest text'
       DecodeObject : _ -> skipExpect base depth stack ExpectObjComma rest text'
       [] -> pure (rest, text')
 
--- | String bytes that copy through verbatim: shared by 'skipStringText'
--- and 'skipStringCollect' so both paths split strings identically.
+-- | Verbatim string bytes; shared so skip and collect split identically.
 isStringChar :: Char -> Bool
 isStringChar c = c /= '"' && c /= '\\' && ord c >= 0x20
 
--- | Skip a string starting after its opening quote. Returns the text
--- after the closing quote. Mirrors 'consumeString' without buffering.
+-- | Skip a string starting after its opening quote.
 skipStringText ::
   Text -> StreamIO Text () -> ExceptT HQError IO (Text, StreamIO Text ())
 skipStringText inp txt = do
@@ -276,8 +260,7 @@ skipStringText inp txt = do
       | c == '\\' -> skipEscape rest' txt
       | otherwise -> throwError (HQDecodeError (UnexpectedChar c))
 
--- | Skip one escape sequence. Mirrors 'consumeStringEscape' without
--- buffering.
+-- | Skip one escape sequence.
 skipEscape ::
   Text -> StreamIO Text () -> ExceptT HQError IO (Text, StreamIO Text ())
 skipEscape input text = do
@@ -291,9 +274,7 @@ skipEscape input text = do
       | c == 'u' -> skipUnicode 0 0 rest' rest
       | otherwise -> throwError (HQDecodeError (InvalidEscape c))
 
--- | Skip a @\u@ escape's four hex digits. Mirrors 'consumeUnicode''
--- without buffering: over-long input keeps the extra digits for the
--- string scan, exhausted chunks pull more, anything else is invalid.
+-- | Skip a @\u@ escape's four hex digits.
 skipUnicode ::
   Int ->
   Int ->
@@ -337,8 +318,7 @@ skipLowSurrogate !input !text !high = do
       _ -> throwError (HQDecodeError InvalidSurrogatePair)
     _ -> throwError (HQDecodeError InvalidSurrogatePair)
 
--- | The low surrogate's backslash arrived at a chunk end; the next
--- chunk must start with @u@. Mirrors the 'AfterHighSurrogate' resume.
+-- | A low surrogate's backslash ended the chunk; the next one starts with @u@.
 skipLowSurrogateBackslash ::
   StreamIO Text () -> Int -> ExceptT HQError IO (Text, StreamIO Text ())
 skipLowSurrogateBackslash text high = do
@@ -388,9 +368,7 @@ skipLowDigits !input !text !high !value !digits
                 then skipLowDigits mempty rest high value' digits'
                 else throwError $ HQDecodeError InvalidUnicodeEscape
 
--- | Skip a number from its saved state. Mirrors 'stepNumber' without
--- building a 'Scientific': phases advance identically and error
--- payloads match, but digits only accumulate into a message buffer.
+-- | Skip a number; digits accumulate only for error payloads.
 skipNumberText ::
   NumberState ->
   Text ->
@@ -435,12 +413,7 @@ skipNumberText numState =
                         <> one c
                     NumberStep p' -> loop (c : r) p' (pos + 1)
 
--- | Skip a number starting at its first character, returning the text
--- after it plus the raw consumed bytes (for rewrite passthrough without
--- 'Scientific' roundtrips) and their size. Mirrors 'skipNumberText'
--- exactly (same phases, same error payloads): digits accumulate as
--- input slices rather than a reversed 'String', concatenated only for
--- error payloads and the final builder.
+-- | Skip a number, capturing its raw bytes.
 skipNumberCollect ::
   Text ->
   StreamIO Text () ->
@@ -492,9 +465,7 @@ collectNumber frags size phase inp txt
                 NumberStep p' -> loop f s p' (pos + 1)
     build = foldMap encodeUtf8Builder
 
--- | Skip a keyword from its saved state. Mirrors 'stepKeyword',
--- including its end-of-input rules: a complete keyword at
--- exhaustion succeeds, an incomplete one is 'InvalidKeyword'.
+-- | Skip a keyword; a complete one at exhaustion succeeds.
 skipKeywordText ::
   KeywordState ->
   Text ->
@@ -548,19 +519,12 @@ skipKeywordText state input text =
 -- Raw string capture
 --------------------------------------------------------------------------------
 --
--- 'skipStringCollect' mirrors 'skipStringText' exactly (same states,
--- same errors) but accumulates the consumed input bytes so rewrite
--- passthrough can re-emit strings without decoding and re-encoding
--- them. Escape sequences are preserved verbatim (@\/@ stays @\/@,
--- @\u0041@ stays as-is): output bytes may differ from canonical
--- re-encoding, but decode to identical events.
---
--- Sizes ride along as estimated char counts, the same heuristic
--- 'Chunk's use for flush decisions.
+-- Like skipping, but accumulating the consumed bytes so rewrite
+-- passthrough can re-emit strings without decoding them. Escapes stay
+-- verbatim, so bytes may differ from canonical re-encoding while
+-- decoding to identical events.
 
--- | Skip a string starting after its opening quote, returning the text
--- after the closing quote plus the raw consumed bytes (quotes excluded)
--- and their estimated size.
+-- | Skip a string, capturing its raw bytes (quotes excluded).
 skipStringCollect ::
   Text ->
   StreamIO Text () ->
@@ -586,8 +550,7 @@ collectStringGo !accB !accS !inp !txt = do
       | c == '\\' -> collectEscape accB' accS' rest' txt
       | otherwise -> throwError (HQDecodeError (UnexpectedChar c))
 
--- | Capture one escape sequence. Mirrors 'skipEscape', appending the
--- raw @\@ and indicator bytes.
+-- | Capture one escape sequence, appending its raw bytes.
 collectEscape ::
   Builder ->
   Int ->

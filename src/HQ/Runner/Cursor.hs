@@ -76,20 +76,11 @@ expectArrayStep input = do
     Just (event, rest) -> pure (Right (event, rest))
 
 -- | Consume one complete value without yielding its events.
---
--- The value's first event is pulled to dispatch on, then containers
--- are skipped at the text level ('skipContainerText') without
--- decoding their contents.
 skipValue :: Cursor -> EventStream Cursor
 skipValue = lift . skipValueE
 
--- | 'skipValue' in 'ExceptT': shared by the event-stream and
--- chunk-stream pipelines.
---
--- Text-level skipping is only valid when the container body is still
--- ahead in the text, i.e. the buffer holds at most the peeked opening
--- event. Replayed cursors buffer whole values whose text is already
--- consumed; those are drained event by event instead.
+-- | 'skipValue' in 'ExceptT'. Text-level skipping needs the container
+-- body still ahead in the text; replayed cursors drain event by event.
 skipValueE :: Cursor -> ExceptT HQError IO Cursor
 skipValueE input = do
   result <- pullCursor input
@@ -145,12 +136,10 @@ skipValueE input = do
                 after <- drainValue (pushCursor event rest)
                 drainNested closing after
 
--- | Skip an object member value starting right after its key: the
--- colon and value are consumed at the text level.
+-- | Skip an object member value at the text level, colon included.
 skipMemberValue :: Cursor -> EventStream Cursor
 skipMemberValue = lift . skipMemberValueE
 
--- | 'skipMemberValue' in 'ExceptT': shared by both pipelines.
 skipMemberValueE :: Cursor -> ExceptT HQError IO Cursor
 skipMemberValueE (Cursor buffered decoder@DecoderState {..} text)
   | null buffered = do

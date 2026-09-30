@@ -19,7 +19,7 @@ queryParser :: Parser Query
 queryParser =
   foldParser <|> previewParser <|> overParser <|> deleteParser <|> setParser
 
--- | @set optic value@ is sugar for @over optic (const value)@.
+-- | @set@ is @over@ with a constant.
 setParser :: Parser Query
 setParser = do
   symbol "set" >> Over <$> opticParser <*> (constValue <$> jsonValueParser)

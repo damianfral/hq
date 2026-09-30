@@ -1,11 +1,7 @@
 {-# LANGUAGE StrictData #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 
--- | Shared vocabulary of the streaming JSON decoder: machine state,
--- errors and step outcomes, plus the emit helpers every sub-machine
--- uses. Imported by "HQ.JSON.Decoder.Number",
--- "HQ.JSON.Decoder.String", "HQ.JSON.Decoder.Keyword" and the
--- orchestrator in "HQ.JSON.Decoder".
+-- | Shared vocabulary of the streaming JSON decoder.
 module HQ.JSON.Decoder.Core where
 
 import qualified Data.Text as T
@@ -123,8 +119,6 @@ emitScalar event remaining decoder =
   let newDec = decoder {decoderInput = remaining}
    in Right $ Emit event $ finishValue newDec
 
--- | A JSON value has just been completed.
--- Determine what the enclosing context expects next.
 finishValue :: DecoderState -> DecoderState
 finishValue decoder = case decoderStack decoder of
   [] -> decoder {decoderPhase = DecoderPhaseFinished}
@@ -150,12 +144,7 @@ isHighSurrogate x = x >= 0xD800 && x <= 0xDBFF
 isLowSurrogate :: Int -> Bool
 isLowSurrogate x = x >= 0xDC00 && x <= 0xDFFF
 
--- | The result of pulling a single event: clean end of input, or one
--- event with the decoder and text positioned immediately after it.
 data Next = EndOfInput | NextEvent JSONEvent DecoderState (StreamIO Text ())
 
--- | The house stream: 'Stream' over 'ExceptT HQError IO', i.e. a
--- stream that can fail with an 'HQError'. All streaming pipelines in
--- hq run in this stack; see also 'EventStream' in "HQ.Runner.Cursor"
--- for the 'JSONEvent' instantiation used by folding.
+-- | Failable stream over 'ExceptT HQError IO'.
 type StreamIO s = Stream (Of s) (ExceptT HQError IO)

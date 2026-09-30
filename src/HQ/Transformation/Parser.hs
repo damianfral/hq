@@ -2,7 +2,6 @@
 {-# LANGUAGE StrictData #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 
--- | Parser for the transformation DSL.
 module HQ.Transformation.Parser where
 
 import Data.Aeson (Value (..))
