@@ -74,7 +74,7 @@
       }
     },
     {
-      "title": "Average (mean of medians)",
+      "title": "Average",
       "width": 800,
       "height": {
         "step": 24
