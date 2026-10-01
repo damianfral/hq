@@ -50,4 +50,4 @@ chainl1 p op = do
   pure $ foldl' (\acc (f, y) -> f acc y) x rest
 
 dotChain :: Parser a -> (a -> a -> a) -> Parser a
-dotChain p combine = chainl1 p (combine <$ symbol ".")
+dotChain p op = chainl1 p (op <$ symbol ".")

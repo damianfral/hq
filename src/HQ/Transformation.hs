@@ -27,14 +27,14 @@ import qualified Data.Vector as V
 import GHC.Generics (Generic1, Generically1 (..))
 import GHC.Show (ShowS, appPrec)
 import HQ.Transformation.Error (TransformationError (..))
-import Relude hiding (Const, and, isPrefixOf, length, many, not, or, reverse, some, subtract, toStrict, xor)
+import Relude hiding (Compose, Const, and, isPrefixOf, length, many, not, or, reverse, some, subtract, toStrict, xor)
 import Prelude (Show (showsPrec), showParen, showString)
 
 -- | Base functor for transformation expressions over JSON values.
 --
 -- Transformations read the current JSON value and produce a new one:
 -- numeric steps like 'Add' map numbers, string steps like 'ConcatString'
--- map strings, and 'Equal', 'Not' and 'Or' produce booleans. 'Combine'
+-- map strings, and 'Equal', 'Not' and 'Or' produce booleans. 'Compose'
 -- composes two transformations right-to-left: @a . b@ applies @b@ first,
 -- then applies @a@ over its result.
 data TransformationF a
@@ -85,7 +85,7 @@ data TransformationF a
   | -- | @a xor b@: boolean exclusive disjunction of two transformations.
     Xor a a
   | -- | @a . b@: apply @b@, then apply @a@ over its result.
-    Combine a a
+    Compose a a
   deriving (Eq, Show, Functor, Generic1)
   deriving (Eq1) via Generically1 TransformationF
 
@@ -152,7 +152,7 @@ instance Show Transformation where
       . showsPrec (xorPrec + 1) (Transformation b)
     where
       xorPrec = 5
-  showsPrec d (Transformation (Fix (Combine a b))) =
+  showsPrec d (Transformation (Fix (Compose a b))) =
     showParen (d > composePrec)
       $ showsPrec composePrec (Transformation a)
       . showString " . "
@@ -257,8 +257,8 @@ xor :: Transformation -> Transformation -> Transformation
 xor (Transformation a) (Transformation b) = Transformation (Fix (Xor a b))
 
 -- | @a . b@: apply @b@, then apply @a@ over its result.
-combine :: Transformation -> Transformation -> Transformation
-combine (Transformation a) (Transformation b) = Transformation (Fix (Combine a b))
+compose :: Transformation -> Transformation -> Transformation
+compose (Transformation a) (Transformation b) = Transformation (Fix (Compose a b))
 
 -- | Apply a transformation to a JSON value.
 --
@@ -311,7 +311,7 @@ runTransformation (Transformation transformation) = run transformation
         case (l, r) of
           (Bool a, Bool b) -> pure (Bool (a /= b))
           _ -> Left XorBranchNotBoolean
-      Combine left right -> run right value >>= run left
+      Compose left right -> run right value >>= run left
 
     withNumber :: (Scientific -> Value) -> Value -> Either TransformationError Value
     withNumber apply (Number n) = pure (apply n)

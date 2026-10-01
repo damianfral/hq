@@ -7,7 +7,8 @@ import Data.Aeson (Value (..))
 import HQ.Optic
 import HQ.Query (Query (..))
 import HQ.Query.Parser (parseQuery)
-import HQ.Transformation (add, combine, concatString, constValue, equal, trim)
+import HQ.Transformation (add, concatString, constValue, equal, trim)
+import qualified HQ.Transformation as T
 import Relude hiding (Compose, filter, id)
 import Test.Syd
 
@@ -202,7 +203,7 @@ overParserSpec = describe "parseQuery (over)" $ do
 
   it "parses over with a composed transformation" $ do
     parseQuery "over @n +1 . == 3"
-      `shouldBe` Right (Over (field "n") (combine (add 1) (equal (Number 3))))
+      `shouldBe` Right (Over (field "n") (T.compose (add 1) (equal (Number 3))))
 
   it "parses over with a string concatenation" $ do
     parseQuery "over @title ++\"!\""

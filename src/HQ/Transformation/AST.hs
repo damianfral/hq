@@ -15,7 +15,7 @@ import Data.Aeson.Types (Value (..))
 import Data.Fix (Fix (..), foldFix)
 import HQ.Transformation
 import HQ.Transformation.TransformationType
-import Relude hiding (Const, many, not, or, some, subtract, toStrict)
+import Relude hiding (Compose, Const, many, not, or, some, subtract, toStrict)
 import Relude.Extra (view)
 
 -- | Type-annotated transformation ASTs for static validation.
@@ -23,10 +23,10 @@ newtype TransformationAST = TransformationAST {unTransformationAST :: AST}
 
 type AST = Cofree TransformationF TransformationType
 
--- | Mismatched 'Combine' steps, keeping the offender for reporting.
+-- | Mismatched 'Compose' steps, keeping the offender for reporting.
 data TransformationTypeError
   = -- | Right output vs left input mismatch; offender kept for reporting.
-    InvalidCombine Transformation ValueType ValueType
+    InvalidCompose Transformation ValueType ValueType
   | -- | An 'Or' branch does not produce a boolean; offender kept.
     InvalidOr Transformation ValueType
   | -- | An 'And' branch does not produce a boolean; offender kept.
@@ -37,7 +37,7 @@ data TransformationTypeError
     InvalidFilter Transformation ValueType
   deriving (Eq, Show)
 
--- | Build the annotated AST; 'Combine' steps must line up (constants
+-- | Build the annotated AST; 'Compose' steps must line up (constants
 -- accept anything).
 buildTransformationAST ::
   Transformation -> Either TransformationTypeError TransformationAST
@@ -86,7 +86,7 @@ buildTransformationAST (Transformation transformation) =
     algebra (Or left right) = boolPair Or InvalidOr left right
     algebra (And left right) = boolPair And InvalidAnd left right
     algebra (Xor left right) = boolPair Xor InvalidXor left right
-    algebra (Combine left right) = do
+    algebra (Compose left right) = do
       l <- left
       r <- right
       let lt = view _extract l
@@ -99,11 +99,11 @@ buildTransformationAST (Transformation transformation) =
           outputType = transformationOutput lt
       if getAny $ foldMap Any conditions
         then do
-          pure $ TransformationType inputType outputType :< Combine l r
+          pure $ TransformationType inputType outputType :< Compose l r
         else
           Left
-            $ InvalidCombine
-              (subTransformation (Combine l r))
+            $ InvalidCompose
+              (subTransformation (Compose l r))
               (transformationOutput rt)
               (transformationInput lt)
 

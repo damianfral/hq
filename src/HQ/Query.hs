@@ -9,7 +9,7 @@ import Data.Fix (Fix (..))
 import HQ.Optic
 import HQ.Optic.AST
 import HQ.Optic.OpticType (OpticType (..), canUseAs)
-import HQ.Transformation
+import HQ.Transformation (Transformation)
 import HQ.Transformation.AST
 import HQ.Transformation.TransformationType (ValueType (..))
 import Relude hiding (Compose, many, not, or, some, subtract)
@@ -48,7 +48,7 @@ renderTypeError (InvalidOpticType expected actual) =
     <> opticTypeName expected
     <> " but the optic is "
     <> opticTypeName actual
-renderTypeError (InvalidTransformationType (InvalidCombine t out inn)) =
+renderTypeError (InvalidTransformationType (InvalidCompose t out inn)) =
   "transformation mismatch in "
     <> show t
     <> ": produces "

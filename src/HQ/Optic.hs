@@ -12,7 +12,8 @@ import Data.Functor.Classes (Eq1)
 import GHC.Generics (Generic1, Generically1 (..))
 import GHC.Show (Show (showsPrec), appPrec, showParen, showString, shows)
 import HQ.JSON.Event (JSONEvent, isArray, isBool, isNull, isNumber, isObject, isString)
-import HQ.Transformation (Transformation (..), TransformationF (..))
+import HQ.Transformation (Transformation (..), TransformationF (And, Or, Xor))
+import qualified HQ.Transformation as Trans
 import Relude hiding (Compose, Const, filter, id, many, some)
 
 -- | JSON value shapes selectable by a prism.
@@ -110,7 +111,10 @@ instance Show Optic where
               . showString ")"
       isAtomOptic (Fix (Compose _ _)) = False
       isAtomOptic _ = True
-      isAtomTrans (Transformation (Fix (Combine _ _))) = False
+      -- NOTE: 'Trans.Compose' is the transformation sequencing node;
+      -- bare 'Compose' here would be 'OpticF.Compose' (the local
+      -- definition shadows the import), so the qualifier is load-bearing.
+      isAtomTrans (Transformation (Fix (Trans.Compose _ _))) = False
       isAtomTrans (Transformation (Fix (Or _ _))) = False
       isAtomTrans (Transformation (Fix (And _ _))) = False
       isAtomTrans (Transformation (Fix (Xor _ _))) = False

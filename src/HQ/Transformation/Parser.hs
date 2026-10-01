@@ -20,8 +20,8 @@ parseTransformation = parseTop "transformation" transformationParser
 --
 -- > or     := xor (('or' | '||') xor)*
 -- > xor    := and (('xor' | '^^') and)*
--- > and    := combine (('and' | '&&') combine)*
--- > combine  := atom ('.' atom)*
+-- > and    := compose (('and' | '&&') compose)*
+-- > compose  := atom ('.' atom)*
 -- > atom   := '+' number | '*' number | '-' number | '/' number
 -- >        |  '++' string | 'concat' array | 'trim' | 'not'
 -- >        |  'replace' string string | 'stripPrefix' string | 'stripSuffix' string
@@ -42,10 +42,10 @@ xorParser :: Parser Transformation
 xorParser = chainl1 andParser (xor <$ (symbol "xor" <|> symbol "^^"))
 
 andParser :: Parser Transformation
-andParser = chainl1 combineParser (and <$ (symbol "and" <|> symbol "&&"))
+andParser = chainl1 composeParser (and <$ (symbol "and" <|> symbol "&&"))
 
-combineParser :: Parser Transformation
-combineParser = dotChain atomParser combine
+composeParser :: Parser Transformation
+composeParser = dotChain atomParser compose
 
 atomParser :: Parser Transformation
 atomParser =

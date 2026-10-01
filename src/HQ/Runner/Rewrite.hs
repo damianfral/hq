@@ -14,7 +14,7 @@ import HQ.Runner.Cursor (Cursor (..), RewriteContinuation, expectArrayStep, pull
 import HQ.Runner.Error (RunnerError (..))
 import HQ.Runner.Fold (applyTransformation, gateValue, materializeValue)
 import HQ.Runner.Take (emitChunk, emitKeyAndTake, onEventOrEndChunks, takeValueChunks, traverseArrayChunks, traverseObjectChunks)
-import HQ.Transformation (Transformation (..), TransformationF (..), runTransformation)
+import HQ.Transformation (Transformation (..), TransformationF (Const), runTransformation)
 import HQ.Transformation.Error (TransformationError (..))
 import Relude hiding (Compose, Const)
 

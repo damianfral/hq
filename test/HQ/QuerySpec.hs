@@ -7,7 +7,8 @@ import Data.Aeson (Value (..))
 import HQ.Optic
 import HQ.Optic.OpticType (OpticType (..))
 import HQ.Query
-import HQ.Transformation (add, combine, equal, or, trim)
+import HQ.Transformation (add, equal, or, trim)
+import qualified HQ.Transformation as T
 import HQ.Transformation.AST (TransformationTypeError (..))
 import HQ.Transformation.TransformationType (ValueType (..))
 import Relude hiding (Compose, filter, id, or)
@@ -57,10 +58,10 @@ spec = describe "HQ.Query" $ do
       typecheckQuery q `shouldBe` Right q
 
     it "rejects over with a mismatched composition" $ do
-      let bad = combine (add 1) (equal (Number 3))
+      let bad = T.compose (add 1) (equal (Number 3))
       case typecheckQuery (Over each bad) of
         Left (InvalidTransformationType err) ->
-          err `shouldBe` InvalidCombine bad ValueBool ValueNumber
+          err `shouldBe` InvalidCompose bad ValueBool ValueNumber
         Left err ->
           expectationFailure $ "wrong error: " <> show err
         Right _ -> expectationFailure "expected a type error"
@@ -75,7 +76,7 @@ spec = describe "HQ.Query" $ do
         Right _ -> expectationFailure "expected a type error"
 
     it "accepts equal after a step of any type" $ do
-      let q = Over each (combine (equal (Number 1)) trim)
+      let q = Over each (T.compose (equal (Number 1)) trim)
       typecheckQuery q `shouldBe` Right q
 
     it "accepts fold with a filter" $ do
@@ -96,10 +97,10 @@ spec = describe "HQ.Query" $ do
         Right _ -> expectationFailure "expected a type error"
 
     it "rejects a filter with an ill-formed predicate" $ do
-      let bad = combine (add 1) (equal (Number 3))
+      let bad = T.compose (add 1) (equal (Number 3))
       case typecheckQuery (Fold (filter (field "a") bad)) of
         Left (InvalidTransformationType err) ->
-          err `shouldBe` InvalidCombine bad ValueBool ValueNumber
+          err `shouldBe` InvalidCompose bad ValueBool ValueNumber
         Left err ->
           expectationFailure $ "wrong error: " <> show err
         Right _ -> expectationFailure "expected a type error"

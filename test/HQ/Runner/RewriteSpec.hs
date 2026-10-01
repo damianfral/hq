@@ -431,7 +431,7 @@ overSpec = describe "over" $ do
     `shouldReturn` Left "expected a boolean result from each side of xor"
 
   it "composes transformations right-to-left" $ do
-    runOverTest "each" (combine (equal (Number 3)) (add 1)) "[1,2,3]"
+    runOverTest "each" (compose (equal (Number 3)) (add 1)) "[1,2,3]"
     `shouldReturn` Right
       [ JSONBeginArray,
         JSONBool False,

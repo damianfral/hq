@@ -62,30 +62,30 @@ spec = describe "HQ.Transformation.AST" $ do
         `shouldBe` Right (TransformationType ValueAny ValueNumber)
 
     it "composes a constant before a step" $ do
-      rootType (combine (constValue (Number 3)) (add 1))
+      rootType (compose (constValue (Number 3)) (add 1))
         `shouldBe` Right (TransformationType ValueNumber ValueNumber)
 
     it "composes a step before a constant" $ do
-      rootType (combine (add 1) (constValue (Number 3)))
+      rootType (compose (add 1) (constValue (Number 3)))
         `shouldBe` Right (TransformationType ValueAny ValueNumber)
 
     it "rejects a step before a mismatched constant" $ do
       let expected =
-            InvalidCombine
-              (combine (add 1) (constValue (String "x")))
+            InvalidCompose
+              (compose (add 1) (constValue (String "x")))
               ValueString
               ValueNumber
-      case buildTransformationAST (combine (add 1) (constValue (String "x"))) of
+      case buildTransformationAST (compose (add 1) (constValue (String "x"))) of
         Left err -> err `shouldBe` expected
-        Right _ -> expectationFailure "expected an InvalidCombine"
+        Right _ -> expectationFailure "expected an InvalidCompose"
 
     it "types a composition right to left" $ do
-      rootType (combine (add 1) (multiply 2))
+      rootType (compose (add 1) (multiply 2))
         `shouldBe` Right (TransformationType ValueNumber ValueNumber)
 
     it "composes a boolean check inside a chain" $ do
       -- 'equal' accepts any input value, so the composition's input is Any.
-      rootType (combine not (equal (Number 1)))
+      rootType (compose not (equal (Number 1)))
         `shouldBe` Right (TransformationType ValueAny ValueBool)
 
     it "types or as boolean" $ do
@@ -101,7 +101,7 @@ spec = describe "HQ.Transformation.AST" $ do
         `shouldBe` Right (TransformationType ValueAny ValueBool)
 
     it "accepts equal after a step of any type" $ do
-      rootType (combine (equal (Number 1)) trim)
+      rootType (compose (equal (Number 1)) trim)
         `shouldBe` Right (TransformationType ValueString ValueBool)
 
     it "rejects or with a non-boolean left branch" $ do
@@ -130,40 +130,48 @@ spec = describe "HQ.Transformation.AST" $ do
 
     it "rejects a composition whose seam does not match" $ do
       let expected =
-            InvalidCombine
-              (combine (add 1) (equal (Number 3)))
+            InvalidCompose
+              (compose (add 1) (equal (Number 3)))
               ValueBool
               ValueNumber
-      case buildTransformationAST (combine (add 1) (equal (Number 3))) of
+      case buildTransformationAST (compose (add 1) (equal (Number 3))) of
         Left err -> err `shouldBe` expected
-        Right _ -> expectationFailure "expected an InvalidCombine"
+        Right _ -> expectationFailure "expected an InvalidCompose"
 
     it "rejects a composition of unrelated types" $ do
       let expected =
-            InvalidCombine
-              (combine (concatString " x") (add 1))
+            InvalidCompose
+              (compose (concatString " x") (add 1))
               ValueNumber
               ValueString
-      case buildTransformationAST (combine (concatString " x") (add 1)) of
+      case buildTransformationAST (compose (concatString " x") (add 1)) of
         Left err -> err `shouldBe` expected
-        Right _ -> expectationFailure "expected an InvalidCombine"
+        Right _ -> expectationFailure "expected an InvalidCompose"
 
     it "rejects length before a string step" $ do
       let expected =
-            InvalidCombine
-              (combine (stripPrefix "a") length)
+            InvalidCompose
+              (compose (stripPrefix "a") length)
               ValueNumber
               ValueString
-      case buildTransformationAST (combine (stripPrefix "a") length) of
+      case buildTransformationAST (compose (stripPrefix "a") length) of
         Left err -> err `shouldBe` expected
-        Right _ -> expectationFailure "expected an InvalidCombine"
+        Right _ -> expectationFailure "expected an InvalidCompose"
 
     it "accepts a predicate after an array step" $ do
-      rootType (combine isEmpty reverse)
+      rootType (compose isEmpty reverse)
         `shouldBe` Right (TransformationType ValueArray ValueBool)
 
     it "reports the failing composition in DSL syntax" $ do
-      case buildTransformationAST (combine (add 1) (equal (Number 3))) of
-        Left (InvalidCombine t _ _) -> show t `shouldBe` ("+1 . == 3" :: String)
+      case buildTransformationAST (compose (add 1) (equal (Number 3))) of
+        Left (InvalidCompose t _ _) -> show t `shouldBe` ("+1 . == 3" :: String)
         Left err -> expectationFailure $ "wrong error: " <> show err
-        Right _ -> expectationFailure "expected an InvalidCombine"
+        Right _ -> expectationFailure "expected an InvalidCompose"
+
+    it "renders and/xor precedence without redundant parens" $ do
+      show (or (and (equal (Number 1)) (equal (Number 1))) (equal (Number 3)))
+        `shouldBe` ("== 1 and == 1 or == 3" :: String)
+      show (and (equal (Number 1)) (or (equal (Number 2)) (equal (Number 3))))
+        `shouldBe` ("== 1 and (== 2 or == 3)" :: String)
+      show (xor (and (equal (Number 1)) (equal (Number 2))) (equal (Number 3)))
+        `shouldBe` ("== 1 and == 2 xor == 3" :: String)
