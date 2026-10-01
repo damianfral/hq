@@ -43,7 +43,7 @@
         "x": {
           "field": "runtime_median",
           "type": "quantitative",
-          "title": "Runtime median (s)"
+          "title": "Runtime (s)"
         },
         "color": {
           "field": "backend",
@@ -68,7 +68,7 @@
           {
             "field": "runtime_median",
             "type": "quantitative",
-            "title": "Runtime median (s)"
+            "title": "Runtime (s)"
           }
         ]
       }
@@ -131,7 +131,7 @@
         "x": {
           "field": "runtime_average",
           "type": "quantitative",
-          "title": "Runtime average (s)"
+          "title": "Runtime (s)"
         },
         "color": {
           "field": "backend",
@@ -156,7 +156,7 @@
           {
             "field": "runtime_average",
             "type": "quantitative",
-            "title": "Runtime average (s)"
+            "title": "Runtime (s)"
           }
         ]
       }

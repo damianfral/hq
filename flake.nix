@@ -190,8 +190,8 @@
             cp ${./bench/bench_memory.vl.json} bench_memory.vl.json
             vl2svg bench_runtime.vl.json bench_runtime.svg
             vl2svg bench_memory.vl.json bench_memory.svg
-            svgo --multipass bench_runtime.svg
-            svgo --multipass bench_memory.svg
+            svgo --multipass --pretty --indent 2 bench_runtime.svg
+            svgo --multipass --pretty --indent 2 bench_memory.svg
           '';
           installPhase = "mkdir $out && cp -t $out bench_runtime.svg bench_memory.svg";
         };

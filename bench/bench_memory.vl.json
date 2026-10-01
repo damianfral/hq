@@ -43,7 +43,7 @@
         "x": {
           "field": "peak_rss_mb_median",
           "type": "quantitative",
-          "title": "Peak RSS median (MB)"
+          "title": "Peak RSS (MB)"
         },
         "color": {
           "field": "backend",
@@ -68,7 +68,7 @@
           {
             "field": "peak_rss_mb_median",
             "type": "quantitative",
-            "title": "Peak RSS median (MB)"
+            "title": "Peak RSS (MB)"
           }
         ]
       }
@@ -131,7 +131,7 @@
         "x": {
           "field": "peak_rss_mb_average",
           "type": "quantitative",
-          "title": "Peak RSS average (MB)"
+          "title": "Peak RSS (MB)"
         },
         "color": {
           "field": "backend",
@@ -156,7 +156,7 @@
           {
             "field": "peak_rss_mb_average",
             "type": "quantitative",
-            "title": "Peak RSS average (MB)"
+            "title": "Peak RSS (MB)"
           }
         ]
       }

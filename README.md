@@ -158,9 +158,11 @@ echo '{"a":1,"b":2}' | hq delete '@b' -c
 
 ## Performance
 
-On the 100 MB `hq-bench-data` benchmark (`bench/bench.sh`), reads
-(`fold`) run at ~0.4x jq's runtime and rewrites (`over`/`set`/`delete`)
-at \~1.2x, at \~12 MB peak RSS versus jq's \~600 MB.
+On the 100 MB hq-bench-data benchmark (bench/bench.sh), fold runs about
+2x faster than jq, while over/set/delete perform on par with jq.
+
+hq streams the input without materializing the document, keeping peak
+RSS at \~12MB versus \~600 MB for jq.
 
 ![screenshot](bench/bench_runtime.svg)
 
