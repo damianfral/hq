@@ -9,7 +9,7 @@ category: JSON, CLI, lenses, optics, streaming
 license: MIT
 
 extra-source-files:
-  - docs/*.txt
+  - docs/LANG.md
 
 library:
   source-dirs: ./src/

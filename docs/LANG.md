@@ -1,36 +1,4 @@
-# hq
-
-`hq` is a JSON processor inspired by `jq`. It queries JSON with optics and
-rewrites values with transformations, streaming input so large documents
-never load fully into memory.
-
-## Usage
-
-```sh
-hq [OPTIONS] COMMAND OPTIC [ARGS] < input.json
-```
-
-```text
-hq v0.0.0.1
-
-Usage: hq [-f|--file FILE] [-r|--raw] [-c|--compact] [-j|--join] COMMAND
-
-  Query JSON using optics
-
-Available options:
-  -f,--file FILE           Input JSON file, or '-' for stdin
-  -r,--raw                 Print strings without JSON quotes
-  -c,--compact             Print compact JSON
-  -j,--join                Print without separators
-  -h,--help                Show this help text
-
-Available commands:
-  fold                     
-  preview                  
-  set                      
-  over                     
-  delete
-```
+# hq language reference
 
 ## Commands
 
@@ -88,16 +56,16 @@ produce a boolean.
 
 Single atoms stay bare:
 
-  filter @age == 30
+    filter @age == 30
 
 Anything longer takes one paren group:
 
-  filter (each . @age) (== 30)
+    filter (each . @age) (== 30)
 
 A `.` after a bare optic starts an outer composition, so a dotted optic
 inside `filter` needs the grouped form:
 
-  each . filter (@tags . each) (== "x")
+    each . filter (@tags . each) (== "x")
 
 Examples:
 
@@ -180,51 +148,50 @@ with `const`.
 
 For example:
 
-  hq over '@users . each . @age' '+ 1'
+    hq over '@users . each . @age' '+ 1'
 
 increments every user's age, and
 
-  hq over '@users . each . @name' 'stripPrefix "dr. "'
+    hq over '@users . each . @name' 'stripPrefix "dr. "'
 
 strips the prefix from every user's name when present.
 
 ## Examples
 
-```bash
-echo '{"name":"ada","age":36}' | hq fold '@name'
-# "ada"
+    echo '{"name":"ada","score":96}' | hq fold '@name'
+    # "ada"
 
-echo '{"name":"ada"}' | hq fold '@name' -r
-# ada (raw: strings print without quotes)
+    echo '{"name":"ada"}' | hq fold '@name' -r
+    # ada (raw: strings print without quotes)
 
-echo '{"a":[1,2,3]}' | hq fold '@a . each'
-# 1, 2, 3 (one per line)
+    echo '{"a":[1,2,3]}' | hq fold '@a . each'
+    # 1, 2, 3 (one per line)
 
-echo '[{"age":30},{"age":36}]' | hq fold 'each . filter (@age == 30)' -c
-# [{"age":30}]
+    echo '[{"a":90},{"a":96}]' | hq fold 'each . filter (@a == 90)' -c
+    # [{"a":90}]
 
-echo '{"a":1}' | hq over '@a' '+ 1' -c
-# {"a":2}
+    echo '{"a":1}' | hq over '@a' '+ 1' -c
+    # {"a":2}
 
-echo '{"a":1,"b":2}' | hq set '@b' '3' -c
-# {"a":1,"b":3}
+    echo '{"a":1,"b":2}' | hq set '@b' '3' -c
+    # {"a":1,"b":3}
 
-echo '{"a":1,"b":2}' | hq delete '@b' -c
-# {"a":1}
+    echo '{"a":1,"b":2}' | hq delete '@b' -c
+    # {"a":1}
 
-nix build .#devShells.x86_64-linux.default --json -j1 \
-  | hq -r fold 'each . @outputs . values' \
-  | cachix push opensource
-```
+    # nix
+    nix build . --json \
+      | hq -r fold 'each . @outputs . values' \
+      | cachix push opensource
 
-## Performance
+    # Kubernetes
+    kubectl get pods -o json \
+      | hq -r fold '@items . each . @metadata . @name'
 
-On the 100 MB hq-bench-data benchmark (bench/bench.sh), fold runs about
-2x faster than jq, while over/set/delete perform on par with jq.
+    # ffmpeg
+    ffprobe -v quiet -print_format json -show_streams video.mp4 \
+      | hq -r fold 'each . @codec_name'
 
-hq streams the input without materializing the document, keeping peak
-RSS at \~12MB versus \~600 MB for jq.
-
-![runtime](bench/bench_runtime.svg)
-
-![memory](bench/bench_memory.svg)
+    # Github
+    curl -s https://api.github.com/repos/damianfral/hq \
+      | hq -r fold '@topics.each'

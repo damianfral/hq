@@ -72,9 +72,11 @@
         hq = final.haskell.lib.justStaticExecutables (
           final.haskellPackages.hq.overrideAttrs (oldAttrs: {
             configureFlags = oldAttrs.configureFlags ++ ["--ghc-options=-O2"];
-            # jq on PATH for the HQ.JQParitySpec suite (native input only:
-            # it must not ship with the hq closure).
-            nativeBuildInputs = (oldAttrs.nativeBuildInputs or []) ++ [final.jq];
+            nativeBuildInputs = (oldAttrs.nativeBuildInputs or []) ++ [final.glow];
+            preBuild = ''
+              glow -s notty docs/LANG.md > docs/LANG.md.rendered
+              mv docs/LANG.md.rendered docs/LANG.md
+            '';
           })
         );
         haskellPackages = prev.haskellPackages.override (old: {

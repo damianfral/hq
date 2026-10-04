@@ -75,7 +75,7 @@ optParser = do
     fromBool falseV trueV b = if b then trueV else falseV
 
 langHelp :: String
-langHelp = $(embedStringFile =<< makeRelativeToProject "./docs/LANG.txt")
+langHelp = $(embedStringFile =<< makeRelativeToProject "./docs/LANG.md")
 
 optParserInfo :: ParserInfo CLIOptions
 optParserInfo = info (optParser <**> helper) infoMod
