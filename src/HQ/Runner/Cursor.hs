@@ -1,5 +1,4 @@
 {-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE StrictData #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 
@@ -8,9 +7,9 @@ module HQ.Runner.Cursor where
 import Control.Monad.Error.Class (MonadError (throwError))
 import HQ.Error (HQError (..))
 import HQ.JSON.Decoder (DecoderState (..), Next (..), StreamIO, finishValue, pullEvent)
+import HQ.JSON.Decoder.Skip (skipContainerText, skipMemberValueText)
 import HQ.JSON.Encoder (ChunkStream, EncoderState)
 import HQ.JSON.Event (JSONEvent (..), matchingClose)
-import HQ.JSON.Skip (skipContainerText, skipMemberValueText)
 import HQ.Runner.Error (RunnerError (..))
 import Relude hiding (Compose, id, many, some, state)
 import Streaming (Of, Stream)
@@ -21,8 +20,7 @@ type EventStream r = Stream (Of JSONEvent) (ExceptT HQError IO) r
 
 -- | Input cursor: pushed-back events with the decoder and text
 -- positioned after them. Navigation peeks at events through
--- 'pullCursor'; bulk take loops decode forward; skipped regions never
--- decode into events at all.
+-- 'pullCursor'; bulk take loops decode forward.
 data Cursor = Cursor ![JSONEvent] !DecoderState (StreamIO Text ())
 
 -- | Interpret an optic against the JSON value at the cursor,
@@ -30,8 +28,7 @@ data Cursor = Cursor ![JSONEvent] !DecoderState (StreamIO Text ())
 type Continuation = Cursor -> EventStream Cursor
 
 -- | Rewrite output: chunk stream returning advanced encoder contexts
--- and cursor. Passthrough regions transcribe text straight to chunks
--- without an intermediate event stream.
+-- and cursor.
 type RewriteContinuation = Cursor -> EncoderState -> ChunkStream (ExceptT HQError IO) (EncoderState, Cursor)
 
 -- | Pull one event for navigation. Buffered events come first;
@@ -79,8 +76,10 @@ expectArrayStep input = do
 skipValue :: Cursor -> EventStream Cursor
 skipValue = lift . skipValueE
 
--- | 'skipValue' in 'ExceptT'. Text-level skipping needs the container
--- body still ahead in the text; replayed cursors drain event by event.
+-- | 'skipValue' in 'ExceptT'. Text-level skipping when the container
+-- body is still ahead in the text (no replayed events); otherwise drain
+-- event by event. Skipped regions never decode into events on the fast
+-- path.
 skipValueE :: Cursor -> ExceptT HQError IO Cursor
 skipValueE input = do
   result <- pullCursor input
@@ -140,10 +139,10 @@ skipMemberValue :: Cursor -> EventStream Cursor
 skipMemberValue = lift . skipMemberValueE
 
 skipMemberValueE :: Cursor -> ExceptT HQError IO Cursor
-skipMemberValueE (Cursor buffered decoder@DecoderState {..} text)
+skipMemberValueE (Cursor buffered decoder text)
   | null buffered = do
       (remainder, rest) <-
-        skipMemberValueText decoderNestDepth decoderStack decoderInput text
+        skipMemberValueText (decoderNestDepth decoder) (decoderStack decoder) (decoderInput decoder) text
       pure $ Cursor [] (finishValue decoder {decoderInput = remainder}) rest
   | otherwise = skipValueE (Cursor buffered decoder text)
 

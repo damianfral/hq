@@ -9,9 +9,9 @@ import qualified Data.Text as T
 import HQ.Error (HQError (..))
 import HQ.JSON.Decoder (DecodeError (..), DecoderPhase (..), DecoderResult (..), DecoderState (..), Next (..), StreamIO, finish, finishValue, isWhitespace, pullEvent)
 import qualified HQ.JSON.Decoder as Decoder
+import HQ.JSON.Decoder.Skip (skipNumberCollect, skipStringCollect)
 import HQ.JSON.Encoder (Builder, Chunk (..), ChunkStream, EncoderConfig, EncoderState, formatEvent, transcribeRawBytes, transcribeRawString)
 import HQ.JSON.Event (JSONEvent (..), matchingClose)
-import HQ.JSON.Skip (skipNumberCollect, skipStringCollect)
 import HQ.Runner.Cursor (Continuation, Cursor (..), EventStream, expectArrayStep, expectObjectStep, pullCursor)
 import HQ.Runner.Error (RunnerError (..))
 import Relude hiding (Compose, id, many, some, state)
@@ -209,20 +209,21 @@ takeValueChunks ::
   Cursor ->
   EncoderState ->
   ChunkStream (ExceptT HQError IO) (EncoderState, Cursor)
-takeValueChunks config cursor st = do
-  case peekRawScalar cursor of
-    Just (RawString afterQuote, dec, txt) -> takeRawStringChunks config afterQuote dec txt st
-    Just (RawNumber atNumber, dec, txt) -> takeRawNumberChunks config atNumber dec txt st
-    Nothing -> do
-      (event, cursor') <- lift (pullOne cursor)
-      st' <- emitChunk config event st
-      case matchingClose event of
-        Just closing -> takeContainerChunks config closing cursor' st'
-        Nothing -> case event of
-          JSONEndArray -> throwError $ HQRunnerError UnexpectedEndOfArray
-          JSONEndObject -> throwError $ HQRunnerError UnexpectedEndOfObject
-          JSONObjectKey _ -> throwError $ HQRunnerError UnexpectedObjectKey
-          _ -> pure (st', cursor')
+takeValueChunks config cursor st = case peekRawScalar cursor of
+  Just (RawString afterQuote, dec, txt) ->
+    takeRawStringChunks config afterQuote dec txt st
+  Just (RawNumber atNumber, dec, txt) ->
+    takeRawNumberChunks config atNumber dec txt st
+  Nothing -> do
+    (event, cursor') <- lift (pullOne cursor)
+    st' <- emitChunk config event st
+    case matchingClose event of
+      Just closing -> takeContainerChunks config closing cursor' st'
+      Nothing -> case event of
+        JSONEndArray -> throwError $ HQRunnerError UnexpectedEndOfArray
+        JSONEndObject -> throwError $ HQRunnerError UnexpectedEndOfObject
+        JSONObjectKey _ -> throwError $ HQRunnerError UnexpectedObjectKey
+        _ -> pure (st', cursor')
 
 -- | A peeked string or number value: payload after the quote / at the
 -- first digit, pending colon already skipped.
