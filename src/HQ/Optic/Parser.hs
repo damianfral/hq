@@ -5,8 +5,9 @@
 
 module HQ.Optic.Parser where
 
+import Control.Monad.Combinators.Expr (Operator (..), makeExprParser)
 import HQ.Optic
-import HQ.Parser (Parser, dotChain, keyword, lexeme, parens, parseTop, symbol)
+import HQ.Parser (Parser, keyword, lexeme, parens, parseTop, symbol)
 import HQ.Transformation.Parser (atomParser, transformationParser)
 import Relude hiding (Compose, filter, id, many, some)
 import Text.Megaparsec
@@ -18,7 +19,7 @@ parseOptic :: Text -> Either (ParseErrorBundle Text Void) Optic
 parseOptic = parseTop "optic" opticParser
 
 opticParser :: Parser Optic
-opticParser = dotChain opticAtomParser compose
+opticParser = makeExprParser opticAtomParser [[InfixL (compose <$ symbol ".")]]
 
 opticAtomParser :: Parser Optic
 opticAtomParser =

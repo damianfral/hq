@@ -23,6 +23,7 @@ library:
     - megaparsec
     - mtl
     - optparse-applicative
+    - parser-combinators
     - relude
     - scientific
     - streaming

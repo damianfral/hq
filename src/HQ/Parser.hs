@@ -1,4 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 
 module HQ.Parser where
@@ -42,12 +41,3 @@ colon = void $ lexeme (char ':')
 
 commaSep :: Parser a -> Parser [a]
 commaSep p = p `sepBy` comma
-
-chainl1 :: Parser a -> Parser (a -> a -> a) -> Parser a
-chainl1 p op = do
-  x <- p
-  rest <- many ((,) <$> op <*> p)
-  pure $ foldl' (\acc (f, y) -> f acc y) x rest
-
-dotChain :: Parser a -> (a -> a -> a) -> Parser a
-dotChain p op = chainl1 p (op <$ symbol ".")

@@ -4,10 +4,11 @@
 
 module HQ.Transformation.Parser where
 
+import Control.Monad.Combinators.Expr (Operator (..), makeExprParser)
 import Data.Aeson (Value (..))
 import Data.Scientific (Scientific)
 import HQ.JSON.Parser (jsonArray, jsonNumber, jsonText, jsonValueParser)
-import HQ.Parser (Parser, chainl1, dotChain, keyword, parens, parseTop, symbol)
+import HQ.Parser (Parser, keyword, parens, parseTop, symbol)
 import HQ.Transformation
 import Relude hiding (and, isPrefixOf, length, many, not, or, reverse, some, subtract, xor)
 import Text.Megaparsec
@@ -32,20 +33,16 @@ parseTransformation = parseTop "transformation" transformationParser
 --
 -- JSON literals (numbers, strings and arrays) are parsed with the aeson
 -- value parser from "HQ.JSON.Parser", so numbers are 'Scientific'.
+-- Precedence, tightest to loosest: atoms, @.@, @and@, @xor@, @or@.
 transformationParser :: Parser Transformation
-transformationParser = orParser
-
-orParser :: Parser Transformation
-orParser = chainl1 xorParser (or <$ (symbol "or" <|> symbol "||"))
-
-xorParser :: Parser Transformation
-xorParser = chainl1 andParser (xor <$ (symbol "xor" <|> symbol "^^"))
-
-andParser :: Parser Transformation
-andParser = chainl1 composeParser (and <$ (symbol "and" <|> symbol "&&"))
-
-composeParser :: Parser Transformation
-composeParser = dotChain atomParser compose
+transformationParser = makeExprParser atomParser table
+  where
+    table =
+      [ [InfixL (compose <$ symbol ".")],
+        [InfixL (and <$ (symbol "and" <|> symbol "&&"))],
+        [InfixL (xor <$ (symbol "xor" <|> symbol "^^"))],
+        [InfixL (or <$ (symbol "or" <|> symbol "||"))]
+      ]
 
 atomParser :: Parser Transformation
 atomParser =
