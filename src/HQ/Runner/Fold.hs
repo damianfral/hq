@@ -40,6 +40,23 @@ gateValue :: Fix OpticF -> Transformation -> Value -> ExceptT HQError IO Bool
 gateValue o t v =
   hoistEither $ first HQTransformationError $ evalFilterGate o t v
 
+-- | Test a @filter@ gate on a streamed value, returning whether it is
+-- kept plus replay/after cursors. Shared by 'runFold' and 'runRewrite'
+-- so both agree on gating and cursor rebuild.
+gateTake ::
+  Fix OpticF ->
+  Transformation ->
+  Cursor ->
+  ExceptT HQError IO (Bool, JSONEvent, Cursor, Cursor)
+gateTake o t cur = do
+  (v, events, afterValue) <- materializeValue cur
+  keep <- gateValue o t v
+  case events of
+    [] -> throwError $ HQRunnerError EmptyValue
+    (firstEv : _) ->
+      let Cursor _ dec txt = afterValue
+       in pure (keep, firstEv, Cursor events dec txt, afterValue)
+
 -- | Apply a transformation, mapping failures to 'HQError'.
 -- Shared by rewriting (@over@) replacements.
 applyTransformation :: Transformation -> Value -> ExceptT HQError IO Value
@@ -128,14 +145,10 @@ runFold (Optic optic) = run optic takeValue
     runFilter :: Fix OpticF -> Transformation -> Continuation -> Continuation
     runFilter o t k input =
       onEventOrEnd input $ \(event, rest0) -> do
-        (v, events, rest) <- lift (materializeValue (pushCursor event rest0))
-        keep <- lift (gateValue o t v)
+        (keep, _, replay, rest) <- lift (gateTake o t (pushCursor event rest0))
         if keep
-          then k (Cursor events (cursorDecoder rest) (cursorText rest))
+          then k replay
           else pure rest
-      where
-        cursorDecoder (Cursor _ dec _) = dec
-        cursorText (Cursor _ _ txt) = txt
 
     ----------------------------------------------------------------
     -- Scalar prisms

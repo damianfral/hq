@@ -12,7 +12,7 @@ import HQ.JSON.Event
 import HQ.Optic (Optic (..), OpticF (..), appendOptic, focusesWhole, prismPredicate)
 import HQ.Runner.Cursor (Cursor (..), RewriteContinuation, expectArrayStep, pullCursor, pushCursor, skipValueE)
 import HQ.Runner.Error (RunnerError (..))
-import HQ.Runner.Fold (applyTransformation, gateValue, materializeValue)
+import HQ.Runner.Fold (applyTransformation, gateTake, materializeValue)
 import HQ.Runner.Take (emitChunk, emitKeyAndTake, onEventOrEndChunks, takeValueChunks, traverseArrayChunks, traverseObjectChunks)
 import HQ.Transformation (Transformation (..), TransformationF (Const), runTransformation)
 import HQ.Transformation.Error (TransformationError (..))
@@ -58,22 +58,6 @@ runRewrite rewriter (Optic optic) config = run optic
       PrismJust -> rewriteJust suffix input st
       Ix i -> rewriteIndex i suffix input st
       Filter o t -> rewriteFilter o t suffix input st
-
-    -- \| Test a @filter@ gate, returning whether it is kept plus
-    -- replay/after cursors.
-    gateTake ::
-      Fix OpticF ->
-      Transformation ->
-      Cursor ->
-      ExceptT HQError IO (Bool, JSONEvent, Cursor, Cursor)
-    gateTake o t cur = do
-      (v, events, afterValue) <- materializeValue cur
-      keep <- gateValue o t v
-      case events of
-        [] -> throwError $ HQRunnerError EmptyValue
-        (firstEv : _) ->
-          let Cursor _ dec txt = afterValue
-           in pure (keep, firstEv, Cursor events dec txt, afterValue)
 
     -- \| Split a member-value suffix with a leading @filter@ step into
     -- its gate and remainder, so a kept value deleted as a whole drops
