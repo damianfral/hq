@@ -39,7 +39,7 @@ opticReader :: ReadM Optic
 opticReader = eitherReader $ first errorBundlePretty . parseOptic . toText
 
 valueReader :: ReadM Value
-valueReader = eitherReader $ first errorBundlePretty . parseValue . toText
+valueReader = eitherReader $ parseValue . toText
 
 transformationReader :: ReadM Transformation
 transformationReader =

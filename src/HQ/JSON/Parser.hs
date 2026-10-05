@@ -6,22 +6,21 @@
 module HQ.JSON.Parser where
 
 import Data.Aeson (Value (..))
-import Data.Aeson.Key (fromText)
-import Data.Char (digitToInt)
+import Data.Aeson.Decoding (eitherDecodeStrictText, toEitherValue)
+import Data.Aeson.Decoding.Text (textToTokens)
 import Data.Scientific (Scientific)
-import qualified Data.Vector as V
 import qualified HQ.JSON.Decoder as Decoder
 import HQ.JSON.Event (JSONEvent (..))
-import HQ.Parser (Parser, braces, brackets, colon, commaSep, lexeme, parseTop, sc, symbol)
+import HQ.Parser (Parser, lexeme)
 import Relude hiding (Compose, id, many, some)
 import Streaming (Of (..))
 import qualified Streaming.Prelude as S
-import Text.Megaparsec
-import Text.Megaparsec.Char (char, hexDigitChar)
-import Text.Megaparsec.Char.Lexer (scientific, signed)
+import Text.Megaparsec (getInput, setInput)
 
-parseValue :: Text -> Either (ParseErrorBundle Text Void) Value
-parseValue = parseTop "value" jsonValueParser
+-- | Parse a whole JSON value (CLI @VALUE@ arguments, tests).
+-- Single validation via aeson.
+parseValue :: Text -> Either String Value
+parseValue = eitherDecodeStrictText
 
 -- | Parse a value into ordered events ('Value' forgets member order).
 -- Single streaming pass (no megaparsec pre-validation).
@@ -37,72 +36,16 @@ decodeValueEvents input = runIdentity $ do
     _ :> Left err -> Left err
     events :> Right () -> Right events
 
+-- | Parse one JSON literal embedded in the DSL (e.g. after @const@,
+-- @==@, @+ N@, @++ "s"@, @concat [...]@) directly with aeson.
+-- 'textToTokens' lexes the prefix and 'toEitherValue' returns the
+-- remainder, so no custom string/bracket scanner is needed.
 jsonValueParser :: Parser Value
-jsonValueParser = nullParser <|> boolParser <|> numberParser <|> stringParser <|> arrayParser <|> objectParser
-
-nullParser :: Parser Value
-nullParser = symbol "null" $> Null
-
-boolParser :: Parser Value
-boolParser = (symbol "true" $> Bool True) <|> (symbol "false" $> Bool False)
-
-numberParser :: Parser Value
-numberParser = lexeme $ Number <$> signed sc scientific
-
--- | Raw string contents without quotes; full escape table, fails on
--- anything else.
-jsonStringContent :: Parser Text
-jsonStringContent = toText <$> many (escapedChar <|> nonEscapeChar)
-  where
-    escapedChar = char '\\' *> escapeCode
-    escapeCode =
-      choice
-        [ char '"' $> '"',
-          char '\\' $> '\\',
-          char '/' $> '/',
-          char 'b' $> '\b',
-          char 'f' $> '\f',
-          char 'n' $> '\n',
-          char 'r' $> '\r',
-          char 't' $> '\t',
-          char 'u' *> unicodeEscape
-        ]
-    unicodeEscape = do
-      high <- hex4
-      if Decoder.isHighSurrogate high
-        then do
-          low <- chunk "\\u" *> hex4
-          if Decoder.isLowSurrogate low
-            then pure (chr (0x10000 + ((high - 0xD800) * 1024) + (low - 0xDC00)))
-            else fail "invalid surrogate pair"
-        else
-          if Decoder.isLowSurrogate high
-            then fail "invalid surrogate pair"
-            else pure (chr high)
-    hex4 = foldl' (\v c -> v * 16 + digitToInt c) 0 <$> count 4 hexDigitChar
-    nonEscapeChar = satisfy (\c -> c /= '"' && c /= '\\' && c >= '\x20')
-
-stringParser :: Parser Value
-stringParser = lexeme $ do
-  void $ char '"'
-  chars <- jsonStringContent
-  void $ char '"'
-  pure $ String chars
-
-arrayParser :: Parser Value
-arrayParser = Array . fromList <$> brackets (commaSep jsonValueParser)
-
-objectParser :: Parser Value
-objectParser = do
-  pairs <- braces (commaSep objectField)
-  pure $ Object $ fromList [(fromText k, v) | (k, v) <- pairs]
-
-objectField :: Parser (Text, Value)
-objectField = do
-  key <- lexeme $ char '"' *> jsonStringContent <* char '"'
-  colon
-  val <- jsonValueParser
-  pure (key, val)
+jsonValueParser = lexeme $ do
+  input <- getInput
+  case toEitherValue (textToTokens input) of
+    Left err -> fail ("invalid JSON value: " <> err)
+    Right (v, rest) -> setInput rest >> pure v
 
 jsonTyped :: Text -> (Value -> Maybe a) -> Parser a
 jsonTyped msg project = do
@@ -118,10 +61,10 @@ jsonNumber = jsonTyped "expected a JSON number" $ \case
 
 jsonText :: Parser Text
 jsonText = jsonTyped "expected a JSON string" $ \case
-  String t -> Just t
+  String s -> Just s
   _ -> Nothing
 
 jsonArray :: Parser [Value]
 jsonArray = jsonTyped "expected a JSON array" $ \case
-  Array items -> Just (V.toList items)
+  Array items -> Just (toList items)
   _ -> Nothing
