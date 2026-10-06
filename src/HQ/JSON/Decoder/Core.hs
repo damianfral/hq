@@ -179,7 +179,7 @@ isLowSurrogate x = x >= 0xDC00 && x <= 0xDFFF
 -- Shared string tables (single source for decoder + skip/collect)
 --------------------------------------------------------------------------------
 
--- | Verbatim string bytes; shared so decode, skip and collect split identically.
+-- | Verbatim string bytes; shared so decoding, skipping and collection split identically.
 isStringChar :: Char -> Bool
 isStringChar c = c /= '"' && c /= '\\' && ord c >= 0x20
 

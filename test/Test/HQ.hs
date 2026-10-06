@@ -15,19 +15,13 @@ module Test.HQ
 where
 
 import qualified Data.Text as T
-import HQ.JSON.Decoder (DecodeError (..), DecoderResult (..), DecoderState (..), decode, finish, step)
+import HQ.JSON.Decoder (DecodeError (..), DecoderResult (..), DecoderState (..), decodeTexts, finish, step)
 import HQ.JSON.Event (JSONEvent)
 import Relude hiding (Compose, id)
-import Streaming (Of (..))
-import qualified Streaming.Prelude as S
 
 -- | Stream text chunks through the decode function.
 decodeChunks :: [Text] -> Either DecodeError [JSONEvent]
-decodeChunks chunks = runIdentity $ do
-  result <- S.toList (decode (S.each chunks))
-  case result of
-    _ :> Left err -> pure (Left err)
-    events :> Right _ -> pure (Right events)
+decodeChunks = decodeTexts
 
 -- | Helper to run a streaming decode and check the result.
 runStreaming :: [Text] -> [JSONEvent]

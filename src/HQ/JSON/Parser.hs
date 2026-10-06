@@ -13,8 +13,6 @@ import qualified HQ.JSON.Decoder as Decoder
 import HQ.JSON.Event (JSONEvent (..))
 import HQ.Parser (Parser, lexeme)
 import Relude hiding (Compose, id, many, some)
-import Streaming (Of (..))
-import qualified Streaming.Prelude as S
 import Text.Megaparsec (getInput, setInput)
 
 -- | Parse a whole JSON value (CLI @VALUE@ arguments, tests).
@@ -30,11 +28,7 @@ parseValueEvents input = case decodeValueEvents input of
   Right events -> Right events
 
 decodeValueEvents :: Text -> Either Decoder.DecodeError [JSONEvent]
-decodeValueEvents input = runIdentity $ do
-  result <- S.toList (Decoder.decode (S.yield input))
-  pure $ case result of
-    _ :> Left err -> Left err
-    events :> Right () -> Right events
+decodeValueEvents input = Decoder.decodeTexts [input]
 
 -- | Parse one JSON literal embedded in the DSL (e.g. after @const@,
 -- @==@, @+ N@, @++ "s"@, @concat [...]@) directly with aeson.

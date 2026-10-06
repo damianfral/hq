@@ -34,7 +34,7 @@ hasPending dec = not (T.null (decoderInput dec))
 
 -- | Shared 'finish' decision for take loops; throws on all non-emit
 -- outcomes, returning the final event otherwise. Unifies the two
--- @finishTake@ copies plus @drainAtEnd@ semantics.
+-- @finishTake@ copies plus terminal @finish@ policy.
 finishTakeEvent :: DecoderState -> ExceptT HQError IO (JSONEvent, DecoderState)
 finishTakeEvent dec = case finish dec of
   Left UnexpectedEnd
@@ -118,9 +118,9 @@ takeContainerFrom closing = go
           Right (Emit event dec') -> emit event $ Cursor [] dec' rest
           Right (NeedInput dec') -> stepMore dec' rest
           Right (Done _) -> throwError $ HQRunnerError UnexpectedEndOfInput
-    -- Mirror 'drainAtEnd': a value completed exactly at end of input
-    -- still yields its final event; anything else ends the take the
-    -- same way the event-stream takes did.
+    -- Mirror terminal 'finish' policy: a value completed exactly at end
+    -- of input still yields its final event; anything else ends the
+    -- take the same way the event-stream takes did.
     finishTake dec = do
       (event, dec') <- lift (finishTakeEvent dec)
       emit event $ Cursor [] dec' (pure ())
@@ -370,7 +370,7 @@ takeContainerChunks config closing c st0 = go c st0 mempty 0
              in emit event newCursor st pend pendSize
           Right (NeedInput dec') -> stepMore dec' rest st pend pendSize
           Right (Done _) -> throwError $ HQRunnerError UnexpectedEndOfInput
-    -- Mirror 'drainAtEnd', emitting the final event as a chunk.
+    -- Mirror terminal 'finish' policy, emitting the final event as a chunk.
     finishTake ::
       DecoderState ->
       EncoderState ->

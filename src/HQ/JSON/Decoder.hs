@@ -12,7 +12,7 @@ module HQ.JSON.Decoder
     feed,
     finish,
     step,
-    decode,
+    decodeTexts,
     pullEvent,
   )
 where
@@ -28,7 +28,6 @@ import HQ.JSON.Decoder.Number
 import HQ.JSON.Decoder.String
 import HQ.JSON.Event (JSONEvent (..))
 import Relude hiding (Compose, id, many, some, state)
-import Streaming (Of, Stream)
 import qualified Streaming.Prelude as S
 
 initialDecoder :: DecoderState
@@ -168,85 +167,40 @@ isRootDone :: DecoderState -> Bool
 isRootDone decoder =
   decoderPhase decoder == DecoderPhaseFinished && null (decoderStack decoder)
 
-decode ::
-  (Monad m) =>
-  Stream (Of Text) m r -> Stream (Of JSONEvent) m (Either DecodeError r)
-decode = runDecoder initialDecoder
-
-runDecoder ::
-  (Monad m) =>
-  DecoderState ->
-  Stream (Of Text) m r ->
-  Stream (Of JSONEvent) m (Either DecodeError r)
-runDecoder decoder input = do
-  result <- lift $ S.next input
-  case result of
-    Left r
-      -- Pending input takes precedence over end of stream: step it
-      -- first (mirrors drainCollect's rule). Only a truly drained
-      -- decoder may end or finalize.
-      | not (T.null (decoderInput decoder)) -> drainStep (step decoder) (pure r)
-      | isRootDone decoder || decoder == initialDecoder ->
-          pure (Right r)
-      | otherwise -> drainAtEnd decoder r
-    Right (chunk, rest) -> case feed chunk decoder of
-      Left err -> pure (Left err)
-      Right dr -> drain dr rest
-
-drain ::
-  (Monad m) =>
-  DecoderResult ->
-  Stream (Of Text) m r ->
-  Stream (Of JSONEvent) m (Either DecodeError r)
-drain (Emit event nextDecoder) rest =
-  S.yield event >> drainStep (step nextDecoder) rest
-drain (NeedInput nextDecoder) rest
-  -- Pending input takes precedence over pulling more text.
-  | not (T.null (decoderInput nextDecoder)) = drainStep (step nextDecoder) rest
-  | isRootDone nextDecoder =
-      drainTrailing nextDecoder rest
-  | otherwise = runDecoder nextDecoder rest
-drain (Done nextDecoder) rest = drainTrailing nextDecoder rest
-
-drainStep ::
-  (Monad m) =>
-  Either DecodeError DecoderResult ->
-  Stream (Of Text) m r ->
-  Stream (Of JSONEvent) m (Either DecodeError r)
-drainStep (Left err) _ = pure (Left err)
-drainStep (Right result) rest = drain result rest
-
-drainTrailing ::
-  (Monad m) =>
-  DecoderState ->
-  Stream (Of Text) m r ->
-  Stream (Of JSONEvent) m (Either DecodeError r)
-drainTrailing nextDecoder rest = do
-  more <- lift $ S.next rest
-  case more of
-    Left r -> drainAtEnd nextDecoder r
-    Right (chunk, rest')
-      | isRootDone nextDecoder ->
+-- | Decode complete text chunks to events (single-shot list driver for
+-- embedded literals and tests). Steps 'step' directly and finalizes
+-- with 'finish', mirroring 'pullEvent' terminal policy: pending input
+-- always takes precedence over pulling more chunks.
+decodeTexts :: [Text] -> Either DecodeError [JSONEvent]
+decodeTexts = go initialDecoder
+  where
+    go dec [] = atEnd dec
+    go dec (chunk : rest) = case feed chunk dec of
+      Left err -> Left err
+      Right res -> drain res rest
+    drain (Emit event dec') rest = (event :) <$> stepped dec' rest
+    drain (NeedInput dec') rest
+      | not (T.null (decoderInput dec')) = stepped dec' rest
+      | isRootDone dec' = trailing dec' rest
+      | otherwise = go dec' rest
+    drain (Done dec') rest = trailing dec' rest
+    stepped dec' rest = case step dec' of
+      Left err -> Left err
+      Right res -> drain res rest
+    trailing dec' [] = atEnd dec'
+    trailing dec' (chunk : rest)
+      | isRootDone dec' =
           if T.all isWhitespace chunk
-            then drainTrailing nextDecoder rest'
-            else pure (Left TrailingInput)
-      | otherwise -> pure (Left TrailingInput)
-
-drainAtEnd ::
-  (Monad m) => DecoderState -> r -> Stream (Of JSONEvent) m (Either DecodeError r)
-drainAtEnd decoder r = case finish decoder of
-  Left UnexpectedEnd
-    | getAll
-        $ foldMap
-          All
-          [ decoderPhase decoder == DecoderPhaseValue,
-            null $ decoderStack decoder
-          ] ->
-        pure (Right r)
-  Left err -> pure (Left err)
-  Right (Done _) -> pure (Right r)
-  Right (NeedInput _) -> pure (Left UnexpectedEnd)
-  Right (Emit event nextDecoder) -> S.yield event >> drainAtEnd nextDecoder r
+            then trailing dec' rest
+            else Left TrailingInput
+      | otherwise = Left TrailingInput
+    atEnd dec' = case finish dec' of
+      Left UnexpectedEnd
+        | decoderPhase dec' == DecoderPhaseValue && null (decoderStack dec') -> Right []
+      Left err -> Left err
+      Right (Done _) -> Right []
+      Right (NeedInput _) -> Left UnexpectedEnd
+      Right (Emit event dec'') -> (event :) <$> atEnd dec''
 
 -- | Pull a single event; bulk loops drive 'step' directly.
 pullEvent :: DecoderState -> StreamIO Text () -> ExceptT HQError IO Next
