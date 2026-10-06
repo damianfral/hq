@@ -1,7 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE StrictData #-}
 {-# LANGUAGE NoImplicitPrelude #-}
-{-# OPTIONS_GHC -Wno-orphans #-}
 
 module HQ.Optic.Parser where
 
@@ -13,7 +12,6 @@ import Relude hiding (Compose, filter, id, many, some)
 import Text.Megaparsec
 import Text.Megaparsec.Char (alphaNumChar, char)
 import Text.Megaparsec.Char.Lexer (decimal)
-import Prelude (Read (..))
 
 parseOptic :: Text -> Either (ParseErrorBundle Text Void) Optic
 parseOptic = parseTop "optic" opticParser
@@ -86,8 +84,3 @@ prismNameParser =
       keyword "Object" _Object,
       keyword "Just" _Just
     ]
-
-instance Read Optic where
-  readsPrec _ str = case parseOptic $ fromString str of
-    Left _ -> []
-    Right v -> [(v, "")]

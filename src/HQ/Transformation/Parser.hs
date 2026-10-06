@@ -5,8 +5,6 @@
 module HQ.Transformation.Parser where
 
 import Control.Monad.Combinators.Expr (Operator (..), makeExprParser)
-import Data.Aeson (Value (..))
-import Data.Scientific (Scientific)
 import HQ.JSON.Parser (jsonArray, jsonNumber, jsonText, jsonValueParser)
 import HQ.Parser (Parser, keyword, parens, parseTop, symbol)
 import HQ.Transformation
@@ -82,22 +80,22 @@ equalParser = do
   equal <$> jsonValueParser
 
 addParser :: Parser Transformation
-addParser = add <$> (symbol "+" *> numberOperand)
+addParser = prefixOp "+" jsonNumber add
 
 multiplyParser :: Parser Transformation
-multiplyParser = multiply <$> (symbol "*" *> numberOperand)
+multiplyParser = prefixOp "*" jsonNumber multiply
 
 subtractParser :: Parser Transformation
-subtractParser = subtract <$> (symbol "-" *> numberOperand)
+subtractParser = prefixOp "-" jsonNumber subtract
 
 divideParser :: Parser Transformation
-divideParser = divide <$> (symbol "/" *> numberOperand)
+divideParser = prefixOp "/" jsonNumber divide
 
 strConcatParser :: Parser Transformation
-strConcatParser = concatString <$> (symbol "++" *> textOperand)
+strConcatParser = prefixOp "++" jsonText concatString
 
 arrayConcatParser :: Parser Transformation
-arrayConcatParser = symbol "concat" *> (concatArray <$> arrayOperand)
+arrayConcatParser = prefixOp "concat" jsonArray concatArray
 
 trimParser :: Parser Transformation
 trimParser = keyword "trim" trim
@@ -106,34 +104,22 @@ notParser :: Parser Transformation
 notParser = keyword "not" not
 
 replaceParser :: Parser Transformation
-replaceParser = do
-  void $ symbol "replace"
-  replace <$> textOperand <*> textOperand
+replaceParser = replace <$> (symbol "replace" *> jsonText) <*> jsonText
 
 stripPrefixParser :: Parser Transformation
-stripPrefixParser = do
-  void $ symbol "stripPrefix"
-  stripPrefix <$> textOperand
+stripPrefixParser = prefixOp "stripPrefix" jsonText stripPrefix
 
 stripSuffixParser :: Parser Transformation
-stripSuffixParser = do
-  void $ symbol "stripSuffix"
-  stripSuffix <$> textOperand
+stripSuffixParser = prefixOp "stripSuffix" jsonText stripSuffix
 
 isPrefixOfParser :: Parser Transformation
-isPrefixOfParser = do
-  void $ symbol "isPrefixOf"
-  isPrefixOf <$> textOperand
+isPrefixOfParser = prefixOp "isPrefixOf" jsonText isPrefixOf
 
 isSuffixOfParser :: Parser Transformation
-isSuffixOfParser = do
-  void $ symbol "isSuffixOf"
-  isSuffixOf <$> textOperand
+isSuffixOfParser = prefixOp "isSuffixOf" jsonText isSuffixOf
 
 isInfixOfParser :: Parser Transformation
-isInfixOfParser = do
-  void $ symbol "isInfixOf"
-  isInfixOf <$> textOperand
+isInfixOfParser = prefixOp "isInfixOf" jsonText isInfixOf
 
 isEmptyParser :: Parser Transformation
 isEmptyParser = keyword "isEmpty" isEmpty
@@ -147,14 +133,7 @@ reverseParser = keyword "reverse" reverse
 uniqueParser :: Parser Transformation
 uniqueParser = keyword "unique" unique
 
--- | A JSON number literal, e.g. @1@ or @0.5@.
-numberOperand :: Parser Scientific
-numberOperand = jsonNumber
-
--- | A JSON string literal, e.g. @"hello"@.
-textOperand :: Parser Text
-textOperand = jsonText
-
--- | A JSON array literal, e.g. @[1, "two"]@.
-arrayOperand :: Parser [Value]
-arrayOperand = jsonArray
+-- | Parse @OP operand@ and apply the constructor: shared shape of the
+-- symbolic and single-operand parsers.
+prefixOp :: Text -> Parser a -> (a -> Transformation) -> Parser Transformation
+prefixOp op operand constr = constr <$> (symbol op *> operand)

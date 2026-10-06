@@ -8,8 +8,7 @@ import Data.Aeson (Value (..))
 import HQ.Optic
 import HQ.Optic.AST (OpticAST (..), buildOpticAST)
 import HQ.Optic.OpticType (OpticType (..))
-import HQ.Optic.Parser ()
--- Brings the orphan 'Read Optic' instance into scope.
+import HQ.Optic.Parser (parseOptic)
 import HQ.Transformation (equal, not)
 import Relude hiding (Compose, filter, id, not)
 import Test.Syd
@@ -19,6 +18,13 @@ opticTypeOf :: Optic -> OpticType
 opticTypeOf optic = t
   where
     OpticAST (t :< _) = buildOpticAST optic
+
+-- | Parse 'show' output back (replaces the former 'Read Optic' orphan,
+-- which lived in the library only for this check).
+readOptic :: String -> Maybe Optic
+readOptic str = case parseOptic (fromString str) of
+  Left _ -> Nothing
+  Right v -> Just v
 
 spec :: Spec
 spec = describe "HQ.Optic" $ do
@@ -42,7 +48,7 @@ spec = describe "HQ.Optic" $ do
             filter (ix 0) not,
             filter (compose each (ix 0)) (equal (Number 1))
           ]
-    forM_ optics $ \optic -> readMaybe (show optic) `shouldBe` Just optic
+    forM_ optics $ \optic -> readOptic (show optic) `shouldBe` Just optic
 
   it "ix equality compares indices" $ do
     ix 0 `shouldBe` ix 0
