@@ -6,7 +6,7 @@ module HQ.Runner.Cursor where
 
 import Control.Monad.Error.Class (MonadError (throwError))
 import HQ.Error (HQError (..))
-import HQ.JSON.Decoder (DecoderState (..), Next (..), StreamIO, finishValue, pullEvent)
+import HQ.JSON.Decoder (DecoderState (..), Next (..), StreamIO, finishValue, initialDecoder, pullEvent)
 import HQ.JSON.Decoder.Skip (skipContainerText, skipMemberValueText)
 import HQ.JSON.Encoder (ChunkStream, EncoderState)
 import HQ.JSON.Event (JSONEvent (..), matchingClose)
@@ -46,6 +46,22 @@ pullCursor (Cursor [] decoder text) = do
 -- | Push an event back for the continuation to see.
 pushCursor :: JSONEvent -> Cursor -> Cursor
 pushCursor event (Cursor buffered decoder text) = Cursor (event : buffered) decoder text
+
+-- | Poll for the next top-level document at the cursor. Resets a
+-- finished decoder over the remaining input, pulls one event and
+-- pushes it back for the query to consume; 'Nothing' at clean end of
+-- input (trailing whitespace included). Call between top-level values
+-- only, where the event buffer is empty and the decoder stack is
+-- balanced; anything else passes through for the query to handle
+-- exactly as a single-shot run would.
+nextDocument :: Cursor -> ExceptT HQError IO (Maybe Cursor)
+nextDocument cur@(Cursor buffered decoder text)
+  | not (null buffered) || not (null (decoderStack decoder)) = pure (Just cur)
+  | otherwise = do
+      pulled <- pullCursor (Cursor [] (initialDecoder {decoderInput = decoderInput decoder}) text)
+      case pulled of
+        Nothing -> pure Nothing
+        Just (event, rest) -> pure (Just (pushCursor event rest))
 
 -- | Pull one event inside an object body: 'Left' rest on 'JSONEndObject',
 -- 'Right' key and cursor after it on 'JSONObjectKey'. Throws

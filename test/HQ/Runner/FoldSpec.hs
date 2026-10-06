@@ -9,6 +9,7 @@ import HQ.JSON.Event (JSONEvent (..), valueToEvents)
 import HQ.JSON.Parser (parseValue)
 import HQ.Optic (Optic)
 import HQ.Optic.Parser (parseOptic)
+import HQ.Runner (foldDocuments)
 import HQ.Runner.Cursor (Cursor (..))
 import HQ.Runner.Fold (focusMany, runFold, runPreview)
 import HQ.Transformation.Error (renderTransformationError)
@@ -31,6 +32,7 @@ spec = describe "HQ.Runner.Fold" $ do
   idSpec
   previewSpec
   chunkedFoldSpec
+  multiDocumentSpec
 
 -- | Run a fold optic against a JSON text input and collect output events.
 --
@@ -543,3 +545,45 @@ malformedChunkCases =
     ("id", "[\"\\uD83D\"]"),
     ("id", "[\"\\uD83D\\uxyz\"]")
   ]
+
+-- | Run a fold optic over every top-level document across text chunks.
+runFoldDocumentsTest :: Optic -> [Text] -> IO (Either Text [JSONEvent])
+runFoldDocumentsTest optic chunks = do
+  result <- runExceptT $ S.toList_ $ foldDocuments optic cursor
+  pure (first renderHQError result)
+  where
+    textStream :: StreamIO Text ()
+    textStream = S.each chunks
+    cursor = Cursor [] initialDecoder textStream
+
+-- | Parse an optic string and run it over every top-level document.
+runQueryDocumentsTest :: Text -> [Text] -> IO (Either Text [JSONEvent])
+runQueryDocumentsTest opticStr chunks = case parseOptic opticStr of
+  Left err -> pure (Left (show err))
+  Right optic -> runFoldDocumentsTest optic chunks
+
+multiDocumentSpec :: Spec
+multiDocumentSpec = describe "multiple documents" $ do
+  it "folds the same field across documents" $ do
+    runQueryDocumentsTest "@a" ["{\"a\":1} {\"a\":2}"]
+      `shouldReturn` Right [JSONNumber 1, JSONNumber 2]
+
+  it "skips documents without a match" $ do
+    runQueryDocumentsTest "@a" ["{\"a\":1} {\"b\":2} [3]"]
+      `shouldReturn` Right [JSONNumber 1]
+
+  it "continues across chunk splits at document boundaries" $ do
+    runQueryDocumentsTest "@a" ["{\"a\":1} {\"a", "\":2}"]
+      `shouldReturn` Right [JSONNumber 1, JSONNumber 2]
+
+  it "fails on trailing garbage" $ do
+    runQueryDocumentsTest "@a" ["{\"a\":1} garbage"]
+      `shouldReturn` Left "UnexpectedChar 'g'"
+
+  it "yields nothing for empty and whitespace-only input" $ do
+    runQueryDocumentsTest "@a" [] `shouldReturn` Right []
+    runQueryDocumentsTest "@a" ["  \n "] `shouldReturn` Right []
+
+  it "previews only the first document" $ do
+    runQueryPreviewTest "@a" "{\"a\":1} {\"a\":2}"
+      `shouldReturn` Right [JSONNumber 1]

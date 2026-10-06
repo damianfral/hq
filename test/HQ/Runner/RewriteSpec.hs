@@ -11,6 +11,7 @@ import HQ.JSON.Encoder
 import HQ.JSON.Event (JSONEvent (..), eventsToValue)
 import HQ.JSON.Parser (parseValueEvents)
 import HQ.Optic.Parser (parseOptic)
+import HQ.Runner (rewriteDocuments)
 import HQ.Runner.Cursor (Cursor (..), RewriteContinuation)
 import HQ.Runner.Rewrite (runDelete, runOver)
 import HQ.Transformation
@@ -30,6 +31,7 @@ spec = describe "HQ.Runner.Rewrite" $ do
   ixRewriteSpec
   filterRewriteSpec
   chunkedRewriteSpec
+  multiDocumentRewriteSpec
 
 -- | Encoder config for rewrite tests: pretty output, matching the
 -- production default.
@@ -801,3 +803,40 @@ deleteChunkCases =
     ("values", "{\"a\":1,\"b\":2}"),
     ("each . filter @age == 30", "[{\"age\":30},{\"age\":20}]")
   ]
+
+-- | Run a rewrite continuation over every top-level document and
+-- collect the raw output bytes. Multi-document output is not a single
+-- value, so unlike 'runRewriteChunks' this does not reparse to events.
+runRewriteDocumentsTest :: RewriteContinuation -> [Text] -> IO (Either Text Text)
+runRewriteDocumentsTest run chunks = do
+  result <- runExceptT $ do
+    (outChunks :> _) <- S.toList (rewriteDocuments run cursor initialEncoderState)
+    (byteChunks :> _) <- S.toList (encodeChunks 65536 (S.each outChunks))
+    pure (decodeUtf8 (mconcat byteChunks))
+  pure (first renderHQError result)
+  where
+    textStream :: StreamIO Text ()
+    textStream = S.each chunks
+    cursor = Cursor [] initialDecoder textStream
+
+multiDocumentRewriteSpec :: Spec
+multiDocumentRewriteSpec = describe "multiple documents" $ do
+  it "rewrites the same field across documents" $ do
+    Right optic <- pure (parseOptic "@a")
+    runRewriteDocumentsTest (rewriteDocuments (runOver optic (Add 1) testConfig)) ["{\"a\":1} {\"a\":2}"]
+      `shouldReturn` Right "{\n  \"a\": 2\n}\n{\n  \"a\": 3\n}\n"
+
+  it "deletes across documents" $ do
+    Right optic <- pure (parseOptic "@x")
+    runRewriteDocumentsTest (rewriteDocuments (runDelete optic testConfig)) ["{\"a\":1,\"x\":0} {\"b\":2}"]
+      `shouldReturn` Right "{\n  \"a\": 1\n}\n{\n  \"b\": 2\n}\n"
+
+  it "continues across chunk splits at document boundaries" $ do
+    Right optic <- pure (parseOptic "@a")
+    runRewriteDocumentsTest (rewriteDocuments (runOver optic (Add 1) testConfig)) ["{\"a\":1} {\"a", "\":2}"]
+      `shouldReturn` Right "{\n  \"a\": 2\n}\n{\n  \"a\": 3\n}\n"
+
+  it "fails on trailing garbage" $ do
+    Right optic <- pure (parseOptic "@a")
+    runRewriteDocumentsTest (rewriteDocuments (runOver optic (Add 1) testConfig)) ["{\"a\":0} garbage"]
+      `shouldReturn` Left "UnexpectedChar 'g'"

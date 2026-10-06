@@ -20,6 +20,11 @@ when a focused value rejects the transformation (adding to a string,
 for example). Deleting a missing field, or an empty focus, leaves the
 input unchanged.
 
+Input may hold any number of whitespace-separated JSON values
+(JSON-lines style); every command except `preview` processes each
+top-level value in turn. Trailing bytes that do not parse as JSON are
+an error.
+
 ## Optic language
 
 Optics select and traverse JSON values. Optics are composed with `.`;

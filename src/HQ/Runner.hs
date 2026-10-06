@@ -10,6 +10,8 @@ module HQ.Runner
     module HQ.Runner.Rewrite,
     runRunnerIOWith,
     jsonRunner,
+    foldDocuments,
+    rewriteDocuments,
   )
 where
 
@@ -19,7 +21,8 @@ import qualified Data.ByteString.Lazy as LBS
 import Data.Text.IO (hPutStrLn)
 import HQ.Error (HQError (..), renderHQError)
 import HQ.JSON.Decoder (StreamIO, initialDecoder)
-import HQ.JSON.Encoder (BSStream, EncoderConfig (..), encode, encodeChunks, initialEncoderState)
+import HQ.JSON.Encoder (BSStream, ChunkStream, EncoderConfig (..), EncoderState, encode, encodeChunks, initialEncoderState)
+import HQ.Optic (Optic)
 import HQ.Query (Query (..))
 import HQ.Runner.Cursor
 import HQ.Runner.Error (RunnerError (..))
@@ -91,15 +94,38 @@ jsonRunner = do
   pure $ case query of
     Preview optic -> void $ do
       encode config 65536 (takeFirstValue (runFold optic cursor))
-    Fold optic -> void $ encode config 65536 (runFold optic cursor)
+    Fold optic -> void $ encode config 65536 (foldDocuments optic cursor)
     Over optic transformation -> void $ do
       encodeChunks 65536 $ do
         let transform = RewriteTransform transformation
-        runRewrite transform optic config cursor initialEncoderState
+        rewriteDocuments (runRewrite transform optic config) cursor initialEncoderState
     Delete optic -> do
-      let rewriting =
-            runRewrite RewriteDelete optic config cursor initialEncoderState
-      void $ encodeChunks 65536 rewriting
+      let rewriting = runRewrite RewriteDelete optic config
+      void $ encodeChunks 65536 (rewriteDocuments rewriting cursor initialEncoderState)
+
+-- | Run a fold query over every top-level document in turn, yielding
+-- each document's focused values downstream.
+foldDocuments :: Optic -> Cursor -> EventStream Cursor
+foldDocuments optic cur = do
+  next <- lift (nextDocument cur)
+  case next of
+    Nothing -> pure cur
+    Just cur' -> runFold optic cur' >>= foldDocuments optic
+
+-- | Run a rewrite query over every top-level document in turn,
+-- threading the encoder state (empty at document boundaries).
+rewriteDocuments ::
+  RewriteContinuation ->
+  Cursor ->
+  EncoderState ->
+  ChunkStream (ExceptT HQError IO) (EncoderState, Cursor)
+rewriteDocuments action cur st = do
+  next <- lift (nextDocument cur)
+  case next of
+    Nothing -> pure (st, cur)
+    Just cur' -> do
+      (st', cur'') <- action cur' st
+      rewriteDocuments action cur'' st'
 
 decodeUtf8Stream :: StreamIO ByteString () -> StreamIO Text ()
 decodeUtf8Stream = go mempty
