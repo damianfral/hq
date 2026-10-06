@@ -3,6 +3,7 @@
 
 module HQ.Runner.FoldSpec (spec) where
 
+import HQ.Early (runEarly)
 import HQ.Error (renderHQError)
 import HQ.JSON.Decoder (StreamIO, initialDecoder)
 import HQ.JSON.Event (JSONEvent (..), valueToEvents)
@@ -41,7 +42,7 @@ spec = describe "HQ.Runner.Fold" $ do
 -- streaming decoder and cursor use IO internally.
 runFoldTest :: Optic -> Text -> IO (Either Text [JSONEvent])
 runFoldTest optic input = do
-  result <- runExceptT $ S.toList_ $ runFold optic cursor
+  result <- runEarly (\early -> S.toList_ $ runFold early optic cursor)
   pure (first renderHQError result)
   where
     textStream :: StreamIO Text ()
@@ -58,7 +59,7 @@ runQueryTest opticStr jsonInput = case parseOptic opticStr of
 -- (at most one) output value's events.
 runPreviewTest :: Optic -> Text -> IO (Either Text [JSONEvent])
 runPreviewTest optic input = do
-  result <- runExceptT $ S.toList_ $ runPreview optic cursor
+  result <- runEarly (\early -> S.toList_ $ runPreview early optic cursor)
   pure (first renderHQError result)
   where
     textStream :: StreamIO Text ()
@@ -74,7 +75,7 @@ runQueryPreviewTest opticStr jsonInput = case parseOptic opticStr of
 -- | Run a fold optic against chunked JSON text.
 runFoldChunks :: Optic -> [Text] -> IO (Either Text [JSONEvent])
 runFoldChunks optic chunks = do
-  result <- runExceptT $ S.toList_ $ runFold optic cursor
+  result <- runEarly (\early -> S.toList_ $ runFold early optic cursor)
   pure (first renderHQError result)
   where
     textStream :: StreamIO Text ()
@@ -84,7 +85,7 @@ runFoldChunks optic chunks = do
 -- | Run a preview optic against chunked JSON text.
 runPreviewChunks :: Optic -> [Text] -> IO (Either Text [JSONEvent])
 runPreviewChunks optic chunks = do
-  result <- runExceptT $ S.toList_ $ runPreview optic cursor
+  result <- runEarly (\early -> S.toList_ $ runPreview early optic cursor)
   pure (first renderHQError result)
   where
     textStream :: StreamIO Text ()
@@ -549,7 +550,7 @@ malformedChunkCases =
 -- | Run a fold optic over every top-level document across text chunks.
 runFoldDocumentsTest :: Optic -> [Text] -> IO (Either Text [JSONEvent])
 runFoldDocumentsTest optic chunks = do
-  result <- runExceptT $ S.toList_ $ foldDocuments optic cursor
+  result <- runEarly (\early -> S.toList_ $ foldDocuments early optic cursor)
   pure (first renderHQError result)
   where
     textStream :: StreamIO Text ()

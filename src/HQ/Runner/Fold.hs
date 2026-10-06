@@ -3,11 +3,11 @@
 
 module HQ.Runner.Fold where
 
-import Control.Monad.Except (MonadError (..))
 import Data.Aeson (Value (..))
 import qualified Data.Aeson.Key as Key
 import qualified Data.Aeson.KeyMap as KeyMap
 import qualified Data.Vector as Vector
+import HQ.Early (Early, leave, orLeave)
 import HQ.Error (HQError (..))
 import HQ.JSON.Decoder (initialDecoder)
 import HQ.JSON.Event
@@ -25,49 +25,50 @@ import qualified Streaming.Prelude as S
 -- returning the value, its events and the cursor after it.
 -- Shared by folding and rewriting so @filter@ gates and @over@
 -- replacements agree on error mapping.
-materializeValue :: Cursor -> ExceptT HQError IO (Value, [JSONEvent], Cursor)
-materializeValue cur = do
-  events :> afterValue <- S.toList (takeValue cur)
-  v <- hoistEither $ first HQRunnerError $ eventsToValue events
+materializeValue :: Early HQError -> Cursor -> IO (Value, [JSONEvent], Cursor)
+materializeValue early cur = do
+  events :> afterValue <- S.toList (takeValue early cur)
+  v <- orLeave early $ first HQRunnerError $ eventsToValue events
   case events of
-    [] -> throwError $ HQRunnerError EmptyValue
+    [] -> leave early $ HQRunnerError EmptyValue
     _ -> pure (v, events, afterValue)
 
 -- | Test a @filter@ gate, mapping failures to 'HQError'.
 -- Shared by 'runFold' and 'runRewrite'.
-gateValue :: Optic -> Transformation -> Value -> ExceptT HQError IO Bool
+gateValue :: Optic -> Transformation -> Value -> Either HQError Bool
 gateValue o t v =
-  hoistEither $ first HQTransformationError $ evalFilterGate o t v
+  first HQTransformationError $ evalFilterGate o t v
 
 -- | Test a @filter@ gate on a streamed value, returning whether it is
 -- kept plus replay/after cursors. Shared by 'runFold' and 'runRewrite'
 -- so both agree on gating and cursor rebuild.
 gateTake ::
+  Early HQError ->
   Optic ->
   Transformation ->
   Cursor ->
-  ExceptT HQError IO (Bool, JSONEvent, Cursor, Cursor)
-gateTake o t cur = do
-  (v, events, afterValue) <- materializeValue cur
-  keep <- gateValue o t v
+  IO (Bool, JSONEvent, Cursor, Cursor)
+gateTake early o t cur = do
+  (v, events, afterValue) <- materializeValue early cur
+  keep <- orLeave early (gateValue o t v)
   case events of
-    [] -> throwError $ HQRunnerError EmptyValue
+    [] -> leave early $ HQRunnerError EmptyValue
     (firstEv : _) ->
       let Cursor _ dec txt = afterValue
        in pure (keep, firstEv, Cursor events dec txt, afterValue)
 
 -- | Apply a transformation, mapping failures to 'HQError'.
 -- Shared by rewriting (@over@) replacements.
-applyTransformation :: Transformation -> Value -> ExceptT HQError IO Value
+applyTransformation :: Transformation -> Value -> Either HQError Value
 applyTransformation t v =
-  hoistEither $ first HQTransformationError $ runTransformation t v
+  first HQTransformationError $ runTransformation t v
 
 -- | Interpret an optic against the JSON value at the cursor.
 --
 -- The continuation receives the cursor positioned immediately after
 -- the value currently being interpreted.
-runFold :: Optic -> Continuation
-runFold optic = run optic takeValue
+runFold :: Early HQError -> Optic -> Continuation
+runFold early optic = run optic (takeValue early)
   where
     run :: Optic -> Continuation -> Continuation
     run opticF k input = case opticF of
@@ -84,20 +85,20 @@ runFold optic = run optic takeValue
 
     runField :: Text -> Continuation -> Continuation
     runField name k input =
-      onEventOrEnd input $ \case
+      onEventOrEnd early input $ \case
         (JSONBeginObject, rest) -> findField name k rest
-        (event, rest) -> skipValue (pushCursor event rest)
+        (event, rest) -> skipValue early (pushCursor event rest)
 
     findField :: Text -> Continuation -> Continuation
     findField name k = go
       where
         go stream = do
-          step <- lift (expectObjectStep stream)
+          step <- lift (expectObjectStep early stream)
           case step of
             Left rest -> pure rest
             Right (key, rest)
-              | key == name -> k rest >>= skipRestOfObject
-              | otherwise -> skipMemberValue rest >>= go
+              | key == name -> k rest >>= skipRestOfObject early
+              | otherwise -> skipMemberValue early rest >>= go
 
     ----------------------------------------------------------------
     -- Each
@@ -105,12 +106,12 @@ runFold optic = run optic takeValue
 
     runEach :: Continuation -> Continuation
     runEach k input =
-      onEventOrEnd input $ \case
+      onEventOrEnd early input $ \case
         (JSONBeginArray, rest) ->
-          traverseArray rest $ \(event, rest') -> k (pushCursor event rest')
+          traverseArray early rest $ \(event, rest') -> k (pushCursor event rest')
         (JSONBeginObject, rest) ->
-          traverseObject rest $ \(_, rest') -> k rest'
-        (event, rest) -> skipValue (pushCursor event rest)
+          traverseObject early rest $ \(_, rest') -> k rest'
+        (event, rest) -> skipValue early (pushCursor event rest)
 
     ----------------------------------------------------------------
     -- Keys: object keys as strings (objects only)
@@ -118,12 +119,12 @@ runFold optic = run optic takeValue
 
     runKeys :: Continuation -> Continuation
     runKeys k input =
-      onEventOrEnd input $ \case
+      onEventOrEnd early input $ \case
         (JSONBeginObject, rest) ->
-          traverseObject rest $ \(key, rest') -> do
+          traverseObject early rest $ \(key, rest') -> do
             _ <- k (Cursor [JSONString key] initialDecoder (pure ()))
-            skipMemberValue rest'
-        (event, rest) -> skipValue (pushCursor event rest)
+            skipMemberValue early rest'
+        (event, rest) -> skipValue early (pushCursor event rest)
 
     ----------------------------------------------------------------
     -- Values: object member values only (arrays focus on nothing)
@@ -131,10 +132,10 @@ runFold optic = run optic takeValue
 
     runValues :: Continuation -> Continuation
     runValues k input =
-      onEventOrEnd input $ \case
+      onEventOrEnd early input $ \case
         (JSONBeginObject, rest) ->
-          traverseObject rest $ \(_, rest') -> k rest'
-        (event, rest) -> skipValue (pushCursor event rest)
+          traverseObject early rest $ \(_, rest') -> k rest'
+        (event, rest) -> skipValue early (pushCursor event rest)
 
     ----------------------------------------------------------------
     -- Filter: keep the value when the predicate holds of the
@@ -143,8 +144,8 @@ runFold optic = run optic takeValue
 
     runFilter :: Optic -> Transformation -> Continuation -> Continuation
     runFilter o t k input =
-      onEventOrEnd input $ \(event, rest0) -> do
-        (keep, _, replay, rest) <- lift (gateTake o t (pushCursor event rest0))
+      onEventOrEnd early input $ \(event, rest0) -> do
+        (keep, _, replay, rest) <- lift (gateTake early o t (pushCursor event rest0))
         if keep
           then k replay
           else pure rest
@@ -155,10 +156,10 @@ runFold optic = run optic takeValue
 
     runScalar :: (JSONEvent -> Bool) -> Continuation -> Continuation
     runScalar predicate k input =
-      onEventOrEnd input $ \(event, rest) ->
+      onEventOrEnd early input $ \(event, rest) ->
         if predicate event
           then k (pushCursor event rest)
-          else skipValue (pushCursor event rest) -- not a match; consume anyway
+          else skipValue early (pushCursor event rest) -- not a match; consume anyway
 
     ----------------------------------------------------------------
     -- PrismJust
@@ -166,7 +167,7 @@ runFold optic = run optic takeValue
 
     runJust :: Continuation -> Continuation
     runJust k input =
-      onEventOrEnd input $ \case
+      onEventOrEnd early input $ \case
         (JSONNull, rest) -> pure rest
         (event, rest) -> k (pushCursor event rest)
 
@@ -176,19 +177,19 @@ runFold optic = run optic takeValue
 
     runIndex :: Int -> Continuation -> Continuation
     runIndex index k input =
-      onEventOrEnd input $ \case
+      onEventOrEnd early input $ \case
         (JSONBeginArray, rest) -> findIndex index rest
-        (event, rest) -> skipValue (pushCursor event rest)
+        (event, rest) -> skipValue early (pushCursor event rest)
       where
         findIndex n stream
-          | n < 0 = skipRestOfArray stream
+          | n < 0 = skipRestOfArray early stream
           | otherwise = do
-              step <- lift (expectArrayStep stream)
+              step <- lift (expectArrayStep early stream)
               case step of
                 Left rest -> pure rest
                 Right (event, rest) -> case n of
-                  0 -> k (pushCursor event rest) >>= skipRestOfArray
-                  _ -> skipValue (pushCursor event rest) >>= findIndex (n - 1)
+                  0 -> k (pushCursor event rest) >>= skipRestOfArray early
+                  _ -> skipValue early (pushCursor event rest) >>= findIndex (n - 1)
 
 --------------------------------------------------------------------------------
 -- Pure navigation: the same optic semantics over in-memory values.
@@ -290,7 +291,7 @@ matchIndex i v = case v of
 -- no further input is read from the source. This is library-level
 -- first-match semantics over any optic; the @preview@ CLI command
 -- narrows its input to at-most-one optics via 'typecheckQuery'.
-runPreview :: Optic -> Continuation
-runPreview optic input = do
-  takeFirstValue (runFold optic input)
+runPreview :: Early HQError -> Optic -> Continuation
+runPreview early optic input = do
+  takeFirstValue (runFold early optic input)
   pure input -- the after-cursor is meaningless for preview; nobody reads it

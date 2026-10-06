@@ -17,9 +17,9 @@ module HQ.JSON.Decoder
   )
 where
 
-import Control.Monad.Error.Class (MonadError (throwError))
 import Data.Char (isDigit)
 import qualified Data.Text as T
+import HQ.Early (Early, leave)
 import HQ.Error
 import HQ.JSON.Decoder.Core
 import HQ.JSON.Decoder.Error
@@ -203,19 +203,19 @@ decodeTexts = go initialDecoder
       Right (Emit event dec'') -> (event :) <$> atEnd dec''
 
 -- | Pull a single event; bulk loops drive 'step' directly.
-pullEvent :: DecoderState -> StreamIO Text () -> ExceptT HQError IO Next
-pullEvent decoder txtStream = case step decoder of
-  Left err -> throwError (HQDecodeError err)
+pullEvent :: Early HQError -> DecoderState -> StreamIO Text () -> IO Next
+pullEvent early decoder txtStream = case step decoder of
+  Left err -> leave early (HQDecodeError err)
   Right (Emit event dec') -> pure $ NextEvent event dec' txtStream
   Right (NeedInput dec') -> pullMore dec' txtStream
   Right (Done dec') -> endCheck dec' txtStream
   where
-    pullMore :: DecoderState -> StreamIO Text () -> ExceptT HQError IO Next
+    pullMore :: DecoderState -> StreamIO Text () -> IO Next
     pullMore dec txt
       -- Pending input takes precedence over pulling more text,
       -- mirroring drain: only a truly drained decoder may end.
       | not (T.null (decoderInput dec)) = case step dec of
-          Left err -> throwError (HQDecodeError err)
+          Left err -> leave early (HQDecodeError err)
           Right (Emit event dec') -> pure (NextEvent event dec' txt)
           Right (NeedInput dec') -> pullMore dec' txt
           Right (Done dec') -> endCheck dec' txt
@@ -226,11 +226,11 @@ pullEvent decoder txtStream = case step decoder of
               | isRootDone dec || dec == initialDecoder -> pure EndOfInput
               | otherwise -> finishEnd dec
             Right (chunk, rest) -> case feed chunk dec of
-              Left err -> throwError (HQDecodeError err)
+              Left err -> leave early (HQDecodeError err)
               Right (Emit event dec') -> pure (NextEvent event dec' rest)
               Right (NeedInput dec') -> pullMore dec' rest
               Right (Done dec') -> endCheck dec' rest
-    endCheck :: DecoderState -> StreamIO Text () -> ExceptT HQError IO Next
+    endCheck :: DecoderState -> StreamIO Text () -> IO Next
     endCheck dec txt = do
       result <- S.next txt
       case result of
@@ -239,14 +239,14 @@ pullEvent decoder txtStream = case step decoder of
           | isRootDone dec ->
               if T.all isWhitespace chunk
                 then endCheck dec rest
-                else throwError (HQDecodeError TrailingInput)
-          | otherwise -> throwError (HQDecodeError TrailingInput)
-    finishEnd :: DecoderState -> ExceptT HQError IO Next
+                else leave early (HQDecodeError TrailingInput)
+          | otherwise -> leave early (HQDecodeError TrailingInput)
+    finishEnd :: DecoderState -> IO Next
     finishEnd dec = case finish dec of
       Left UnexpectedEnd
         | decoderPhase dec == DecoderPhaseValue && null (decoderStack dec) ->
             pure EndOfInput
-      Left err -> throwError (HQDecodeError err)
+      Left err -> leave early (HQDecodeError err)
       Right (Done _) -> pure EndOfInput
-      Right (NeedInput _) -> throwError (HQDecodeError UnexpectedEnd)
+      Right (NeedInput _) -> leave early (HQDecodeError UnexpectedEnd)
       Right (Emit event dec') -> pure $ NextEvent event dec' $ pure ()

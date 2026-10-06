@@ -9,7 +9,6 @@ module HQ.JSON.Decoder.Core where
 
 import Data.Char (digitToInt, isHexDigit)
 import qualified Data.Text as T
-import HQ.Error (HQError)
 import HQ.JSON.Decoder.Error (DecodeError)
 import HQ.JSON.Event (JSONEvent (..))
 import Relude hiding (Compose, id, many, some, state)
@@ -214,5 +213,5 @@ accumulateHex value digits input =
 
 data Next = EndOfInput | NextEvent JSONEvent DecoderState (StreamIO Text ())
 
--- | Failable stream over 'ExceptT HQError IO'.
-type StreamIO s = Stream (Of s) (ExceptT HQError IO)
+-- | Stream over 'IO'. Failures abort via 'HQ.Early' exceptions.
+type StreamIO s = Stream (Of s) IO

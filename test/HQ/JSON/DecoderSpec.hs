@@ -4,6 +4,7 @@
 module HQ.JSON.DecoderSpec (spec) where
 
 import Data.Scientific (fromFloatDigits)
+import HQ.Early (runEarly)
 import HQ.JSON.Decoder
 import HQ.JSON.Event
 import Relude hiding (Compose, id)
@@ -1030,16 +1031,16 @@ adversarialSpec = describe "malformed input" $ do
 -- | Pull every event through pullEvent.
 pullAllChunks :: [Text] -> IO (Either Text [JSONEvent])
 pullAllChunks chunks = do
-  result <- runExceptT (collect initialDecoder stream)
+  result <- runEarly (\early -> collect early initialDecoder stream)
   pure (first renderHQError result)
   where
     stream :: StreamIO Text ()
     stream = S.each chunks
-    collect decoder text = do
-      pulled <- pullEvent decoder text
+    collect early decoder text = do
+      pulled <- pullEvent early decoder text
       case pulled of
         EndOfInput -> pure []
-        NextEvent event decoder' rest -> (event :) <$> collect decoder' rest
+        NextEvent event decoder' rest -> (event :) <$> collect early decoder' rest
 
 pullEventSpec :: Spec
 pullEventSpec = describe "pullEvent" $ do
