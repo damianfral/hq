@@ -18,11 +18,11 @@ import HQ.Optic (Optic)
 import HQ.Optic.Parser (parseOptic)
 import HQ.Query
 import HQ.Runner (jsonRunner, runRunnerIOWith)
-import HQ.Transformation (Transformation, constValue)
+import HQ.Transformation (Transformation (..))
 import HQ.Transformation.Parser (parseTransformation)
-import Options.Applicative
+import Options.Applicative hiding (Const)
 import Paths_hq (version)
-import Relude
+import Relude hiding (Const)
 import System.IO hiding (hPutStrLn, hSetBuffering)
 import Text.Megaparsec (errorBundlePretty)
 
@@ -50,7 +50,7 @@ queryParser =
   hsubparser
     $ command "fold" (info (Fold <$> opticArg) mempty)
     <> command "preview" (info (Preview <$> opticArg) mempty)
-    <> command "set" (info (Over <$> opticArg <*> (constValue <$> valueArg)) mempty)
+    <> command "set" (info (Over <$> opticArg <*> (Const <$> valueArg)) mempty)
     <> command "over" (info (Over <$> opticArg <*> transformationArg) mempty)
     <> command "delete" (info (Delete <$> opticArg) mempty)
   where

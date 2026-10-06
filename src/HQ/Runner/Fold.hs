@@ -7,12 +7,11 @@ import Control.Monad.Except (MonadError (..))
 import Data.Aeson (Value (..))
 import qualified Data.Aeson.Key as Key
 import qualified Data.Aeson.KeyMap as KeyMap
-import Data.Fix (Fix (..))
 import qualified Data.Vector as Vector
 import HQ.Error (HQError (..))
 import HQ.JSON.Decoder (initialDecoder)
 import HQ.JSON.Event
-import HQ.Optic (Optic (..), OpticF (..), PrismKind, prismPredicate)
+import HQ.Optic (Optic (..), PrismKind, prismPredicate)
 import HQ.Runner.Cursor (Continuation, Cursor (..), expectArrayStep, expectObjectStep, onEventOrEnd, pushCursor, skipMemberValue, skipRestOfArray, skipRestOfObject, skipValue, traverseArray, traverseObject)
 import HQ.Runner.Error (RunnerError (..))
 import HQ.Runner.Take (takeFirstValue, takeValue)
@@ -36,7 +35,7 @@ materializeValue cur = do
 
 -- | Test a @filter@ gate, mapping failures to 'HQError'.
 -- Shared by 'runFold' and 'runRewrite'.
-gateValue :: Fix OpticF -> Transformation -> Value -> ExceptT HQError IO Bool
+gateValue :: Optic -> Transformation -> Value -> ExceptT HQError IO Bool
 gateValue o t v =
   hoistEither $ first HQTransformationError $ evalFilterGate o t v
 
@@ -44,7 +43,7 @@ gateValue o t v =
 -- kept plus replay/after cursors. Shared by 'runFold' and 'runRewrite'
 -- so both agree on gating and cursor rebuild.
 gateTake ::
-  Fix OpticF ->
+  Optic ->
   Transformation ->
   Cursor ->
   ExceptT HQError IO (Bool, JSONEvent, Cursor, Cursor)
@@ -68,10 +67,10 @@ applyTransformation t v =
 -- The continuation receives the cursor positioned immediately after
 -- the value currently being interpreted.
 runFold :: Optic -> Continuation
-runFold (Optic optic) = run optic takeValue
+runFold optic = run optic takeValue
   where
-    run :: Fix OpticF -> Continuation -> Continuation
-    run (Fix opticF) k input = case opticF of
+    run :: Optic -> Continuation -> Continuation
+    run opticF k input = case opticF of
       Id -> k input
       Field name -> runField name k input
       Each -> runEach k input
@@ -142,7 +141,7 @@ runFold (Optic optic) = run optic takeValue
     -- sub-optic's focus (existential over the focused values)
     ----------------------------------------------------------------
 
-    runFilter :: Fix OpticF -> Transformation -> Continuation -> Continuation
+    runFilter :: Optic -> Transformation -> Continuation -> Continuation
     runFilter o t k input =
       onEventOrEnd input $ \(event, rest0) -> do
         (keep, _, replay, rest) <- lift (gateTake o t (pushCursor event rest0))
@@ -204,29 +203,26 @@ runFold (Optic optic) = run optic takeValue
 -- value. Used to evaluate @filter@ gates without re-driving the
 -- streaming decoder.
 focusMany :: Optic -> Value -> Either TransformationError [Value]
-focusMany (Optic optic) = focusFix optic
-  where
-    focusFix :: Fix OpticF -> Value -> Either TransformationError [Value]
-    focusFix (Fix f) v = case f of
-      Field name -> pure (lookupField name v)
-      Each -> pure (eachValues v)
-      Keys -> pure (keyValues v)
-      Values -> pure (valuesValues v)
-      Id -> pure [v]
-      Compose l r -> do
-        ls <- focusFix l v
-        concat <$> traverse (focusFix r) ls
-      Prism kind -> pure (matchPrism kind v)
-      PrismJust -> pure (matchJust v)
-      Ix i -> pure (matchIndex i v)
-      Filter o t -> do
-        keep <- evalFilterGate o t v
-        pure [v | keep]
+focusMany o v = case o of
+  Field name -> pure (lookupField name v)
+  Each -> pure (eachValues v)
+  Keys -> pure (keyValues v)
+  Values -> pure (valuesValues v)
+  Id -> pure [v]
+  Compose l r -> do
+    ls <- focusMany l v
+    concat <$> traverse (focusMany r) ls
+  Prism kind -> pure $ matchPrism kind v
+  PrismJust -> pure $ matchJust v
+  Ix i -> pure $ matchIndex i v
+  Filter o' t -> do
+    keep <- evalFilterGate o' t v
+    pure [v | keep]
 
 -- | Evaluate a @filter@ gate on an in-memory value: true when the
 -- transformation maps some focused sub-value to true.
-evalFilterGate :: Fix OpticF -> Transformation -> Value -> Either TransformationError Bool
-evalFilterGate o t v = focusMany (Optic o) v >>= anyMatch t
+evalFilterGate :: Optic -> Transformation -> Value -> Either TransformationError Bool
+evalFilterGate o t v = focusMany o v >>= anyMatch t
   where
     anyMatch :: Transformation -> [Value] -> Either TransformationError Bool
     anyMatch _ [] = pure False

@@ -17,9 +17,7 @@ library:
     - aeson
     - base
     - bytestring
-    - data-fix
     - file-embed
-    - free
     - megaparsec
     - mtl
     - optparse-applicative
@@ -77,8 +75,6 @@ tests:
       - aeson
       - base
       - bytestring
-      - data-fix
-      - free
       - hq
       - megaparsec
       - mtl

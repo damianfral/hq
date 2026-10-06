@@ -14,7 +14,7 @@ import HQ.Optic.Parser (parseOptic)
 import HQ.Runner.Cursor (Cursor (..), RewriteContinuation)
 import HQ.Runner.Rewrite (runDelete, runOver)
 import HQ.Transformation
-import Relude hiding (Compose, and, id, isPrefixOf, length, many, not, or, reverse, some, subtract, toStrict, xor)
+import Relude hiding (Compose, Const, and, id, length, many, not, or, reverse, some, subtract, toStrict)
 import Streaming (Of (..))
 import qualified Streaming.Prelude as S
 import Test.HQ (chunkSplits)
@@ -68,7 +68,7 @@ runRewriteChunks run chunks = do
 -- JSON input, and collect the rewritten document's events.
 --
 -- @set@ is @over@ with a constant transformation, so the harness drives
--- 'runOver' with 'constValue'.
+-- 'runOver' with 'Const'.
 runSetTest :: Text -> Text -> Text -> IO (Either Text [JSONEvent])
 runSetTest opticStr valueStr jsonInput = case parseOptic opticStr of
   Left err -> pure (Left (show err))
@@ -77,7 +77,7 @@ runSetTest opticStr valueStr jsonInput = case parseOptic opticStr of
     Right events -> case eventsToValue events of
       Left err -> pure (Left (renderHQError (HQRunnerError err)))
       Right value ->
-        runRewriteTest (runOver optic (constValue value) testConfig) jsonInput
+        runRewriteTest (runOver optic (Const value) testConfig) jsonInput
 
 -- | Parse an optic string and run @delete@ against JSON input,
 -- collecting the rewritten document's events.
@@ -337,12 +337,12 @@ deleteSpec = describe "delete" $ do
 overSpec :: Spec
 overSpec = describe "over" $ do
   it "adds to every array element" $ do
-    runOverTest "each" (add 1) "[1,2,3]"
+    runOverTest "each" (Add 1) "[1,2,3]"
     `shouldReturn` Right
       [JSONBeginArray, JSONNumber 2, JSONNumber 3, JSONNumber 4, JSONEndArray]
 
   it "adds to a field value" $ do
-    runOverTest "@age" (add 1) "{\"name\":\"alice\",\"age\":30}"
+    runOverTest "@age" (Add 1) "{\"name\":\"alice\",\"age\":30}"
     `shouldReturn` Right
       [ JSONBeginObject,
         JSONObjectKey "name",
@@ -353,7 +353,7 @@ overSpec = describe "over" $ do
       ]
 
   it "appends to string values" $ do
-    runOverTest "each . _String" (concatString "!") "[1,\"a\",\"b\"]"
+    runOverTest "each . _String" (ConcatString "!") "[1,\"a\",\"b\"]"
     `shouldReturn` Right
       [ JSONBeginArray,
         JSONNumber 1,
@@ -363,17 +363,17 @@ overSpec = describe "over" $ do
       ]
 
   it "trims string values" $ do
-    runOverTest "each . _String" trim "[\"  hi  \",5]"
+    runOverTest "each . _String" Trim "[\"  hi  \",5]"
     `shouldReturn` Right
       [JSONBeginArray, JSONString "hi", JSONNumber 5, JSONEndArray]
 
   it "replaces substrings in string values" $ do
-    runOverTest "@name" (replace "a" "e") "{\"name\":\"alice\"}"
+    runOverTest "@name" (Replace "a" "e") "{\"name\":\"alice\"}"
     `shouldReturn` Right
       [JSONBeginObject, JSONObjectKey "name", JSONString "elice", JSONEndObject]
 
   it "maps values to booleans" $ do
-    runOverTest "each" (equal (Number 1)) "[1,2,1]"
+    runOverTest "each" (Equal (Number 1)) "[1,2,1]"
     `shouldReturn` Right
       [ JSONBeginArray,
         JSONBool True,
@@ -383,12 +383,12 @@ overSpec = describe "over" $ do
       ]
 
   it "negates boolean values" $ do
-    runOverTest "each . _Bool" not "[true,false]"
+    runOverTest "each . _Bool" Not "[true,false]"
     `shouldReturn` Right
       [JSONBeginArray, JSONBool False, JSONBool True, JSONEndArray]
 
   it "disjoins two transformations with or" $ do
-    runOverTest "each" (or (equal (Number 1)) (equal (Number 3))) "[1,2,3]"
+    runOverTest "each" (Or (Equal (Number 1)) (Equal (Number 3))) "[1,2,3]"
     `shouldReturn` Right
       [ JSONBeginArray,
         JSONBool True,
@@ -398,21 +398,21 @@ overSpec = describe "over" $ do
       ]
 
   it "conjoins two transformations with and" $ do
-    runOverTest "each" (and (equal (Number 1)) (equal (Number 1))) "[1,2]"
+    runOverTest "each" (And (Equal (Number 1)) (Equal (Number 1))) "[1,2]"
     `shouldReturn` Right [JSONBeginArray, JSONBool True, JSONBool False, JSONEndArray]
 
   it "conjoins to true when both branches hold" $ do
-    runOverTest "each" (and (isPrefixOf "a") (isSuffixOf "c")) "[\"abc\",\"ab\"]"
+    runOverTest "each" (And (IsPrefixOf "a") (IsSuffixOf "c")) "[\"abc\",\"ab\"]"
     `shouldReturn` Right [JSONBeginArray, JSONBool True, JSONBool False, JSONEndArray]
 
   it "short-circuits and on false" $ do
     -- The right branch would fail on a number; a false left branch
     -- must return False without running it.
-    runOverTest "each" (and (equal (Number 2)) not) "[1]"
+    runOverTest "each" (And (Equal (Number 2)) Not) "[1]"
     `shouldReturn` Right [JSONBeginArray, JSONBool False, JSONEndArray]
 
-  it "exclusive-disjoins two transformations with xor" $ do
-    runOverTest "each" (xor (isPrefixOf "a") (isSuffixOf "a")) "[\"a\",\"ab\",\"ba\",\"b\"]"
+  it "exclusive-disjoins two transformations with Xor" $ do
+    runOverTest "each" (Xor (IsPrefixOf "a") (IsSuffixOf "a")) "[\"a\",\"ab\",\"ba\",\"b\"]"
     `shouldReturn` Right
       [ JSONBeginArray,
         JSONBool False,
@@ -423,15 +423,15 @@ overSpec = describe "over" $ do
       ]
 
   it "fails and with a non-boolean left branch" $ do
-    runOverTest "each" (and (add 1) (equal (Number 1))) "[0]"
+    runOverTest "each" (And (Add 1) (Equal (Number 1))) "[0]"
     `shouldReturn` Left "expected a boolean result from the left side of and"
 
-  it "fails xor with a non-boolean branch" $ do
-    runOverTest "each" (xor (equal (Number 1)) (add 1)) "[1]"
+  it "fails Xor with a non-boolean branch" $ do
+    runOverTest "each" (Xor (Equal (Number 1)) (Add 1)) "[1]"
     `shouldReturn` Left "expected a boolean result from each side of xor"
 
   it "composes transformations right-to-left" $ do
-    runOverTest "each" (compose (equal (Number 3)) (add 1)) "[1,2,3]"
+    runOverTest "each" (Compose (Equal (Number 3)) (Add 1)) "[1,2,3]"
     `shouldReturn` Right
       [ JSONBeginArray,
         JSONBool False,
@@ -441,7 +441,7 @@ overSpec = describe "over" $ do
       ]
 
   it "rewrites values focused by a composed optic" $ do
-    runOverTest "@users.each.@age" (add 1) "{\"users\":[{\"age\":1},{\"age\":2}]}"
+    runOverTest "@users.each.@age" (Add 1) "{\"users\":[{\"age\":1},{\"age\":2}]}"
     `shouldReturn` Right
       [ JSONBeginObject,
         JSONObjectKey "users",
@@ -459,15 +459,15 @@ overSpec = describe "over" $ do
       ]
 
   it "replaces the whole document with id" $ do
-    runOverTest "id" (equal (Number 1)) "[1,2]"
+    runOverTest "id" (Equal (Number 1)) "[1,2]"
     `shouldReturn` Right [JSONBool False]
 
   it "fails when the transformation does not fit the value" $ do
-    runOverTest "each" (add 1) "[\"a\",1]"
+    runOverTest "each" (Add 1) "[\"a\",1]"
     `shouldReturn` Left "expected a number"
 
   it "strips a matching prefix" $ do
-    runOverTest "each" (stripPrefix "pre") "[\"prefix\",\"pre\",\"other\"]"
+    runOverTest "each" (StripPrefix "pre") "[\"prefix\",\"pre\",\"other\"]"
     `shouldReturn` Right
       [ JSONBeginArray,
         JSONString "fix",
@@ -477,37 +477,37 @@ overSpec = describe "over" $ do
       ]
 
   it "strips a matching suffix" $ do
-    runOverTest "each" (stripSuffix ".json") "[\"a.json\",\"json\"]"
+    runOverTest "each" (StripSuffix ".json") "[\"a.json\",\"json\"]"
     `shouldReturn` Right
       [JSONBeginArray, JSONString "a", JSONString "json", JSONEndArray]
 
   it "tests prefix membership" $ do
-    runOverTest "each" (isPrefixOf "pre") "[\"prefix\",\"other\"]"
+    runOverTest "each" (IsPrefixOf "pre") "[\"prefix\",\"other\"]"
     `shouldReturn` Right
       [JSONBeginArray, JSONBool True, JSONBool False, JSONEndArray]
 
   it "tests suffix membership" $ do
-    runOverTest "each" (isSuffixOf ".json") "[\"a.json\",\"other\"]"
+    runOverTest "each" (IsSuffixOf ".json") "[\"a.json\",\"other\"]"
     `shouldReturn` Right
       [JSONBeginArray, JSONBool True, JSONBool False, JSONEndArray]
 
   it "tests infix membership" $ do
-    runOverTest "each" (isInfixOf "fix") "[\"prefix\",\"other\"]"
+    runOverTest "each" (IsInfixOf "fix") "[\"prefix\",\"other\"]"
     `shouldReturn` Right
       [JSONBeginArray, JSONBool True, JSONBool False, JSONEndArray]
 
   it "tests array emptiness" $ do
-    runOverTest "each" isEmpty "[[],[1]]"
+    runOverTest "each" IsEmpty "[[],[1]]"
     `shouldReturn` Right
       [JSONBeginArray, JSONBool True, JSONBool False, JSONEndArray]
 
   it "computes array lengths" $ do
-    runOverTest "each" length "[[1,2],[]]"
+    runOverTest "each" ArrayLength "[[1,2],[]]"
     `shouldReturn` Right
       [JSONBeginArray, JSONNumber 2, JSONNumber 0, JSONEndArray]
 
   it "reverses arrays" $ do
-    runOverTest "each" reverse "[[1,2,3]]"
+    runOverTest "each" ArrayReverse "[[1,2,3]]"
     `shouldReturn` Right
       [ JSONBeginArray,
         JSONBeginArray,
@@ -519,7 +519,7 @@ overSpec = describe "over" $ do
       ]
 
   it "drops duplicate array elements" $ do
-    runOverTest "each" unique "[[1,1,2,1]]"
+    runOverTest "each" ArrayUnique "[[1,1,2,1]]"
     `shouldReturn` Right
       [ JSONBeginArray,
         JSONBeginArray,
@@ -530,11 +530,11 @@ overSpec = describe "over" $ do
       ]
 
   it "fails stripPrefix on numbers" $ do
-    runOverTest "each" (stripPrefix "a") "[1]"
+    runOverTest "each" (StripPrefix "a") "[1]"
     `shouldReturn` Left "expected a string"
 
   it "fails length on strings" $ do
-    runOverTest "each" length "[\"a\"]"
+    runOverTest "each" ArrayLength "[\"a\"]"
     `shouldReturn` Left "expected an array"
 
 -------------------------------------------------------------------------------
@@ -544,7 +544,7 @@ overSpec = describe "over" $ do
 keysRewriteSpec :: Spec
 keysRewriteSpec = describe "keys rewrite" $ do
   it "renames every key" $ do
-    runOverTest "keys" (concatString "!") "{\"a\":1,\"b\":2}"
+    runOverTest "keys" (ConcatString "!") "{\"a\":1,\"b\":2}"
     `shouldReturn` Right
       [ JSONBeginObject,
         JSONObjectKey "a!",
@@ -555,22 +555,22 @@ keysRewriteSpec = describe "keys rewrite" $ do
       ]
 
   it "trims keys" $ do
-    runOverTest "keys" trim "{\" a \":1}"
+    runOverTest "keys" Trim "{\" a \":1}"
     `shouldReturn` Right
       [JSONBeginObject, JSONObjectKey "a", JSONNumber 1, JSONEndObject]
 
   it "renames through a composed string prism" $ do
-    runOverTest "keys . _String" (concatString "!") "{\"a\":1}"
+    runOverTest "keys . _String" (ConcatString "!") "{\"a\":1}"
     `shouldReturn` Right
       [JSONBeginObject, JSONObjectKey "a!", JSONNumber 1, JSONEndObject]
 
   it "leaves keys alone when the prism does not match" $ do
-    runOverTest "keys . _Number" (add 1) "{\"a\":1}"
+    runOverTest "keys . _Number" (Add 1) "{\"a\":1}"
     `shouldReturn` Right
       [JSONBeginObject, JSONObjectKey "a", JSONNumber 1, JSONEndObject]
 
   it "leaves arrays unchanged" $ do
-    runOverTest "keys" (concatString "!") "[1,2]"
+    runOverTest "keys" (ConcatString "!") "[1,2]"
     `shouldReturn` Right [JSONBeginArray, JSONNumber 1, JSONNumber 2, JSONEndArray]
 
   it "sets every key to a constant" $ do
@@ -589,7 +589,7 @@ keysRewriteSpec = describe "keys rewrite" $ do
     `shouldReturn` Left "key transformation must yield a string"
 
   it "fails when the transformation does not fit keys" $ do
-    runOverTest "keys" (add 1) "{\"a\":1}"
+    runOverTest "keys" (Add 1) "{\"a\":1}"
     `shouldReturn` Left "expected a number"
 
   it "removes every member" $ do
@@ -616,7 +616,7 @@ keysRewriteSpec = describe "keys rewrite" $ do
 valuesRewriteSpec :: Spec
 valuesRewriteSpec = describe "values rewrite" $ do
   it "adds to every object value" $ do
-    runOverTest "values" (add 1) "{\"a\":1,\"b\":2}"
+    runOverTest "values" (Add 1) "{\"a\":1,\"b\":2}"
     `shouldReturn` Right
       [ JSONBeginObject,
         JSONObjectKey "a",
@@ -627,12 +627,12 @@ valuesRewriteSpec = describe "values rewrite" $ do
       ]
 
   it "leaves arrays unchanged" $ do
-    runOverTest "values" (add 1) "[1,2,3]"
+    runOverTest "values" (Add 1) "[1,2,3]"
     `shouldReturn` Right
       [JSONBeginArray, JSONNumber 1, JSONNumber 2, JSONNumber 3, JSONEndArray]
 
   it "rewrites values focused by a composed prism" $ do
-    runOverTest "values . _Number" (add 1) "{\"a\":1,\"b\":\"x\"}"
+    runOverTest "values . _Number" (Add 1) "{\"a\":1,\"b\":\"x\"}"
     `shouldReturn` Right
       [ JSONBeginObject,
         JSONObjectKey "a",
@@ -668,12 +668,12 @@ valuesRewriteSpec = describe "values rewrite" $ do
 ixRewriteSpec :: Spec
 ixRewriteSpec = describe "ix rewrite" $ do
   it "adds to the indexed element" $ do
-    runOverTest "ix 1" (add 10) "[1,2,3]"
+    runOverTest "ix 1" (Add 10) "[1,2,3]"
     `shouldReturn` Right
       [JSONBeginArray, JSONNumber 1, JSONNumber 12, JSONNumber 3, JSONEndArray]
 
   it "leaves objects unchanged" $ do
-    runOverTest "ix 0" (add 1) "{\"a\":1}"
+    runOverTest "ix 0" (Add 1) "{\"a\":1}"
     `shouldReturn` Right
       [JSONBeginObject, JSONObjectKey "a", JSONNumber 1, JSONEndObject]
 
@@ -689,12 +689,12 @@ ixRewriteSpec = describe "ix rewrite" $ do
 filterRewriteSpec :: Spec
 filterRewriteSpec = describe "filter rewrite" $ do
   it "replaces kept values" $ do
-    runOverTest "each . filter @age == 30" (constValue (Number 0)) "[{\"age\":30},{\"age\":20}]"
+    runOverTest "each . filter @age == 30" (Const (Number 0)) "[{\"age\":30},{\"age\":20}]"
     `shouldReturn` Right
       [JSONBeginArray, JSONNumber 0, JSONBeginObject, JSONObjectKey "age", JSONNumber 20, JSONEndObject, JSONEndArray]
 
   it "rewrites through a filter into kept values" $ do
-    runOverTest "each . filter @age == 30 . @score" (add 100) "[{\"age\":30,\"score\":1},{\"age\":20,\"score\":2}]"
+    runOverTest "each . filter @age == 30 . @score" (Add 100) "[{\"age\":30,\"score\":1},{\"age\":20,\"score\":2}]"
     `shouldReturn` Right
       [ JSONBeginArray,
         JSONBeginObject,
@@ -752,11 +752,11 @@ filterRewriteSpec = describe "filter rewrite" $ do
       [JSONBeginObject, JSONObjectKey "age", JSONNumber 20, JSONEndObject]
 
   it "fails when the predicate does not fit" $ do
-    runOverTest "each . filter @a +1" (constValue (Number 0)) "[{\"a\":\"x\"}]"
+    runOverTest "each . filter @a +1" (Const (Number 0)) "[{\"a\":\"x\"}]"
     `shouldReturn` Left "expected a number"
 
   it "fails when the predicate is not boolean" $ do
-    runOverTest "each . filter @a +1" (constValue (Number 0)) "[{\"a\":1}]"
+    runOverTest "each . filter @a +1" (Const (Number 0)) "[{\"a\":1}]"
     `shouldReturn` Left "filter transformation must produce a boolean"
 
 chunkedRewriteSpec :: Spec
@@ -783,13 +783,13 @@ chunkedRewriteSpec = describe "chunked input" $ do
 
 overChunkCases :: [(Text, Transformation, Text)]
 overChunkCases =
-  [ ("@users.each.@age", add 1, "{\"users\":[{\"age\":1},{\"age\":2}]}"),
-    ("each", add 1, "[1,2,3]"),
-    ("each . _String", concatString "!", "[1,\"a\",\"b\"]"),
-    ("keys", concatString "!", "{\"a\":1,\"b\":2}"),
-    ("values", add 1, "{\"a\":1,\"b\":2}"),
-    ("ix 1", add 1, "[1,2,3]"),
-    ("each . filter @age == 30", constValue (Number 0), "[{\"age\":30},{\"age\":20}]")
+  [ ("@users.each.@age", Add 1, "{\"users\":[{\"age\":1},{\"age\":2}]}"),
+    ("each", Add 1, "[1,2,3]"),
+    ("each . _String", ConcatString "!", "[1,\"a\",\"b\"]"),
+    ("keys", ConcatString "!", "{\"a\":1,\"b\":2}"),
+    ("values", Add 1, "{\"a\":1,\"b\":2}"),
+    ("ix 1", Add 1, "[1,2,3]"),
+    ("each . filter @age == 30", Const (Number 0), "[{\"age\":30},{\"age\":20}]")
   ]
 
 deleteChunkCases :: [(Text, Text)]

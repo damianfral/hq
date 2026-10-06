@@ -7,7 +7,7 @@ import Data.Aeson (Value (..))
 import HQ.Optic
 import HQ.Optic.OpticType (OpticType (..))
 import HQ.Query
-import HQ.Transformation (add, equal, or, trim)
+import HQ.Transformation hiding (Compose)
 import qualified HQ.Transformation as T
 import HQ.Transformation.AST (TransformationTypeError (..))
 import HQ.Transformation.TransformationType (ValueType (..))
@@ -18,48 +18,48 @@ spec :: Spec
 spec = describe "HQ.Query" $ do
   describe "typecheckQuery" $ do
     it "accepts fold with a field" $ do
-      let q = Fold (field "name")
+      let q = Fold (Field "name")
       typecheckQuery q `shouldBe` Right q
 
     it "accepts preview with a field" $ do
-      let q = Preview (field "name")
+      let q = Preview (Field "name")
       typecheckQuery q `shouldBe` Right q
 
     it "accepts preview with a prism" $ do
-      let q = Preview _String
+      let q = Preview $ Prism PString
       typecheckQuery q `shouldBe` Right q
 
     it "accepts preview with id" $ do
-      let q = Preview id
+      let q = Preview Id
       typecheckQuery q `shouldBe` Right q
 
     it "rejects preview with a traversal" $ do
-      case typecheckQuery (Preview each) of
+      case typecheckQuery (Preview Each) of
         Left err ->
           err `shouldBe` InvalidOpticType OpticPrism OpticTraversal
         Right _ -> expectationFailure "expected a type error"
 
     it "rejects preview with a traversal composition" $ do
-      case typecheckQuery (Preview (compose each (field "x"))) of
+      case typecheckQuery (Preview (Compose Each (Field "x"))) of
         Left err ->
           err `shouldBe` InvalidOpticType OpticPrism OpticTraversal
         Right _ -> expectationFailure "expected a type error"
 
     it "accepts over with a field" $ do
-      let q = Over (field "age") (add 1)
+      let q = Over (Field "age") (Add 1)
       typecheckQuery q `shouldBe` Right q
 
     it "accepts delete with an index" $ do
-      let q = Delete (ix 0)
+      let q = Delete (Ix 0)
       typecheckQuery q `shouldBe` Right q
 
     it "accepts fold with keys" $ do
-      let q = Fold keys
+      let q = Fold Keys
       typecheckQuery q `shouldBe` Right q
 
     it "rejects over with a mismatched composition" $ do
-      let bad = T.compose (add 1) (equal (Number 3))
-      case typecheckQuery (Over each bad) of
+      let bad = T.Compose (Add 1) (Equal (Number 3))
+      case typecheckQuery (Over Each bad) of
         Left (InvalidTransformationType err) ->
           err `shouldBe` InvalidCompose bad ValueBool ValueNumber
         Left err ->
@@ -67,8 +67,8 @@ spec = describe "HQ.Query" $ do
         Right _ -> expectationFailure "expected a type error"
 
     it "rejects over with a non-boolean or branch" $ do
-      let bad = or (add 1) (equal (Number 2))
-      case typecheckQuery (Over each bad) of
+      let bad = Or (Add 1) (Equal (Number 2))
+      case typecheckQuery (Over Each bad) of
         Left (InvalidTransformationType err) ->
           err `shouldBe` InvalidOr bad ValueNumber
         Left err ->
@@ -76,29 +76,29 @@ spec = describe "HQ.Query" $ do
         Right _ -> expectationFailure "expected a type error"
 
     it "accepts equal after a step of any type" $ do
-      let q = Over each (T.compose (equal (Number 1)) trim)
+      let q = Over Each (T.Compose (Equal (Number 1)) Trim)
       typecheckQuery q `shouldBe` Right q
 
     it "accepts fold with a filter" $ do
-      let q = Fold (filter (field "a") (equal (Number 1)))
+      let q = Fold (Filter (Field "a") (Equal (Number 1)))
       typecheckQuery q `shouldBe` Right q
 
     it "accepts preview with a filter" $ do
-      let q = Preview (filter (field "a") (equal (Number 1)))
+      let q = Preview (Filter (Field "a") (Equal (Number 1)))
       typecheckQuery q `shouldBe` Right q
 
     it "rejects a filter with a non-boolean predicate" $ do
-      let bad = filter (field "a") (add 1)
+      let bad = Filter (Field "a") (Add 1)
       case typecheckQuery (Fold bad) of
         Left (InvalidTransformationType err) ->
-          err `shouldBe` InvalidFilter (add 1) ValueNumber
+          err `shouldBe` InvalidFilter (Add 1) ValueNumber
         Left err ->
           expectationFailure $ "wrong error: " <> show err
         Right _ -> expectationFailure "expected a type error"
 
     it "rejects a filter with an ill-formed predicate" $ do
-      let bad = T.compose (add 1) (equal (Number 3))
-      case typecheckQuery (Fold (filter (field "a") bad)) of
+      let bad = T.Compose (Add 1) (Equal (Number 3))
+      case typecheckQuery (Fold (Filter (Field "a") bad)) of
         Left (InvalidTransformationType err) ->
           err `shouldBe` InvalidCompose bad ValueBool ValueNumber
         Left err ->
@@ -106,11 +106,11 @@ spec = describe "HQ.Query" $ do
         Right _ -> expectationFailure "expected a type error"
 
     it "rejects a nested filter with a bad predicate" $ do
-      let inner = filter (field "b") (add 2)
-          bad = filter (compose each inner) (equal (Number 1))
+      let inner = Filter (Field "b") (Add 2)
+          bad = Filter (Compose Each inner) (Equal (Number 1))
       case typecheckQuery (Fold bad) of
         Left (InvalidTransformationType err) ->
-          err `shouldBe` InvalidFilter (add 2) ValueNumber
+          err `shouldBe` InvalidFilter (Add 2) ValueNumber
         Left err ->
           expectationFailure $ "wrong error: " <> show err
         Right _ -> expectationFailure "expected a type error"

@@ -6,140 +6,140 @@ module HQ.Transformation.ParserSpec (spec) where
 import Data.Aeson (Value (..))
 import HQ.Transformation
 import HQ.Transformation.Parser (parseTransformation)
-import Relude hiding (and, isPrefixOf, length, not, or, reverse, subtract, xor)
+import Relude hiding (Compose, Const, many, some)
 import Test.Syd
 
 spec :: Spec
 spec = describe "HQ.Transformation.Parser" $ do
   describe "arithmetic" $ do
     it "parses addition" $ do
-      parseTransformation "+1" `shouldBe` Right (add 1)
+      parseTransformation "+1" `shouldBe` Right (Add 1)
     it "parses multiplication" $ do
-      parseTransformation "*2" `shouldBe` Right (multiply 2)
+      parseTransformation "*2" `shouldBe` Right (Multiply 2)
     it "parses subtraction" $ do
-      parseTransformation "-5" `shouldBe` Right (subtract 5)
+      parseTransformation "-5" `shouldBe` Right (Subtract 5)
     it "parses division" $ do
-      parseTransformation "/4" `shouldBe` Right (divide 4)
+      parseTransformation "/4" `shouldBe` Right (Divide 4)
     it "parses fractional numbers" $ do
-      parseTransformation "+0.5" `shouldBe` Right (add 0.5)
+      parseTransformation "+0.5" `shouldBe` Right (Add 0.5)
     it "parses exponent notation" $ do
-      parseTransformation "*1e10" `shouldBe` Right (multiply 1e10)
+      parseTransformation "*1e10" `shouldBe` Right (Multiply 1e10)
 
   describe "strings and arrays" $ do
     it "parses string concatenation" $ do
       parseTransformation "++ \" world\""
-        `shouldBe` Right (concatString " world")
+        `shouldBe` Right (ConcatString " world")
     it "parses array concatenation" $ do
       parseTransformation "concat [1,2]"
-        `shouldBe` Right (concatArray [Number 1, Number 2])
-    it "parses trim" $ do parseTransformation "trim" `shouldBe` Right trim
+        `shouldBe` Right (ConcatArray [Number 1, Number 2])
+    it "parses trim" $ do parseTransformation "trim" `shouldBe` Right Trim
     it "parses replace" $ do
       parseTransformation "replace \"ab\" \"bc\""
-        `shouldBe` Right (replace "ab" "bc")
+        `shouldBe` Right (Replace "ab" "bc")
 
   describe "affixes and predicates" $ do
     it "parses stripPrefix" $ do
       parseTransformation "stripPrefix \"pre\""
-        `shouldBe` Right (stripPrefix "pre")
+        `shouldBe` Right (StripPrefix "pre")
     it "parses stripSuffix" $ do
       parseTransformation "stripSuffix \"suf\""
-        `shouldBe` Right (stripSuffix "suf")
+        `shouldBe` Right (StripSuffix "suf")
     it "parses isPrefixOf" $ do
       parseTransformation "isPrefixOf \"pre\""
-        `shouldBe` Right (isPrefixOf "pre")
+        `shouldBe` Right (IsPrefixOf "pre")
     it "parses isSuffixOf" $ do
       parseTransformation "isSuffixOf \"suf\""
-        `shouldBe` Right (isSuffixOf "suf")
+        `shouldBe` Right (IsSuffixOf "suf")
     it "parses isInfixOf" $ do
       parseTransformation "isInfixOf \"fix\""
-        `shouldBe` Right (isInfixOf "fix")
+        `shouldBe` Right (IsInfixOf "fix")
     it "parses isEmpty" $ do
-      parseTransformation "isEmpty" `shouldBe` Right isEmpty
+      parseTransformation "isEmpty" `shouldBe` Right IsEmpty
     it "parses length" $ do
-      parseTransformation "length" `shouldBe` Right length
+      parseTransformation "length" `shouldBe` Right ArrayLength
     it "parses reverse" $ do
-      parseTransformation "reverse" `shouldBe` Right reverse
+      parseTransformation "reverse" `shouldBe` Right ArrayReverse
     it "parses unique" $ do
-      parseTransformation "unique" `shouldBe` Right unique
+      parseTransformation "unique" `shouldBe` Right ArrayUnique
     it "composes stripPrefix after trim" $ do
       parseTransformation "stripPrefix \"a\" . trim"
-        `shouldBe` Right (compose (stripPrefix "a") trim)
+        `shouldBe` Right (Compose (StripPrefix "a") Trim)
 
   describe "constants" $ do
     it "parses a constant number" $ do
-      parseTransformation "const 3" `shouldBe` Right (constValue (Number 3))
+      parseTransformation "const 3" `shouldBe` Right (Const (Number 3))
 
     it "parses a constant string" $ do
-      parseTransformation "const \"x\"" `shouldBe` Right (constValue (String "x"))
+      parseTransformation "const \"x\"" `shouldBe` Right (Const (String "x"))
 
     it "composes a constant with arithmetic" $ do
       parseTransformation "const 3 . +1"
-        `shouldBe` Right (compose (constValue (Number 3)) (add 1))
+        `shouldBe` Right (Compose (Const (Number 3)) (Add 1))
 
   describe "booleans" $ do
     it "parses equality with ==" $ do
-      parseTransformation "== 3" `shouldBe` Right (equal (Number 3))
+      parseTransformation "== 3" `shouldBe` Right (Equal (Number 3))
     it "parses equality with =" $ do
-      parseTransformation "= \"x\"" `shouldBe` Right (equal (String "x"))
+      parseTransformation "= \"x\"" `shouldBe` Right (Equal (String "x"))
     it "parses not" $ do
-      parseTransformation "not" `shouldBe` Right not
+      parseTransformation "not" `shouldBe` Right Not
     it "composes not after equality" $ do
       parseTransformation "== 1 . not"
-        `shouldBe` Right (compose (equal (Number 1)) not)
+        `shouldBe` Right (Compose (Equal (Number 1)) Not)
     it "composes not before equality" $ do
       parseTransformation "not . == 1"
-        `shouldBe` Right (compose not (equal (Number 1)))
+        `shouldBe` Right (Compose Not (Equal (Number 1)))
     it "parses or" $ do
       parseTransformation "== 1 or == 2"
-        `shouldBe` Right (or (equal (Number 1)) (equal (Number 2)))
+        `shouldBe` Right (Or (Equal (Number 1)) (Equal (Number 2)))
     it "parses double bar" $ do
       parseTransformation "== 1 || == 2"
-        `shouldBe` Right (or (equal (Number 1)) (equal (Number 2)))
+        `shouldBe` Right (Or (Equal (Number 1)) (Equal (Number 2)))
     it "parses and" $ do
       parseTransformation "== 1 and == 1"
-        `shouldBe` Right (and (equal (Number 1)) (equal (Number 1)))
+        `shouldBe` Right (And (Equal (Number 1)) (Equal (Number 1)))
     it "parses double ampersand" $ do
       parseTransformation "== 1 && == 1"
-        `shouldBe` Right (and (equal (Number 1)) (equal (Number 1)))
+        `shouldBe` Right (And (Equal (Number 1)) (Equal (Number 1)))
     it "parses xor" $ do
       parseTransformation "== 1 xor == 2"
-        `shouldBe` Right (xor (equal (Number 1)) (equal (Number 2)))
+        `shouldBe` Right (Xor (Equal (Number 1)) (Equal (Number 2)))
     it "parses double caret" $ do
       parseTransformation "== 1 ^^ == 2"
-        `shouldBe` Right (xor (equal (Number 1)) (equal (Number 2)))
+        `shouldBe` Right (Xor (Equal (Number 1)) (Equal (Number 2)))
     it "binds and tighter than or" $ do
       parseTransformation "== 1 and == 1 or == 3"
         `shouldBe` Right
-          (or (and (equal (Number 1)) (equal (Number 1))) (equal (Number 3)))
+          (Or (And (Equal (Number 1)) (Equal (Number 1))) (Equal (Number 3)))
     it "binds xor tighter than or" $ do
       parseTransformation "== 1 or == 2 xor == 2"
         `shouldBe` Right
-          (or (equal (Number 1)) (xor (equal (Number 2)) (equal (Number 2))))
+          (Or (Equal (Number 1)) (Xor (Equal (Number 2)) (Equal (Number 2))))
     it "binds and tighter than xor" $ do
       parseTransformation "== 1 xor == 2 and == 2"
         `shouldBe` Right
-          (xor (equal (Number 1)) (and (equal (Number 2)) (equal (Number 2))))
+          (Xor (Equal (Number 1)) (And (Equal (Number 2)) (Equal (Number 2))))
 
   describe "composition and precedence" $ do
     it "composes with dot" $ do
-      parseTransformation "+1 . trim" `shouldBe` Right (compose (add 1) trim)
+      parseTransformation "+1 . trim" `shouldBe` Right (Compose (Add 1) Trim)
     it "composes equality after arithmetic" $ do
       parseTransformation "+1 . == 3"
-        `shouldBe` Right (compose (add 1) (equal (Number 3)))
+        `shouldBe` Right (Compose (Add 1) (Equal (Number 3)))
     it "binds or looser than dot" $ do
       parseTransformation "+1 . == 3 or == 4"
         `shouldBe` Right
-          (or (compose (add 1) (equal (Number 3))) (equal (Number 4)))
+          (Or (Compose (Add 1) (Equal (Number 3))) (Equal (Number 4)))
     it "chains not before equality" $ do
       parseTransformation "not . == 1 . == 3"
-        `shouldBe` Right (compose (compose not (equal (Number 1))) (equal (Number 3)))
+        `shouldBe` Right (Compose (Compose Not (Equal (Number 1))) (Equal (Number 3)))
     it "groups with parentheses" $ do
       parseTransformation "(== 1 or == 2) . == 3"
         `shouldBe` Right
-          (compose (or (equal (Number 1)) (equal (Number 2))) (equal (Number 3)))
+          (Compose (Or (Equal (Number 1)) (Equal (Number 2))) (Equal (Number 3)))
     it "composes not around parentheses" $ do
       parseTransformation "not . (== 1 or == 2)"
-        `shouldBe` Right (compose not (or (equal (Number 1)) (equal (Number 2))))
+        `shouldBe` Right (Compose Not (Or (Equal (Number 1)) (Equal (Number 2))))
 
   describe "errors" $ do
     it "rejects an empty expression" $ do

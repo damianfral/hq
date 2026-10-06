@@ -7,9 +7,9 @@ import HQ.JSON.Parser (jsonValueParser)
 import HQ.Optic.Parser (opticParser)
 import HQ.Parser (Parser, parseTop, symbol)
 import HQ.Query
-import HQ.Transformation (constValue)
+import HQ.Transformation (Transformation (..))
 import HQ.Transformation.Parser (transformationParser)
-import Relude
+import Relude hiding (Const)
 import Text.Megaparsec
 
 parseQuery :: Text -> Either (ParseErrorBundle Text Void) Query
@@ -22,7 +22,7 @@ queryParser =
 -- | @set@ is @over@ with a constant.
 setParser :: Parser Query
 setParser = do
-  symbol "set" >> Over <$> opticParser <*> (constValue <$> jsonValueParser)
+  symbol "set" >> Over <$> opticParser <*> (Const <$> jsonValueParser)
 
 deleteParser :: Parser Query
 deleteParser = symbol "delete" >> Delete <$> opticParser

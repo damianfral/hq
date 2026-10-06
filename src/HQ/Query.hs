@@ -4,8 +4,6 @@
 
 module HQ.Query where
 
-import Control.Comonad.Cofree (Cofree ((:<)))
-import Data.Fix (Fix (..))
 import HQ.Optic
 import HQ.Optic.AST
 import HQ.Optic.OpticType (OpticType (..), canUseAs)
@@ -101,27 +99,26 @@ typecheckQuery q =
   where
     err = InvalidOpticType expected current
     expected = queryOpticType q
-    OpticAST (current :< _) = buildOpticAST (getOptic q)
+    current = inferOpticType (getOptic q)
 
 checkOptic :: Query -> Either TypeError Query
-checkOptic q = go (unOptic (getOptic q)) >> pure q
+checkOptic q = go (getOptic q) >> pure q
   where
-    go :: Fix OpticF -> Either TypeError ()
-    go (Fix f) = case f of
-      Filter o t -> checkPredicate t >> go o
-      Compose l r -> go l >> go r
-      _ -> pure ()
+    go :: Optic -> Either TypeError ()
+    go (Filter o t) = checkPredicate t >> go o
+    go (Compose l r) = go l >> go r
+    go _ = pure ()
     checkPredicate :: Transformation -> Either TypeError ()
-    checkPredicate t = case buildTransformationAST t of
+    checkPredicate t = case inferTransformationType t of
       Left e -> Left (InvalidTransformationType e)
-      Right (TransformationAST (tt :< _)) ->
+      Right tt ->
         if transformationOutput tt == ValueBool
           then pure ()
           else Left (InvalidTransformationType (InvalidFilter t (transformationOutput tt)))
 
 checkTransformation :: Query -> Either TypeError Query
 checkTransformation q@(Over _ transformation) =
-  case buildTransformationAST transformation of
+  case inferTransformationType transformation of
     Left transformationTypeError -> Left $ InvalidTransformationType transformationTypeError
     Right _ -> pure q
 checkTransformation q = pure q

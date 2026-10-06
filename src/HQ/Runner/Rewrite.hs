@@ -5,16 +5,15 @@ module HQ.Runner.Rewrite where
 
 import Control.Monad.Except (MonadError (..))
 import Data.Aeson (Value (..))
-import Data.Fix (Fix (..))
 import HQ.Error (HQError (..))
 import HQ.JSON.Encoder (ChunkStream, EncoderConfig, EncoderState)
 import HQ.JSON.Event
-import HQ.Optic (Optic (..), OpticF (..), appendOptic, focusesWhole, prismPredicate)
+import HQ.Optic (Optic (..), appendOptic, focusesWhole, prismPredicate)
 import HQ.Runner.Cursor (Cursor (..), RewriteContinuation, expectArrayStep, pullCursor, pushCursor, skipValueE)
 import HQ.Runner.Error (RunnerError (..))
 import HQ.Runner.Fold (applyTransformation, gateTake, materializeValue)
 import HQ.Runner.Take (emitChunk, emitKeyAndTake, onEventOrEndChunks, takeValueChunks, traverseArrayChunks, traverseObjectChunks)
-import HQ.Transformation (Transformation (..), TransformationF (Const), runTransformation)
+import HQ.Transformation (Transformation (Const), runTransformation)
 import HQ.Transformation.Error (TransformationError (..))
 import Relude hiding (Compose, Const)
 
@@ -39,15 +38,15 @@ runOver optic transformation = runRewrite (RewriteTransform transformation) opti
 -- | Rewrite the document at the cursor, replacing or omitting focused
 -- values in place; everything else passes through unchanged.
 runRewrite :: Rewriter -> Optic -> EncoderConfig -> RewriteContinuation
-runRewrite rewriter (Optic optic) config = run optic
+runRewrite rewriter optic config = run optic
   where
-    run :: Fix OpticF -> RewriteContinuation
-    run step input st = case unFix step of
+    run :: Optic -> RewriteContinuation
+    run step input st = case step of
       Id -> rewriteValue rewriter input st
-      _ -> navigate step (Fix Id) input st
+      _ -> navigate step Id input st
 
-    navigate :: Fix OpticF -> Fix OpticF -> RewriteContinuation
-    navigate step suffix input st = case unFix step of
+    navigate :: Optic -> Optic -> RewriteContinuation
+    navigate step suffix input st = case step of
       Id -> run suffix input st
       Compose left right -> navigate left (appendOptic right suffix) input st
       Field name -> rewriteField name suffix input st
@@ -62,9 +61,9 @@ runRewrite rewriter (Optic optic) config = run optic
     -- \| Split a member-value suffix with a leading @filter@ step into
     -- its gate and remainder, so a kept value deleted as a whole drops
     -- its key too.
-    stripFilterGate :: Fix OpticF -> Maybe (Fix OpticF, Transformation, Fix OpticF)
-    stripFilterGate (Fix (Compose (Fix (Filter o t)) rest')) = Just (o, t, rest')
-    stripFilterGate (Fix (Filter o t)) = Just (o, t, Fix Id)
+    stripFilterGate :: Optic -> Maybe (Optic, Transformation, Optic)
+    stripFilterGate (Compose (Filter o t) rest') = Just (o, t, rest')
+    stripFilterGate (Filter o t) = Just (o, t, Id)
     stripFilterGate _ = Nothing
 
     rewriteValue :: Rewriter -> RewriteContinuation
@@ -73,7 +72,7 @@ runRewrite rewriter (Optic optic) config = run optic
       pure (st, after)
     -- A constant replacement never reads the focused value: skip it
     -- at the text level instead of decoding it.
-    rewriteValue (RewriteTransform (Transformation (Fix (Const value)))) input st = do
+    rewriteValue (RewriteTransform (Const value)) input st = do
       after <- lift (skipValueE input)
       emitValueChunks value st after
     rewriteValue (RewriteTransform t) input st = do
@@ -92,7 +91,7 @@ runRewrite rewriter (Optic optic) config = run optic
 
     -- \| Prism: value whose first event satisfies the predicate goes
     -- through the suffix; everything else passes through unchanged.
-    rewritePrism :: (JSONEvent -> Bool) -> Fix OpticF -> RewriteContinuation
+    rewritePrism :: (JSONEvent -> Bool) -> Optic -> RewriteContinuation
     rewritePrism predicate suffix input st =
       onEventOrEndChunks input st $ \(event, rest) ->
         if predicate event
@@ -101,7 +100,7 @@ runRewrite rewriter (Optic optic) config = run optic
 
     -- \| Prism on non-null: null passes through, anything else goes
     -- through the suffix.
-    rewriteJust :: Fix OpticF -> RewriteContinuation
+    rewriteJust :: Optic -> RewriteContinuation
     rewriteJust suffix input st =
       onEventOrEndChunks input st $ \case
         (JSONNull, rest) -> do
@@ -111,7 +110,7 @@ runRewrite rewriter (Optic optic) config = run optic
 
     -- \| Array index: rewrite the element at @index@, pass through the
     -- rest of the array. Non-arrays pass through unchanged.
-    rewriteIndex :: Int -> Fix OpticF -> RewriteContinuation
+    rewriteIndex :: Int -> Optic -> RewriteContinuation
     rewriteIndex index suffix input st =
       onEventOrEndChunks input st $ \case
         (JSONBeginArray, rest) -> do
@@ -136,7 +135,7 @@ runRewrite rewriter (Optic optic) config = run optic
     -- \| Object field: rewrite the member named @name@ (dropping the key
     -- too under @delete@ when the suffix lands on the value), pass
     -- every other member through unchanged.
-    rewriteField :: Text -> Fix OpticF -> RewriteContinuation
+    rewriteField :: Text -> Optic -> RewriteContinuation
     rewriteField name suffix input st =
       onEventOrEndChunks input st $ \case
         (JSONBeginObject, rest) -> do
@@ -149,7 +148,7 @@ runRewrite rewriter (Optic optic) config = run optic
 
     -- \| The @each@ traversal: rewrite every array element, or every
     -- object member value. Non-containers pass through.
-    rewriteEach :: Fix OpticF -> RewriteContinuation
+    rewriteEach :: Optic -> RewriteContinuation
     rewriteEach suffix input st =
       onEventOrEndChunks input st $ \case
         (JSONBeginArray, rest) -> do
@@ -164,7 +163,7 @@ runRewrite rewriter (Optic optic) config = run optic
 
     -- \| The @values@ traversal: rewrite every object member value.
     -- Arrays and scalars pass through unchanged (unlike 'rewriteEach').
-    rewriteValues :: Fix OpticF -> RewriteContinuation
+    rewriteValues :: Optic -> RewriteContinuation
     rewriteValues suffix input st =
       onEventOrEndChunks input st $ \case
         (JSONBeginObject, rest) -> do
@@ -176,7 +175,7 @@ runRewrite rewriter (Optic optic) config = run optic
     -- \| The @filter@ optic: gate the focused value as a whole, running
     -- the suffix on kept values and passing dropped values through
     -- unchanged.
-    rewriteFilter :: Fix OpticF -> Transformation -> Fix OpticF -> RewriteContinuation
+    rewriteFilter :: Optic -> Transformation -> Optic -> RewriteContinuation
     rewriteFilter o t suffix input st =
       onEventOrEndChunks input st $ \(event, rest) -> do
         (keep, _, valCursor, _) <- lift (gateTake o t (pushCursor event rest))
@@ -186,7 +185,7 @@ runRewrite rewriter (Optic optic) config = run optic
 
     -- \| The @keys@ traversal: rewrite object keys, leaving values alone.
     -- Arrays and scalars pass through unchanged (@keys@ is objects-only).
-    rewriteKeys :: Fix OpticF -> RewriteContinuation
+    rewriteKeys :: Optic -> RewriteContinuation
     rewriteKeys suffix input st =
       onEventOrEndChunks input st $ \case
         (JSONBeginObject, rest) -> do
@@ -207,7 +206,7 @@ runRewrite rewriter (Optic optic) config = run optic
     -- suffix either focuses the key as a whole (checked with
     -- 'focusesWhole', e.g. @Id@ or @_String@) or it matches nothing and
     -- the key is kept.
-    rewriteKeyText :: Fix OpticF -> Rewriter -> Text -> ExceptT HQError IO KeyAction
+    rewriteKeyText :: Optic -> Rewriter -> Text -> ExceptT HQError IO KeyAction
     rewriteKeyText suffix rw key = case rw of
       RewriteDelete
         | focusesWhole suffix (JSONString key) -> pure DropKey
@@ -225,7 +224,7 @@ runRewrite rewriter (Optic optic) config = run optic
     -- members pass through, and kept members deleted as a whole lose
     -- their key too. The object walk itself is shared via
     -- 'traverseObjectChunks'.
-    rewriteOneMember :: Fix OpticF -> Text -> Cursor -> EncoderState -> ChunkStream (ExceptT HQError IO) (EncoderState, Cursor)
+    rewriteOneMember :: Optic -> Text -> Cursor -> EncoderState -> ChunkStream (ExceptT HQError IO) (EncoderState, Cursor)
     rewriteOneMember suffix key stream st = do
       result <- lift (pullCursor stream)
       case result of
@@ -234,7 +233,7 @@ runRewrite rewriter (Optic optic) config = run optic
           Just (o, t, rest') -> rewriteFilteredMember o t rest' key event rest st
           Nothing -> rewritePlainMember suffix key event rest st
 
-    rewriteFilteredMember :: Fix OpticF -> Transformation -> Fix OpticF -> Text -> JSONEvent -> Cursor -> EncoderState -> ChunkStream (ExceptT HQError IO) (EncoderState, Cursor)
+    rewriteFilteredMember :: Optic -> Transformation -> Optic -> Text -> JSONEvent -> Cursor -> EncoderState -> ChunkStream (ExceptT HQError IO) (EncoderState, Cursor)
     rewriteFilteredMember o t rest' key event rest st = do
       (keep, firstEv, valCursor, afterValue) <- lift (gateTake o t (pushCursor event rest))
       if not keep
@@ -245,7 +244,7 @@ runRewrite rewriter (Optic optic) config = run optic
             st' <- emitChunk config (JSONObjectKey key) st
             run rest' valCursor st'
 
-    rewritePlainMember :: Fix OpticF -> Text -> JSONEvent -> Cursor -> EncoderState -> ChunkStream (ExceptT HQError IO) (EncoderState, Cursor)
+    rewritePlainMember :: Optic -> Text -> JSONEvent -> Cursor -> EncoderState -> ChunkStream (ExceptT HQError IO) (EncoderState, Cursor)
     rewritePlainMember suffix key event rest st = case rewriter of
       RewriteDelete
         | focusesWhole suffix event -> do

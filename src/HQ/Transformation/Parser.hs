@@ -8,7 +8,7 @@ import Control.Monad.Combinators.Expr (Operator (..), makeExprParser)
 import HQ.JSON.Parser (jsonArray, jsonNumber, jsonText, jsonValueParser)
 import HQ.Parser (Parser, keyword, parens, parseTop, symbol)
 import HQ.Transformation
-import Relude hiding (and, isPrefixOf, length, many, not, or, reverse, some, subtract, xor)
+import Relude hiding (Compose, Const, and, isPrefixOf, length, many, not, or, reverse, some, subtract, xor)
 import Text.Megaparsec
 
 -- | Parse a single transformation expression, e.g. @+1 . == 3@.
@@ -36,10 +36,10 @@ transformationParser :: Parser Transformation
 transformationParser = makeExprParser atomParser table
   where
     table =
-      [ [InfixL (compose <$ symbol ".")],
-        [InfixL (and <$ (symbol "and" <|> symbol "&&"))],
-        [InfixL (xor <$ (symbol "xor" <|> symbol "^^"))],
-        [InfixL (or <$ (symbol "or" <|> symbol "||"))]
+      [ [InfixL (Compose <$ symbol ".")],
+        [InfixL (And <$ (symbol "and" <|> symbol "&&"))],
+        [InfixL (Xor <$ (symbol "xor" <|> symbol "^^"))],
+        [InfixL (Or <$ (symbol "or" <|> symbol "||"))]
       ]
 
 atomParser :: Parser Transformation
@@ -72,66 +72,66 @@ parenParser :: Parser Transformation
 parenParser = parens transformationParser
 
 constParser :: Parser Transformation
-constParser = constValue <$> (symbol "const" *> jsonValueParser)
+constParser = Const <$> (symbol "const" *> jsonValueParser)
 
 equalParser :: Parser Transformation
 equalParser = do
   void $ try (symbol "==") <|> symbol "="
-  equal <$> jsonValueParser
+  Equal <$> jsonValueParser
 
 addParser :: Parser Transformation
-addParser = prefixOp "+" jsonNumber add
+addParser = prefixOp "+" jsonNumber Add
 
 multiplyParser :: Parser Transformation
-multiplyParser = prefixOp "*" jsonNumber multiply
+multiplyParser = prefixOp "*" jsonNumber Multiply
 
 subtractParser :: Parser Transformation
-subtractParser = prefixOp "-" jsonNumber subtract
+subtractParser = prefixOp "-" jsonNumber Subtract
 
 divideParser :: Parser Transformation
-divideParser = prefixOp "/" jsonNumber divide
+divideParser = prefixOp "/" jsonNumber Divide
 
 strConcatParser :: Parser Transformation
-strConcatParser = prefixOp "++" jsonText concatString
+strConcatParser = prefixOp "++" jsonText ConcatString
 
 arrayConcatParser :: Parser Transformation
-arrayConcatParser = prefixOp "concat" jsonArray concatArray
+arrayConcatParser = prefixOp "concat" jsonArray ConcatArray
 
 trimParser :: Parser Transformation
-trimParser = keyword "trim" trim
+trimParser = keyword "trim" Trim
 
 notParser :: Parser Transformation
-notParser = keyword "not" not
+notParser = keyword "not" Not
 
 replaceParser :: Parser Transformation
-replaceParser = replace <$> (symbol "replace" *> jsonText) <*> jsonText
+replaceParser = Replace <$> (symbol "replace" *> jsonText) <*> jsonText
 
 stripPrefixParser :: Parser Transformation
-stripPrefixParser = prefixOp "stripPrefix" jsonText stripPrefix
+stripPrefixParser = prefixOp "stripPrefix" jsonText StripPrefix
 
 stripSuffixParser :: Parser Transformation
-stripSuffixParser = prefixOp "stripSuffix" jsonText stripSuffix
+stripSuffixParser = prefixOp "stripSuffix" jsonText StripSuffix
 
 isPrefixOfParser :: Parser Transformation
-isPrefixOfParser = prefixOp "isPrefixOf" jsonText isPrefixOf
+isPrefixOfParser = prefixOp "isPrefixOf" jsonText IsPrefixOf
 
 isSuffixOfParser :: Parser Transformation
-isSuffixOfParser = prefixOp "isSuffixOf" jsonText isSuffixOf
+isSuffixOfParser = prefixOp "isSuffixOf" jsonText IsSuffixOf
 
 isInfixOfParser :: Parser Transformation
-isInfixOfParser = prefixOp "isInfixOf" jsonText isInfixOf
+isInfixOfParser = prefixOp "isInfixOf" jsonText IsInfixOf
 
 isEmptyParser :: Parser Transformation
-isEmptyParser = keyword "isEmpty" isEmpty
+isEmptyParser = keyword "isEmpty" IsEmpty
 
 lengthParser :: Parser Transformation
-lengthParser = keyword "length" length
+lengthParser = keyword "length" ArrayLength
 
 reverseParser :: Parser Transformation
-reverseParser = keyword "reverse" reverse
+reverseParser = keyword "reverse" ArrayReverse
 
 uniqueParser :: Parser Transformation
-uniqueParser = keyword "unique" unique
+uniqueParser = keyword "unique" ArrayUnique
 
 -- | Parse @OP operand@ and apply the constructor: shared shape of the
 -- symbolic and single-operand parsers.
