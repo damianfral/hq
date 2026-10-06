@@ -184,12 +184,23 @@
           pname = "hq-bench-charts";
           version = "0.0.0.1";
           dontUnpack = true;
-          nativeBuildInputs = [pkgs.vega-lite pkgs.svgo];
+          nativeBuildInputs = [pkgs.vega-lite pkgs.svgo pkgs.hq];
           buildPhase = ''
             set -xue
             cp ${packages.hq-bench-data}/hq-bench.csv hq-bench.csv
-            cp ${./bench/bench_runtime.vl.json} bench_runtime.vl.json
-            cp ${./bench/bench_memory.vl.json} bench_memory.vl.json
+            # bench.vl.json is the runtime chart; the memory chart derives
+            # from it via hq whole-value sets (same structure, Peak RSS values).
+            cp ${./bench/bench.vl.json} bench_runtime.vl.json
+            hq set '@title' '"Peak RSS (100 MB input)"' < bench_runtime.vl.json \
+              | hq set '@transform.ix 1.@aggregate.each.@field' '"peak_rss_mb"' \
+              | hq set '@transform.ix 1.@aggregate.each.@as' '"peak_rss_mb_median"' \
+              | hq set '@layer.ix 0.@encoding.@x.@field' '"peak_rss_mb_median"' \
+              | hq set '@layer.ix 0.@encoding.@x.@title' '"Peak RSS (MB)"' \
+              | hq set '@layer.ix 1.@encoding.@x.@field' '"peak_rss_mb_median"' \
+              | hq set '@layer.ix 1.@encoding.@text.@field' '"peak_rss_mb_median"' \
+              > bench_memory.vl.json
+            grep -q 'Peak RSS' bench_memory.vl.json
+            grep -q 'Runtime' bench_runtime.vl.json
             vl2svg bench_runtime.vl.json bench_runtime.svg
             vl2svg bench_memory.vl.json bench_memory.svg
             svgo --multipass --pretty --indent 2 bench_runtime.svg

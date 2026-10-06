@@ -6,40 +6,57 @@ jsonFile="${1}"
 out="${2:-bench-results}"
 runs="${3:-5}"
 
-
 # Each command runs once as warmup, then 'runs' timed runs; every
 # sample is recorded. Median aggregation happens in the Vega-Lite
 # specs (aggregate op median grouped by command).
 # Format: one shell command per entry (hq or jq reading JSON from stdin).
 benches=(
-    "hq fold '@users.each.@id'"
-    "jq '[.users[].id]'"
+    "hq preview '@users.ix 0.@email'"
+    "jq '.users[0].email'"
+    "hq preview '@users.each.filter @age >= 21 . @email'"
+    "jq 'first(.users[] | select(.age >= 21) | .email)'"
     "hq fold '@users.each.@email'"
     "jq '[.users[].email]'"
-    "hq fold '@users.each.@address.@city'"
-    "jq '[.users[].address.city]'"
-    "hq fold '@users.each.@bio'"
-    "jq '[.users[].bio]'"
-    "hq fold '@users.each.filter @age == 29'"
-    "jq '[.users[] | select(.age == 29)]'"
-    "hq fold '@users.each.filter @premium == true'"
-    "jq '[.users[] | select(.premium == true)]'"
-    "hq fold '@users.each.filter @age == 29 . @email'"
-    "jq '[.users[] | select(.age == 29) | .email]'"
+    "hq fold '@users.each.filter @age >= 21 . @email'"
+    "jq '[.users[] | select(.age >= 21) | .email]'"
+    "hq fold '@users.each.filter @email (isSuffixOf \".es\" or isSuffixOf \".com\") . @username'"
+    "jq '[.users[] | select(.email | (endswith(\".es\") or endswith(\".com\"))) | .username]'"
+    "hq fold '@users.each.@tags.each'"
+    "jq '[.users[].tags[]]'"
+    "hq fold '@users.each.@address.values'"
+    "jq '[.users[].address[]]'"
     "hq over '@users.each.filter @premium == true . @age' '+1'"
     "jq '.users |= map(if .premium == true then .age += 1 else . end)'"
-    "hq over '@users.each.@age' '+1'"
-    "jq '.users |= map(.age += 1)'"
-    "hq over '@users.each.@balance' '+1'"
-    "jq '.users |= map(.balance += 1)'"
+    "hq over '@users.each.@email' 'stripSuffix \".com\"'"
+    "jq '.users |= map(.email |= rtrimstr(\".com\"))'"
+    "hq over '@users.each.@username' '++ \"_x\"'"
+    "jq '.users |= map(.username += \"_x\")'"
+    "hq over '@users.each.@first_name' 'stripPrefix \"A\" . trim'"
+    "jq '.users |= map(.first_name |= (gsub(\"^\\\\s+|\\\\s+$\"; \"\") | ltrimstr(\"A\")))'"
+    "hq over '@users.each.@tags' 'concat [\"new-tag\"]'"
+    "jq '.users |= map(.tags += [\"new-tag\"])'"
+    "hq over '@users.each.@tags' 'unique'"
+    "jq '.users |= map(.tags |= unique)'"
+    "hq over '@users.each.@tags' 'sort'"
+    "jq '.users |= map(.tags |= sort)'"
+    "hq over '@users.each.@premium' 'not'"
+    "jq '.users |= map(.premium |= not)'"
+    "hq over '@users.each.@age' '* 2 . + 1'"
+    "jq '.users |= map(.age = ((.age + 1) * 2))'"
+    "hq over '@users.each.@tags' 'length'"
+    "jq '.users |= map(.tags |= length)'"
+    "hq over '@users.each.@address.keys' '++ \"_x\"'"
+    "jq '.users |= map(.address |= with_entries(.key += \"_x\"))'"
+    "hq over '@users.each.@address' 'merge {\"city\": \"X\", \"extra\": 1}'"
+    "jq '.users |= map(.address += {\"city\": \"X\", \"extra\": 1})'"
+    "hq over '@users.each.@address' 'deepMerge {\"coordinates\": {\"zip\": \"00000\"}}'"
+    "jq '.users |= map(.address = (.address * {\"coordinates\": {\"zip\": \"00000\"}}))'"
     "hq set '@users.each.@age' '0'"
     "jq '.users |= map(.age = 0)'"
-    "hq set '@users.each.filter @age == 29' '0'"
-    "jq '.users |= map(if .age == 29 then 0 else . end)'"
     "hq delete '@users.each.@age'"
     "jq '.users |= map(del(.age))'"
-    "hq delete '@users.each.filter @age == 29'"
-    "jq '.users |= map(select(.age != 29))'"
+    "hq delete '@users.each.filter @age < 21'"
+    "jq '.users |= map(select(.age >= 21))'"
 )
 
 # Print the benchmark commands without running them, so other
@@ -67,8 +84,12 @@ bench_run() {
         command time -f '%e,%M' -o time_results.txt \
             bash -c "$command" <$jsonFile >/dev/null
         IFS=, read -r elapsed peak_rss_kb <time_results.txt
+        peak_rss_mb=$(awk -v kb="$peak_rss_kb" 'BEGIN { printf "%.1f", kb / 1024 }')
+        # RFC 4180: double embedded quotes, so commands containing
+        # "..." (e.g. stripSuffix ".com") don't corrupt the row.
+        escaped_command=${command//\"/\"\"}
 
-        printf '"%s",%s,%s\n' "$command" "$elapsed" "$((peak_rss_kb / 1024))" >>"$csv"
+        printf '"%s",%s,%s\n' "$escaped_command" "$elapsed" "$peak_rss_mb" >>"$csv"
     done
 }
 

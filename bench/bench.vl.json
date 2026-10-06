@@ -1,0 +1,111 @@
+{
+  "$schema": "https://vega.github.io/schema/vega-lite/v5.json",
+  "title": "Runtime (100 MB input)",
+  "data": {
+    "url": "hq-bench.csv"
+  },
+  "width": 400,
+  "height": {
+    "step": 24
+  },
+  "transform": [
+    {
+      "calculate": "slice(datum.command, 0, 2) == 'hq' ? 'hq' : 'jq'",
+      "as": "backend"
+    },
+    {
+      "aggregate": [
+        {
+          "op": "median",
+          "field": "runtime",
+          "as": "runtime_median"
+        }
+      ],
+      "groupby": [
+        "command",
+        "backend"
+      ]
+    }
+  ],
+  "layer": [
+    {
+      "mark": "bar",
+      "encoding": {
+        "y": {
+          "field": "command",
+          "type": "nominal",
+          "title": null,
+          "sort": null,
+          "axis": {
+            "labelLimit": 0
+          }
+        },
+        "x": {
+          "field": "runtime_median",
+          "type": "quantitative",
+          "title": "Runtime (s)"
+        },
+        "color": {
+          "field": "backend",
+          "type": "nominal",
+          "title": "backend",
+          "scale": {
+            "domain": [
+              "hq",
+              "jq"
+            ],
+            "range": [
+              "#DD2233",
+              "#333333"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "mark": {
+        "type": "text",
+        "align": "left",
+        "dx": 5
+      },
+      "encoding": {
+        "y": {
+          "field": "command",
+          "type": "nominal",
+          "title": null,
+          "sort": null
+        },
+        "x": {
+          "field": "runtime_median",
+          "type": "quantitative"
+        },
+        "text": {
+          "field": "runtime_median",
+          "type": "quantitative",
+          "format": ".1f"
+        },
+        "color": {
+          "value": "black"
+        }
+      }
+    }
+  ],
+  "config": {
+    "view": {
+      "continuousWidth": 400,
+      "continuousHeight": 300
+    },
+    "axis": {
+      "labelFont": "monospace",
+      "titleFont": "monospace"
+    },
+    "legend": {
+      "labelFont": "monospace",
+      "titleFont": "monospace"
+    },
+    "title": {
+      "font": "monospace",
+      "anchor": "middle"
+    }
+  }
+}
