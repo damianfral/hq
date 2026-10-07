@@ -22,6 +22,14 @@ spec = describe "HQ.Transformation.Parser" $ do
       parseTransformation "/4" `shouldBe` Right (Divide 4)
     it "parses fractional numbers" $ do
       parseTransformation "+0.5" `shouldBe` Right (Add 0.5)
+    it "parses less-than" $ do
+      parseTransformation "<5" `shouldBe` Right (Lt 5)
+    it "parses less-than-or-equal" $ do
+      parseTransformation "<=5" `shouldBe` Right (Lte 5)
+    it "desugars greater-than to not . <=" $ do
+      parseTransformation ">5" `shouldBe` Right (Compose Not (Lte 5))
+    it "desugars greater-than-or-equal to not . <" $ do
+      parseTransformation ">=5" `shouldBe` Right (Compose Not (Lt 5))
     it "parses exponent notation" $ do
       parseTransformation "*1e10" `shouldBe` Right (Multiply 1e10)
 

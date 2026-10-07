@@ -39,6 +39,10 @@ data Transformation
     Subtract Scientific
   | -- | @/ n@: divide the current value by a number.
     Divide Scientific
+  | -- | @< n@: test whether the current number is less than @n@.
+    Lt Scientific
+  | -- | @<= n@: test whether the current number is at most @n@.
+    Lte Scientific
   | -- | @++ s@: append a string to a string value.
     ConcatString Text
   | -- | @concat [..]@: append the given elements to an array value.
@@ -90,6 +94,10 @@ instance Show Transformation where
     showParen (d > appPrec) $ showString "-" . showsJson (Number n)
   showsPrec d (Divide n) =
     showParen (d > appPrec) $ showString "/" . showsJson (Number n)
+  showsPrec d (Lt n) =
+    showParen (d > appPrec) $ showString "<" . showsJson (Number n)
+  showsPrec d (Lte n) =
+    showParen (d > appPrec) $ showString "<=" . showsJson (Number n)
   showsPrec d (ConcatString s) =
     showParen (d > appPrec) $ showString "++ " . showsPrec (appPrec + 1) s
   showsPrec d (ConcatArray els) =
@@ -165,6 +173,8 @@ runTransformation step value = case step of
   Multiply n -> withNumber (Number . (* n)) value
   Subtract n -> withNumber (Number . (+ negate n)) value
   Divide n -> withNumber (Number . (/ n)) value
+  Lt n -> withNumber (Bool . (< n)) value
+  Lte n -> withNumber (Bool . (<= n)) value
   ConcatString suffix -> withString (String . (<> suffix)) value
   ConcatArray elements -> withArray (Array . (<> fromList elements)) value
   Trim -> withString (String . strip) value

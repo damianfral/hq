@@ -17,6 +17,14 @@ spec = describe "HQ.Transformation.AST" $ do
       inferTransformationType (Add 1)
         `shouldBe` Right (TransformationType ValueNumber ValueNumber)
 
+    it "tags less-than as number to boolean" $ do
+      inferTransformationType (Lt 1)
+        `shouldBe` Right (TransformationType ValueNumber ValueBool)
+
+    it "tags less-than-or-equal as number to boolean" $ do
+      inferTransformationType (Lte 1)
+        `shouldBe` Right (TransformationType ValueNumber ValueBool)
+
     it "tags a string step as string to string" $ do
       inferTransformationType (ConcatString " x")
         `shouldBe` Right (TransformationType ValueString ValueString)

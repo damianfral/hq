@@ -105,6 +105,19 @@ Operators bind tightest at the atoms, then `.`, then `and`/`&&`, then
 separate it with `--`: `over '@a' -- '- 1'`.
 | `/ N` | Divide by `N`. Example: `/ 2`. |
 
+### Comparisons (input is a number, output is a boolean)
+
+| Transformation | Meaning |
+| --- | --- |
+| `< N` | Test whether the value is less than `N`. Example: `< 30`. |
+| `<= N` | Test whether the value is at most `N`. Example: `<= 30`. |
+| `> N` | Test whether the value is greater than `N`. Sugar for `not . <= N`. |
+| `>= N` | Test whether the value is at least `N`. Sugar for `not . < N`. |
+
+Comparisons shine in `filter`: `each.filter @age >= 30` keeps every
+element whose age is at least 30. Applying one to a non-number fails
+the query with `expected a number`, like the arithmetic above.
+
 ### Strings (input is a string)
 
 | Transformation | Meaning |

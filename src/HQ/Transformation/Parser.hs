@@ -22,6 +22,7 @@ parseTransformation = parseTop "transformation" transformationParser
 -- > and    := compose (('and' | '&&') compose)*
 -- > compose  := atom ('.' atom)*
 -- > atom   := '+' number | '*' number | '-' number | '/' number
+-- >        |  '<' number | '<=' number | '>' number | '>=' number
 -- >        |  '++' string | 'concat' array | 'trim' | 'not'
 -- >        |  'replace' string string | 'stripPrefix' string | 'stripSuffix' string
 -- >        |  'isPrefixOf' string | 'isSuffixOf' string | 'isInfixOf' string
@@ -53,6 +54,10 @@ atomParser =
       multiplyParser,
       subtractParser,
       divideParser,
+      try lteParser,
+      ltParser,
+      try gteParser,
+      gtParser,
       arrayConcatParser,
       trimParser,
       notParser,
@@ -90,6 +95,21 @@ subtractParser = prefixOp "-" jsonNumber Subtract
 
 divideParser :: Parser Transformation
 divideParser = prefixOp "/" jsonNumber Divide
+
+ltParser :: Parser Transformation
+ltParser = prefixOp "<" jsonNumber Lt
+
+lteParser :: Parser Transformation
+lteParser = prefixOp "<=" jsonNumber Lte
+
+-- | @> v@ is sugar for @not . <= v@: strictness comes from the
+-- primitive, negation from composition. No new constructor needed.
+gtParser :: Parser Transformation
+gtParser = prefixOp ">" jsonNumber (Compose Not . Lte)
+
+-- | @>= v@ is sugar for @not . < v@.
+gteParser :: Parser Transformation
+gteParser = prefixOp ">=" jsonNumber (Compose Not . Lt)
 
 strConcatParser :: Parser Transformation
 strConcatParser = prefixOp "++" jsonText ConcatString
