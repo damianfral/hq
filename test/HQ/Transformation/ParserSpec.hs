@@ -69,6 +69,8 @@ spec = describe "HQ.Transformation.Parser" $ do
       parseTransformation "reverse" `shouldBe` Right ArrayReverse
     it "parses unique" $ do
       parseTransformation "unique" `shouldBe` Right ArrayUnique
+    it "parses sort" $ do
+      parseTransformation "sort" `shouldBe` Right ArraySort
     it "composes stripPrefix after trim" $ do
       parseTransformation "stripPrefix \"a\" . trim"
         `shouldBe` Right (Compose (StripPrefix "a") Trim)

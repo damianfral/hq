@@ -53,6 +53,7 @@ inferTransformationType = go
     go ArrayLength = pure $ TransformationType ValueArray ValueNumber
     go ArrayReverse = pure $ TransformationType ValueArray ValueArray
     go ArrayUnique = pure $ TransformationType ValueArray ValueArray
+    go ArraySort = pure $ TransformationType ValueArray ValueArray
     go (Equal _) = pure $ TransformationType ValueAny ValueBool
     go (Const v) = pure $ TransformationType ValueAny (valueType v)
     go Not = pure $ TransformationType ValueBool ValueBool

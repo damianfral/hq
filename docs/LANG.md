@@ -141,6 +141,7 @@ affix is absent. The `is*` tests yield a boolean.
 | `concat [...]` | Append the given elements. Example: `concat [3, 4]`. |
 | `reverse` | Reverse the elements. |
 | `unique` | Drop duplicates, keeping first occurrences. |
+| `sort` | Sort (canonical order): null, bools, nums, strings, arrays, objs. |
 | `length` | Element count, as a number. |
 | `isEmpty` | Test whether the array is empty, yielding a boolean. |
 

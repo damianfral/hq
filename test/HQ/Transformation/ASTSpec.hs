@@ -65,6 +65,10 @@ spec = describe "HQ.Transformation.AST" $ do
       inferTransformationType ArrayUnique
         `shouldBe` Right (TransformationType ValueArray ValueArray)
 
+    it "tags sort as array to array" $ do
+      inferTransformationType ArraySort
+        `shouldBe` Right (TransformationType ValueArray ValueArray)
+
     it "tags a constant as any input to its own type" $ do
       inferTransformationType (Const (Number 3))
         `shouldBe` Right (TransformationType ValueAny ValueNumber)

@@ -9,6 +9,7 @@
 module HQ.Transformation where
 
 import Data.Aeson (ToJSON, Value (..))
+import qualified Data.Aeson.KeyMap as KeyMap
 import Data.Aeson.Text (encodeToLazyText)
 import qualified Data.Bool (not)
 import qualified Data.List as List
@@ -69,6 +70,10 @@ data Transformation
     ArrayReverse
   | -- | @unique@: drop duplicate elements of an array value, keeping first occurrences.
     ArrayUnique
+  | -- | @sort@: sort the elements of an array value in canonical order
+    -- (null, booleans, numbers, strings, arrays, objects). Stable:
+    -- equal elements keep their input order.
+    ArraySort
   | -- | @== v@ or @= v@: test the current value for equality with @v@.
     Equal Value
   | -- | @const v@: replace the current value with @v@, whatever it is.
@@ -123,6 +128,7 @@ instance Show Transformation where
   showsPrec _ ArrayLength = showString "length"
   showsPrec _ ArrayReverse = showString "reverse"
   showsPrec _ ArrayUnique = showString "unique"
+  showsPrec _ ArraySort = showString "sort"
   showsPrec d (Equal v) =
     showParen (d > appPrec) $ showString "== " . showsJson v
   showsPrec d (Const v) =
@@ -191,6 +197,7 @@ runTransformation step value = case step of
   ArrayLength -> withArray (Number . fromIntegral . V.length) value
   ArrayReverse -> withArray (Array . V.reverse) value
   ArrayUnique -> withArray (Array . fromList . List.nub . toList) value
+  ArraySort -> withArray (Array . fromList . List.sortBy compareValues . toList) value
   Equal literal -> pure (Bool (value == literal))
   Const v -> pure v
   Not -> withBool (Bool . Data.Bool.not) value
@@ -235,3 +242,41 @@ runTransformation step value = case step of
     withBool :: (Bool -> Value) -> Value -> Either TransformationError Value
     withBool apply (Bool b) = pure (apply b)
     withBool _ _ = Left ExpectedBoolean
+
+-- | Canonical ordering of JSON values, matching jq's @sort@:
+-- null, then booleans, numbers, strings, arrays, objects. Numbers
+-- compare numerically, strings lexicographically, arrays
+-- element-wise (a proper prefix sorts first), objects by their
+-- key/value pairs with keys in order. Total: any two values compare.
+compareValues :: Value -> Value -> Ordering
+compareValues x y = case compare (valueRank x) (valueRank y) of
+  EQ -> compareSame x y
+  other -> other
+  where
+    compareSame (Number a) (Number b) = compare a b
+    compareSame (String a) (String b) = compare a b
+    compareSame (Array a) (Array b) =
+      lexCompare compareValues (V.toList a) (V.toList b)
+    compareSame (Object a) (Object b) =
+      lexCompare comparePair (sorted a) (sorted b)
+      where
+        sorted = List.sortOn fst . KeyMap.toList
+        comparePair (k1, v1) (k2, v2) = compare k1 k2 <> compareValues v1 v2
+    compareSame a b = compare (valueRank a) (valueRank b)
+
+-- | Lexicographic comparison; a proper prefix sorts first.
+lexCompare :: (a -> a -> Ordering) -> [a] -> [a] -> Ordering
+lexCompare _ [] [] = EQ
+lexCompare _ [] _ = LT
+lexCompare _ _ [] = GT
+lexCompare c (x : xs) (y : ys) = c x y <> lexCompare c xs ys
+
+-- | Type rank for 'compareValues': jq's cross-type order.
+valueRank :: Value -> Int
+valueRank Null = 0
+valueRank (Bool False) = 1
+valueRank (Bool True) = 2
+valueRank (Number _) = 3
+valueRank (String _) = 4
+valueRank (Array _) = 5
+valueRank (Object _) = 6

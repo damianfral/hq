@@ -535,6 +535,58 @@ overSpec = describe "over" $ do
         JSONEndArray
       ]
 
+  it "sorts array elements" $ do
+    runOverTest "each" ArraySort "[[3,1,2]]"
+    `shouldReturn` Right
+      [ JSONBeginArray,
+        JSONBeginArray,
+        JSONNumber 1,
+        JSONNumber 2,
+        JSONNumber 3,
+        JSONEndArray,
+        JSONEndArray
+      ]
+
+  it "fails sort on scalar elements" $ do
+    runOverTest "each" ArraySort "[\"b\",1,true,null]"
+    `shouldReturn` Left "expected an array"
+
+  it "sorts mixed values by type rank" $ do
+    runOverTest "each" ArraySort "[[\"b\",1,true,null]]"
+    `shouldReturn` Right
+      [ JSONBeginArray,
+        JSONBeginArray,
+        JSONNull,
+        JSONBool True,
+        JSONNumber 1,
+        JSONString "b",
+        JSONEndArray,
+        JSONEndArray
+      ]
+
+  it "sorts nested arrays lexicographically" $ do
+    runOverTest "each" ArraySort "[[[2],[1],[1,2]]]"
+    `shouldReturn` Right
+      [ JSONBeginArray,
+        JSONBeginArray,
+        JSONBeginArray,
+        JSONNumber 1,
+        JSONEndArray,
+        JSONBeginArray,
+        JSONNumber 1,
+        JSONNumber 2,
+        JSONEndArray,
+        JSONBeginArray,
+        JSONNumber 2,
+        JSONEndArray,
+        JSONEndArray,
+        JSONEndArray
+      ]
+
+  it "fails sort on non-arrays" $ do
+    runOverTest "each" ArraySort "[1]"
+    `shouldReturn` Left "expected an array"
+
   it "fails stripPrefix on numbers" $ do
     runOverTest "each" (StripPrefix "a") "[1]"
     `shouldReturn` Left "expected a string"

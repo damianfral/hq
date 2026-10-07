@@ -26,7 +26,7 @@ parseTransformation = parseTop "transformation" transformationParser
 -- >        |  '++' string | 'concat' array | 'trim' | 'not'
 -- >        |  'replace' string string | 'stripPrefix' string | 'stripSuffix' string
 -- >        |  'isPrefixOf' string | 'isSuffixOf' string | 'isInfixOf' string
--- >        |  'isEmpty' | 'length' | 'reverse' | 'unique'
+-- >        |  'isEmpty' | 'length' | 'reverse' | 'unique' | 'sort'
 -- >        |  ('==' | '=') value
 -- >        |  'const' value | '(' or ')'
 --
@@ -70,7 +70,8 @@ atomParser =
       isEmptyParser,
       lengthParser,
       reverseParser,
-      uniqueParser
+      uniqueParser,
+      sortParser
     ]
 
 parenParser :: Parser Transformation
@@ -152,6 +153,12 @@ reverseParser = keyword "reverse" ArrayReverse
 
 uniqueParser :: Parser Transformation
 uniqueParser = keyword "unique" ArrayUnique
+
+-- NOTE: 'sort' is a bare keyword with no prefix relations today, so it
+-- needs no 'try'. If a longer 'sort...'-prefixed atom (e.g. @sortOn@)
+-- is ever added, it must come first with 'try', like '++' vs '+'.
+sortParser :: Parser Transformation
+sortParser = keyword "sort" ArraySort
 
 -- | Parse @OP operand@ and apply the constructor: shared shape of the
 -- symbolic and single-operand parsers.
