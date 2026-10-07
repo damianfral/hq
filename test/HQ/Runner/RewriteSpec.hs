@@ -4,6 +4,7 @@
 module HQ.Runner.RewriteSpec (spec) where
 
 import Data.Aeson (Value (..))
+import qualified Data.Aeson.KeyMap as KeyMap
 import qualified Data.Text as T
 import HQ.Early (Early, runEarly)
 import HQ.Error (HQError (..), renderHQError)
@@ -586,6 +587,49 @@ overSpec = describe "over" $ do
   it "fails sort on non-arrays" $ do
     runOverTest "each" ArraySort "[1]"
     `shouldReturn` Left "expected an array"
+
+  it "shallow-merges objects with right-wins conflicts" $ do
+    runOverTest "id" (Merge (KeyMap.fromList [("a", Object (KeyMap.fromList [("y", Number 2)])), ("b", Number 5)])) "{\"a\":{\"x\":1},\"b\":1}"
+    `shouldReturn` Right
+      [ JSONBeginObject,
+        JSONObjectKey "a",
+        JSONBeginObject,
+        JSONObjectKey "y",
+        JSONNumber 2,
+        JSONEndObject,
+        JSONObjectKey "b",
+        JSONNumber 5,
+        JSONEndObject
+      ]
+
+  it "deep-merges nested objects recursively" $ do
+    runOverTest "id" (DeepMerge (KeyMap.fromList [("a", Object (KeyMap.fromList [("y", Number 2)])), ("b", Number 5)])) "{\"a\":{\"x\":1},\"b\":1}"
+    `shouldReturn` Right
+      [ JSONBeginObject,
+        JSONObjectKey "a",
+        JSONBeginObject,
+        JSONObjectKey "x",
+        JSONNumber 1,
+        JSONObjectKey "y",
+        JSONNumber 2,
+        JSONEndObject,
+        JSONObjectKey "b",
+        JSONNumber 5,
+        JSONEndObject
+      ]
+
+  it "replaces conflicting scalars on deepMerge" $ do
+    runOverTest "id" (DeepMerge (KeyMap.fromList [("a", Number 5)])) "{\"a\":{\"x\":1}}"
+    `shouldReturn` Right
+      [ JSONBeginObject,
+        JSONObjectKey "a",
+        JSONNumber 5,
+        JSONEndObject
+      ]
+
+  it "fails merge on non-objects" $ do
+    runOverTest "id" (Merge (KeyMap.fromList [("b", Number 1)])) "[1]"
+    `shouldReturn` Left "expected an object"
 
   it "fails stripPrefix on numbers" $ do
     runOverTest "each" (StripPrefix "a") "[1]"

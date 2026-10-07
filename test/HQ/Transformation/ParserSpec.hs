@@ -4,6 +4,7 @@
 module HQ.Transformation.ParserSpec (spec) where
 
 import Data.Aeson (Value (..))
+import qualified Data.Aeson.KeyMap as KeyMap
 import HQ.Transformation
 import HQ.Transformation.Parser (parseTransformation)
 import Relude hiding (Compose, Const, many, some)
@@ -71,6 +72,14 @@ spec = describe "HQ.Transformation.Parser" $ do
       parseTransformation "unique" `shouldBe` Right ArrayUnique
     it "parses sort" $ do
       parseTransformation "sort" `shouldBe` Right ArraySort
+    it "parses merge" $ do
+      parseTransformation "merge {\"b\": 1}"
+        `shouldBe` Right (Merge (KeyMap.fromList [("b", Number 1)]))
+    it "parses deepMerge" $ do
+      parseTransformation "deepMerge {\"a\": {\"y\": 2}}"
+        `shouldBe` Right (DeepMerge (KeyMap.fromList [("a", Object (KeyMap.fromList [("y", Number 2)]))]))
+    it "rejects a non-object merge operand" $ do
+      parseTransformation "merge [1]" `shouldSatisfy` isLeft
     it "composes stripPrefix after trim" $ do
       parseTransformation "stripPrefix \"a\" . trim"
         `shouldBe` Right (Compose (StripPrefix "a") Trim)

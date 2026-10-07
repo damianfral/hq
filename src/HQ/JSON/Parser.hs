@@ -8,6 +8,7 @@ module HQ.JSON.Parser where
 import Data.Aeson (Value (..))
 import Data.Aeson.Decoding (eitherDecodeStrictText, toEitherValue)
 import Data.Aeson.Decoding.Text (textToTokens)
+import qualified Data.Aeson.KeyMap as KeyMap
 import Data.Scientific (Scientific)
 import qualified HQ.JSON.Decoder as Decoder
 import HQ.JSON.Event (JSONEvent (..))
@@ -61,4 +62,9 @@ jsonText = jsonTyped "expected a JSON string" $ \case
 jsonArray :: Parser [Value]
 jsonArray = jsonTyped "expected a JSON array" $ \case
   Array items -> Just (toList items)
+  _ -> Nothing
+
+jsonObject :: Parser (KeyMap.KeyMap Value)
+jsonObject = jsonTyped "expected a JSON object" $ \case
+  Object members -> Just members
   _ -> Nothing

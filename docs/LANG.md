@@ -145,6 +145,13 @@ affix is absent. The `is*` tests yield a boolean.
 | `length` | Element count, as a number. |
 | `isEmpty` | Test whether the array is empty, yielding a boolean. |
 
+### Objects (input is an object)
+
+| Transformation | Meaning |
+| --- | --- |
+| `merge {...}` | Shallow-merge the operand into the value (operand has pref). |
+| `deepMerge {...}` | Recursively merge the operand into the value. |
+
 ### Any value
 
 | Transformation | Meaning |

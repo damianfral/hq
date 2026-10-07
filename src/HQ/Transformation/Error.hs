@@ -12,6 +12,7 @@ data TransformationError
   = ExpectedNumber
   | ExpectedString
   | ExpectedArray
+  | ExpectedObject
   | ExpectedBoolean
   | -- | A non-boolean branch of @or@.
     OrBranchNotBoolean
@@ -30,6 +31,7 @@ renderTransformationError err = case err of
   ExpectedNumber -> "expected a number"
   ExpectedString -> "expected a string"
   ExpectedArray -> "expected an array"
+  ExpectedObject -> "expected an object"
   ExpectedBoolean -> "expected a boolean"
   OrBranchNotBoolean -> "expected a boolean result from the left side of or"
   AndBranchNotBoolean -> "expected a boolean result from the left side of and"

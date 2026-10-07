@@ -4,6 +4,7 @@
 module HQ.Transformation.ASTSpec (spec) where
 
 import Data.Aeson (Value (..))
+import qualified Data.Aeson.KeyMap as KeyMap
 import HQ.Transformation
 import HQ.Transformation.AST
 import HQ.Transformation.TransformationType
@@ -68,6 +69,14 @@ spec = describe "HQ.Transformation.AST" $ do
     it "tags sort as array to array" $ do
       inferTransformationType ArraySort
         `shouldBe` Right (TransformationType ValueArray ValueArray)
+
+    it "tags merge as object to object" $ do
+      inferTransformationType (Merge (KeyMap.fromList [("b", Number 1)]))
+        `shouldBe` Right (TransformationType ValueObject ValueObject)
+
+    it "tags deepMerge as object to object" $ do
+      inferTransformationType (DeepMerge (KeyMap.fromList [("b", Number 1)]))
+        `shouldBe` Right (TransformationType ValueObject ValueObject)
 
     it "tags a constant as any input to its own type" $ do
       inferTransformationType (Const (Number 3))

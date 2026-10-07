@@ -70,6 +70,15 @@ data Transformation
     ArrayReverse
   | -- | @unique@: drop duplicate elements of an array value, keeping first occurrences.
     ArrayUnique
+  | -- | @merge o@: shallow-merge the object operand @o@ into the
+    -- current object value; @o@ wins member conflicts (like jq @+@).
+    -- Nested objects are replaced wholesale, not merged.
+    Merge (KeyMap.KeyMap Value)
+  | -- | @deepMerge o@: recursively merge the object operand @o@ into
+    -- the current object value (like jq @*@). Conflicting members
+    -- that are both objects merge recursively; anything else takes
+    -- the operand's value.
+    DeepMerge (KeyMap.KeyMap Value)
   | -- | @sort@: sort the elements of an array value in canonical order
     -- (null, booleans, numbers, strings, arrays, objects). Stable:
     -- equal elements keep their input order.
@@ -128,6 +137,10 @@ instance Show Transformation where
   showsPrec _ ArrayLength = showString "length"
   showsPrec _ ArrayReverse = showString "reverse"
   showsPrec _ ArrayUnique = showString "unique"
+  showsPrec d (Merge members) =
+    showParen (d > appPrec) $ showString "merge " . showsJson (Object members)
+  showsPrec d (DeepMerge members) =
+    showParen (d > appPrec) $ showString "deepMerge " . showsJson (Object members)
   showsPrec _ ArraySort = showString "sort"
   showsPrec d (Equal v) =
     showParen (d > appPrec) $ showString "== " . showsJson v
@@ -197,6 +210,8 @@ runTransformation step value = case step of
   ArrayLength -> withArray (Number . fromIntegral . V.length) value
   ArrayReverse -> withArray (Array . V.reverse) value
   ArrayUnique -> withArray (Array . fromList . List.nub . toList) value
+  Merge members -> withObject (Object . KeyMap.union members) value
+  DeepMerge members -> withObject (\o -> Object (KeyMap.unionWith deepMergeValues o members)) value
   ArraySort -> withArray (Array . fromList . List.sortBy compareValues . toList) value
   Equal literal -> pure (Bool (value == literal))
   Const v -> pure v
@@ -239,9 +254,21 @@ runTransformation step value = case step of
     withArray apply (Array a) = pure (apply a)
     withArray _ _ = Left ExpectedArray
 
+    withObject :: (KeyMap.KeyMap Value -> Value) -> Value -> Either TransformationError Value
+    withObject apply (Object o) = pure (apply o)
+    withObject _ _ = Left ExpectedObject
+
     withBool :: (Bool -> Value) -> Value -> Either TransformationError Value
     withBool apply (Bool b) = pure (apply b)
     withBool _ _ = Left ExpectedBoolean
+
+-- | Recursive object merge with right-wins conflicts (like jq @*@):
+-- members that are objects on both sides merge recursively, anything
+-- else takes the replacement value.
+deepMergeValues :: Value -> Value -> Value
+deepMergeValues (Object current) (Object replacement) =
+  Object (KeyMap.unionWith deepMergeValues current replacement)
+deepMergeValues _ replacement = replacement
 
 -- | Canonical ordering of JSON values, matching jq's @sort@:
 -- null, then booleans, numbers, strings, arrays, objects. Numbers

@@ -5,7 +5,7 @@
 module HQ.Transformation.Parser where
 
 import Control.Monad.Combinators.Expr (Operator (..), makeExprParser)
-import HQ.JSON.Parser (jsonArray, jsonNumber, jsonText, jsonValueParser)
+import HQ.JSON.Parser (jsonArray, jsonNumber, jsonObject, jsonText, jsonValueParser)
 import HQ.Parser (Parser, keyword, parens, parseTop, symbol)
 import HQ.Transformation
 import Relude hiding (Compose, Const, and, isPrefixOf, length, many, not, or, reverse, some, subtract, xor)
@@ -27,6 +27,7 @@ parseTransformation = parseTop "transformation" transformationParser
 -- >        |  'replace' string string | 'stripPrefix' string | 'stripSuffix' string
 -- >        |  'isPrefixOf' string | 'isSuffixOf' string | 'isInfixOf' string
 -- >        |  'isEmpty' | 'length' | 'reverse' | 'unique' | 'sort'
+-- >        |  'merge' object | 'deepMerge' object
 -- >        |  ('==' | '=') value
 -- >        |  'const' value | '(' or ')'
 --
@@ -71,7 +72,9 @@ atomParser =
       lengthParser,
       reverseParser,
       uniqueParser,
-      sortParser
+      sortParser,
+      mergeParser,
+      deepMergeParser
     ]
 
 parenParser :: Parser Transformation
@@ -159,6 +162,12 @@ uniqueParser = keyword "unique" ArrayUnique
 -- is ever added, it must come first with 'try', like '++' vs '+'.
 sortParser :: Parser Transformation
 sortParser = keyword "sort" ArraySort
+
+mergeParser :: Parser Transformation
+mergeParser = prefixOp "merge" jsonObject Merge
+
+deepMergeParser :: Parser Transformation
+deepMergeParser = prefixOp "deepMerge" jsonObject DeepMerge
 
 -- | Parse @OP operand@ and apply the constructor: shared shape of the
 -- symbolic and single-operand parsers.
