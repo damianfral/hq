@@ -92,14 +92,13 @@ optParserInfo = info (optParser <**> helper) infoMod
 
 --------------------------------------------------------------------------------
 
-readInput :: Maybe FilePath -> IO Handle
-readInput Nothing = pure stdin
-readInput (Just "-") = pure stdin
-readInput (Just path) = do
-  h <- openFile path ReadMode
+withInput :: Maybe FilePath -> (Handle -> IO a) -> IO a
+withInput Nothing useHandle = useHandle stdin
+withInput (Just "-") useHandle = useHandle stdin
+withInput (Just path) useHandle = withFile path ReadMode $ \h -> do
   hSetBuffering h $ BlockBuffering Nothing
   hSetBinaryMode h True
-  pure h
+  useHandle h
 
 --------------------------------------------------------------------------------
 
@@ -109,6 +108,5 @@ runCLI = do
   query <- case typecheckQuery optQuery of
     Left err -> hPutStrLn stderr (renderTypeError err) >> exitFailure
     Right q -> pure q
-  handle <- readInput optFile
   let cfg = Enc.EncoderConfig optCompact $ Enc.ValueOptions optRaw optJoin
-  runRunnerIOWith jsonRunner query cfg handle
+  withInput optFile $ runRunnerIOWith jsonRunner query cfg
