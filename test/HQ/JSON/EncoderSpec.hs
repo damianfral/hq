@@ -1,14 +1,15 @@
+{-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 
 module HQ.JSON.EncoderSpec (spec) where
 
-import qualified Data.Text as T
+import Data.Text qualified as T
 import HQ.JSON.Encoder
 import HQ.JSON.Event (JSONEvent (..))
 import Relude hiding (Compose, id)
 import Streaming (Of (..))
-import qualified Streaming.Prelude as S
+import Streaming.Prelude qualified as S
 import Test.HQ (decodeChunks)
 import Test.Syd
 

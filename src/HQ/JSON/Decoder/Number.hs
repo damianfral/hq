@@ -1,4 +1,5 @@
 {-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE StrictData #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 
@@ -7,7 +8,7 @@ module HQ.JSON.Decoder.Number where
 
 import Data.Char (digitToInt, isDigit)
 import Data.Scientific (Scientific, scientific)
-import qualified Data.Text as T
+import Data.Text qualified as T
 import HQ.JSON.Decoder.Core
 import HQ.JSON.Decoder.Error (DecodeError (..))
 import HQ.JSON.Event (JSONEvent (..))

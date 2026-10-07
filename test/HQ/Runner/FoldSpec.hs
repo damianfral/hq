@@ -1,3 +1,4 @@
+{-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 
@@ -15,7 +16,7 @@ import HQ.Runner.Cursor (Cursor (..))
 import HQ.Runner.Fold (focusMany, runFold, runPreview)
 import HQ.Transformation.Error (renderTransformationError)
 import Relude hiding (Compose, id, many, not, or, some, subtract, toStrict)
-import qualified Streaming.Prelude as S
+import Streaming.Prelude qualified as S
 import Test.HQ (chunkSplits)
 import Test.Syd
 

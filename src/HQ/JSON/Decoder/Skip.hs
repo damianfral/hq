@@ -1,5 +1,6 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 
@@ -21,7 +22,7 @@ where
 
 import Data.ByteString.Builder (Builder, char7, charUtf8)
 import Data.Char (digitToInt, isDigit, isHexDigit)
-import qualified Data.Text as T
+import Data.Text qualified as T
 import Data.Text.Encoding (encodeUtf8Builder)
 import HQ.Early (Early, leave)
 import HQ.Error (HQError (..))
@@ -30,7 +31,7 @@ import HQ.JSON.Decoder.Error (DecodeError (..))
 import HQ.JSON.Decoder.Number (advanceNumber, isValidNumberFinal, numberPhaseFromFirstChar)
 import HQ.JSON.Event (JSONEvent (..))
 import Relude hiding (Compose, id, many, some, state)
-import qualified Streaming.Prelude as S
+import Streaming.Prelude qualified as S
 
 -- | Structural positions while skipping.
 data SkipExpect

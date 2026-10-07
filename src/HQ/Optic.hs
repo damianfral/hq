@@ -1,4 +1,7 @@
+{-# LANGUAGE DerivingStrategies #-}
+{-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE StrictData #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 
@@ -7,7 +10,7 @@ module HQ.Optic where
 import GHC.Show (Show (showsPrec), appPrec, showParen, showString, shows)
 import HQ.JSON.Event (JSONEvent, isArray, isBool, isNull, isNumber, isObject, isString)
 import HQ.Transformation (Transformation)
-import qualified HQ.Transformation as Trans
+import HQ.Transformation qualified as Trans
 import Relude hiding (Compose, Const, filter, id, many, some)
 
 -- | JSON value shapes selectable by a prism.
@@ -18,7 +21,7 @@ data PrismKind
   | PNull
   | PArray
   | PObject
-  deriving (Eq, Show)
+  deriving stock (Eq, Show)
 
 -- | Optic paths over JSON values. 'Field', 'Ix' and
 -- '_Just' are affine; 'Id' is a lens; 'Each', 'Keys', 'Values' are
@@ -60,7 +63,7 @@ data Optic
     -- Focusing is existential ('any'): one passing sub-value keeps the
     -- whole input. Affine traversal (zero or one of its input).
     Filter Optic Transformation
-  deriving (Eq)
+  deriving stock (Eq)
 
 instance Show Optic where
   showsPrec d (Field name) =
@@ -75,7 +78,7 @@ instance Show Optic where
       . showString " . "
       . showsPrec prec b
     where
-      composePrec = 5
+      composePrec :: Int = 5
       prec = composePrec + 1
   showsPrec _ (Prism kind) = showString (prismName kind)
   showsPrec _ PrismJust = showString "_Just"

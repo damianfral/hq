@@ -1,3 +1,4 @@
+{-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 
@@ -7,7 +8,7 @@ import Data.Aeson (Value (..))
 import HQ.Optic
 import HQ.Query
 import HQ.Transformation hiding (Compose)
-import qualified HQ.Transformation as T
+import HQ.Transformation qualified as T
 import HQ.Transformation.AST (TransformationTypeError (..))
 import HQ.Transformation.TransformationType (ValueType (..))
 import Relude hiding (Compose, filter, id, or)

@@ -1,3 +1,4 @@
+{-# LANGUAGE DerivingStrategies #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE StrictData #-}
 {-# LANGUAGE NoImplicitPrelude #-}
@@ -19,7 +20,7 @@ data Query
   | -- | Apply a transformation to each of the focused values.
     Over Optic Transformation
   | Delete Optic
-  deriving (Show, Eq)
+  deriving stock (Show, Eq)
 
 getOptic :: Query -> Optic
 getOptic (Fold optic) = optic
@@ -33,7 +34,7 @@ data TypeError
     -- optic focuses one type, the transformation needs another, and
     -- neither side is 'ValueAny'. Offenders kept for reporting.
     InvalidFocusType Optic Transformation ValueType ValueType
-  deriving (Eq, Show)
+  deriving stock (Eq, Show)
 
 renderTypeError :: TypeError -> Text
 renderTypeError (InvalidTransformationType (InvalidDivideByZero t)) =

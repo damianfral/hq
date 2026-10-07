@@ -1,3 +1,4 @@
+{-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE StrictData #-}
 {-# LANGUAGE NoImplicitPrelude #-}
@@ -9,16 +10,16 @@
 module HQ.Transformation where
 
 import Data.Aeson (ToJSON, Value (..))
-import qualified Data.Aeson.KeyMap as KeyMap
+import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Aeson.Text (encodeToLazyText)
-import qualified Data.Bool (not)
-import qualified Data.List as List
+import Data.Bool qualified (not)
+import Data.List qualified as List
 import Data.Scientific (Scientific)
 import Data.Text (strip, unpack)
-import qualified Data.Text as T
+import Data.Text qualified as T
 import Data.Text.Lazy (toStrict)
 import Data.Vector (Vector)
-import qualified Data.Vector as V
+import Data.Vector qualified as V
 import GHC.Show (ShowS, appPrec)
 import HQ.Transformation.Error (TransformationError (..))
 import Relude hiding (Compose, Const, and, isPrefixOf, length, many, not, or, reverse, some, subtract, toStrict, xor)

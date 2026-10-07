@@ -1,4 +1,5 @@
 {-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE StrictData #-}
 {-# LANGUAGE NoImplicitPrelude #-}
@@ -9,7 +10,7 @@ module HQ.JSON.Decoder.String where
 
 import Data.Bits (Bits (..), shiftL)
 import Data.Char (digitToInt, isHexDigit)
-import qualified Data.Text as T
+import Data.Text qualified as T
 import HQ.JSON.Decoder.Core
 import HQ.JSON.Decoder.Error (DecodeError (..))
 import HQ.JSON.Event (JSONEvent (..))

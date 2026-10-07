@@ -1,25 +1,26 @@
+{-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 
 module HQ.Runner.Fold where
 
 import Data.Aeson (Value (..))
-import qualified Data.Aeson.Key as Key
-import qualified Data.Aeson.KeyMap as KeyMap
-import qualified Data.Vector as Vector
+import Data.Aeson.Key qualified as Key
+import Data.Aeson.KeyMap qualified as KeyMap
+import Data.Vector qualified as Vector
 import HQ.Early (Early, leave, orLeave)
 import HQ.Error (HQError (..))
 import HQ.JSON.Decoder (initialDecoder)
 import HQ.JSON.Event
 import HQ.Optic (Optic (..), PrismKind, prismPredicate)
-import HQ.Runner.Cursor (Continuation, Cursor (..), expectArrayStep, expectObjectStep, onEventOrEnd, pushCursor, skipMemberValue, skipRestOfArray, skipRestOfObject, skipValue, traverseArray, traverseObject)
+import HQ.Runner.Cursor
 import HQ.Runner.Error (RunnerError (..))
 import HQ.Runner.Take (takeFirstValue, takeValue)
 import HQ.Transformation (Transformation, runTransformation)
 import HQ.Transformation.Error (TransformationError (..))
 import Relude hiding (Compose, id, many, some, state)
 import Streaming (Of (..))
-import qualified Streaming.Prelude as S
+import Streaming.Prelude qualified as S
 
 -- | Materialize the value at the cursor into events and a 'Value',
 -- returning the value, its events and the cursor after it.

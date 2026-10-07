@@ -1,21 +1,21 @@
 {-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 
 module HQ.Runner.Take where
 
 import Data.Char (isDigit)
-import qualified Data.Text as T
+import Data.Text qualified as T
 import HQ.Early (Early, leave)
-import HQ.Error (HQError (..))
-import HQ.JSON.Decoder (DecodeError (..), DecoderPhase (..), DecoderResult (..), DecoderState (..), Next (..), StreamIO, finish, finishValue, isWhitespace, pullEvent)
-import qualified HQ.JSON.Decoder as Decoder
+import HQ.JSON.Decoder
+import HQ.JSON.Decoder qualified as Decoder
 import HQ.JSON.Decoder.Skip (skipNumberCollect, skipStringCollect)
-import HQ.JSON.Encoder (Builder, Chunk (..), ChunkStream, EncoderConfig, EncoderState, formatEvent, transcribeRawBytes, transcribeRawString)
+import HQ.JSON.Encoder
 import HQ.JSON.Event (JSONEvent (..), matchingClose)
-import HQ.Runner.Cursor (Continuation, Cursor (..), EventStream, expectArrayStep, expectObjectStep, pullCursor)
+import HQ.Runner.Cursor
 import HQ.Runner.Error (RunnerError (..))
 import Relude hiding (Compose, id, many, some, state)
-import qualified Streaming.Prelude as S
+import Streaming.Prelude qualified as S
 
 -- | Pull a single event, with the advanced cursor.
 pullOne :: Early HQError -> Cursor -> IO (JSONEvent, Cursor)
@@ -165,8 +165,8 @@ traverseObjectChunks ::
 traverseObjectChunks early config input st body = go input st
   where
     go stream s = do
-      step <- lift (expectObjectStep early stream)
-      case step of
+      step' <- lift (expectObjectStep early stream)
+      case step' of
         Left rest -> do
           s' <- emitChunk config JSONEndObject s
           pure (s', rest)
@@ -185,8 +185,8 @@ traverseArrayChunks ::
 traverseArrayChunks early config input st body = go input st
   where
     go stream s = do
-      step <- lift (expectArrayStep early stream)
-      case step of
+      step' <- lift (expectArrayStep early stream)
+      case step' of
         Left rest -> do
           s' <- emitChunk config JSONEndArray s
           pure (s', rest)
@@ -309,7 +309,7 @@ takeContainerChunks early config closing c st0 = go c st0 mempty 0
       Builder ->
       Int ->
       ChunkStream IO (EncoderState, Cursor)
-    go (Cursor !buf dec txt) !st !pend !pendSize = case buf of
+    go (Cursor buf' dec txt) !st !pend !pendSize = case buf' of
       event : rest -> emit event (Cursor rest dec txt) st pend pendSize
       [] -> stepMore dec txt st pend pendSize
     stepMore ::

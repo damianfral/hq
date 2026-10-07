@@ -1,3 +1,4 @@
+{-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 
@@ -14,7 +15,7 @@ module Test.HQ
   )
 where
 
-import qualified Data.Text as T
+import Data.Text qualified as T
 import HQ.JSON.Decoder (DecodeError (..), DecoderResult (..), DecoderState (..), decodeTexts, finish, step)
 import HQ.JSON.Event (JSONEvent)
 import Relude hiding (Compose, id)

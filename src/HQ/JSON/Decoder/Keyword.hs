@@ -1,3 +1,4 @@
+{-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE StrictData #-}
 {-# LANGUAGE NoImplicitPrelude #-}
@@ -5,7 +6,7 @@
 -- | Keyword parsing (null/true/false) for the streaming JSON decoder.
 module HQ.JSON.Decoder.Keyword where
 
-import qualified Data.Text as T
+import Data.Text qualified as T
 import HQ.JSON.Decoder.Core
 import HQ.JSON.Decoder.Error (DecodeError (..))
 import HQ.JSON.Event (JSONEvent (..))

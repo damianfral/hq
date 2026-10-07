@@ -1,5 +1,6 @@
 {-# LANGUAGE DerivingStrategies #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE StrictData #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 
@@ -15,8 +16,8 @@ module HQ.Runner
   )
 where
 
-import qualified Data.ByteString as BS
-import qualified Data.ByteString.Lazy as LBS
+import Data.ByteString qualified as BS
+import Data.ByteString.Lazy qualified as LBS
 import Data.Text.IO (hPutStrLn)
 import HQ.Early (Early, leave, runEarly)
 import HQ.Error (HQError (..), renderHQError)
@@ -30,7 +31,7 @@ import HQ.Runner.Fold
 import HQ.Runner.Rewrite
 import HQ.Runner.Take
 import Relude hiding (Compose, Const)
-import qualified Streaming.Prelude as S
+import Streaming.Prelude qualified as S
 import System.IO (hSetBinaryMode)
 
 data RunnerEnv = RunnerEnv

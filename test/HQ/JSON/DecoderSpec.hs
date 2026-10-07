@@ -1,3 +1,4 @@
+{-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 
@@ -8,7 +9,7 @@ import HQ.Early (runEarly)
 import HQ.JSON.Decoder
 import HQ.JSON.Event
 import Relude hiding (Compose, id)
-import qualified Streaming.Prelude as S
+import Streaming.Prelude qualified as S
 import Test.HQ (decodeChunks, decodeShown, drainCollect, malformedPullCorpus, runStreaming, splits, validPullCorpus)
 import Test.Syd
 

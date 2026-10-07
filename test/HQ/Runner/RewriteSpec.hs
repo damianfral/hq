@@ -1,11 +1,12 @@
+{-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 
 module HQ.Runner.RewriteSpec (spec) where
 
 import Data.Aeson (Value (..))
-import qualified Data.Aeson.KeyMap as KeyMap
-import qualified Data.Text as T
+import Data.Aeson.KeyMap qualified as KeyMap
+import Data.Text qualified as T
 import HQ.Early (Early, runEarly)
 import HQ.Error (HQError (..), renderHQError)
 import HQ.JSON.Decoder (StreamIO, initialDecoder)
@@ -19,7 +20,7 @@ import HQ.Runner.Rewrite (runDelete, runOver)
 import HQ.Transformation
 import Relude hiding (Compose, Const, and, id, length, many, not, or, reverse, some, subtract, toStrict)
 import Streaming (Of (..))
-import qualified Streaming.Prelude as S
+import Streaming.Prelude qualified as S
 import Test.HQ (chunkSplits)
 import Test.Syd
 

@@ -1,3 +1,4 @@
+{-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE StrictData #-}
@@ -8,9 +9,9 @@ module HQ.JSON.Parser where
 import Data.Aeson (Value (..))
 import Data.Aeson.Decoding (eitherDecodeStrictText, toEitherValue)
 import Data.Aeson.Decoding.Text (textToTokens)
-import qualified Data.Aeson.KeyMap as KeyMap
+import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Scientific (Scientific)
-import qualified HQ.JSON.Decoder as Decoder
+import HQ.JSON.Decoder qualified as Decoder
 import HQ.JSON.Event (JSONEvent (..))
 import HQ.Parser (Parser, lexeme)
 import Relude hiding (Compose, id, many, some)

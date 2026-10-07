@@ -1,4 +1,5 @@
 {-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE StrictData #-}
 {-# LANGUAGE NoImplicitPrelude #-}
@@ -18,7 +19,7 @@ module HQ.JSON.Decoder
 where
 
 import Data.Char (isDigit)
-import qualified Data.Text as T
+import Data.Text qualified as T
 import HQ.Early (Early, leave)
 import HQ.Error
 import HQ.JSON.Decoder.Core
@@ -28,7 +29,7 @@ import HQ.JSON.Decoder.Number
 import HQ.JSON.Decoder.String
 import HQ.JSON.Event (JSONEvent (..))
 import Relude hiding (Compose, id, many, some, state)
-import qualified Streaming.Prelude as S
+import Streaming.Prelude qualified as S
 
 initialDecoder :: DecoderState
 initialDecoder =

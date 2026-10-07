@@ -1,4 +1,5 @@
 {-# LANGUAGE BangPatterns #-}
+{-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE StrictData #-}
@@ -27,17 +28,17 @@ module HQ.JSON.Encoder
 where
 
 import Data.Bits (Bits (..))
-import qualified Data.ByteString as BS
+import Data.ByteString qualified as BS
 import Data.ByteString.Builder (Builder, byteString, char7, charUtf8, integerDec, string7, stringUtf8, toLazyByteString)
 import Data.Scientific (Scientific, base10Exponent, coefficient)
-import qualified Data.Text as Text
+import Data.Text qualified as Text
 import Data.Text.Encoding (encodeUtf8Builder)
 import HQ.JSON.Decoder.Core (NestDepth (..), deeper, initialDepth, shallower)
 import HQ.JSON.Event (JSONEvent (..))
 import Relude hiding (Compose, id, many, some, state)
 import Streaming (Of, Stream)
 import Streaming.Internal (Stream (..))
-import qualified Streaming.Prelude as S
+import Streaming.Prelude qualified as S
 
 data EncoderConfig = EncoderConfig
   { outputStyle :: EncodeStyle,

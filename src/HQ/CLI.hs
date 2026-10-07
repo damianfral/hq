@@ -1,4 +1,5 @@
 {-# LANGUAGE ApplicativeDo #-}
+{-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE StrictData #-}
@@ -12,7 +13,7 @@ import Data.FileEmbed (embedStringFile, makeRelativeToProject)
 import Data.Text.IO (hPutStrLn)
 import Data.Version (showVersion)
 import HQ.JSON.Encoder (Join (..), Raw (..))
-import qualified HQ.JSON.Encoder as Enc
+import HQ.JSON.Encoder qualified as Enc
 import HQ.JSON.Parser (parseValue)
 import HQ.Optic (Optic)
 import HQ.Optic.Parser (parseOptic)

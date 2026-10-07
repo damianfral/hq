@@ -1,4 +1,5 @@
 {-# LANGUAGE RoleAnnotations #-}
+{-# LANGUAGE StandaloneKindSignatures #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 
 -- | Type-safe early return without 'ExceptT':
@@ -17,8 +18,12 @@ import Relude
 
 type role Early nominal
 
+type Early :: Type -> Type
 data Early e = Early
 
+type role ReturningEarly nominal
+
+type ReturningEarly :: Type -> Type
 newtype ReturningEarly e = ReturningEarly e
 
 instance (Typeable e) => Show (ReturningEarly e) where

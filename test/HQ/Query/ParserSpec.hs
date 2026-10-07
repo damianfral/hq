@@ -1,3 +1,4 @@
+{-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 
@@ -8,7 +9,7 @@ import HQ.Optic
 import HQ.Query (Query (..))
 import HQ.Query.Parser (parseQuery)
 import HQ.Transformation hiding (Compose)
-import qualified HQ.Transformation as T
+import HQ.Transformation qualified as T
 import Relude hiding (Compose, Const)
 import Test.Syd
 

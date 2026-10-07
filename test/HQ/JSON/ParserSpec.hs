@@ -1,3 +1,4 @@
+{-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 
@@ -5,7 +6,7 @@ module HQ.JSON.ParserSpec (spec) where
 
 import Data.Aeson (Value (..))
 import Data.Aeson.Key (fromText)
-import qualified Data.Aeson.KeyMap as KeyMap
+import Data.Aeson.KeyMap qualified as KeyMap
 import HQ.JSON.Event (JSONEvent (..))
 import HQ.JSON.Parser (parseValue, parseValueEvents)
 import Relude hiding (Compose, id)

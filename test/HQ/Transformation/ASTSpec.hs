@@ -1,10 +1,11 @@
+{-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 
 module HQ.Transformation.ASTSpec (spec) where
 
 import Data.Aeson (Value (..))
-import qualified Data.Aeson.KeyMap as KeyMap
+import Data.Aeson.KeyMap qualified as KeyMap
 import HQ.Transformation
 import HQ.Transformation.AST
 import HQ.Transformation.TransformationType

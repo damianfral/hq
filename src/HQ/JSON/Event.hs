@@ -1,3 +1,5 @@
+{-# LANGUAGE DerivingStrategies #-}
+{-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE StrictData #-}
 {-# LANGUAGE NoImplicitPrelude #-}
@@ -5,10 +7,10 @@
 module HQ.JSON.Event where
 
 import Data.Aeson (Value (..))
-import qualified Data.Aeson.Key as Key
-import qualified Data.Aeson.KeyMap as KeyMap
+import Data.Aeson.Key qualified as Key
+import Data.Aeson.KeyMap qualified as KeyMap
 import Data.Scientific (Scientific)
-import qualified Data.Vector as Vector
+import Data.Vector qualified as Vector
 import HQ.Runner.Error (RunnerError (..))
 import Relude hiding (Compose, id, many, some, state)
 
@@ -26,7 +28,7 @@ data JSONEvent
   | JSONBool Bool
   | JSONNumber Scientific
   | JSONString Text
-  deriving (Eq, Show)
+  deriving stock (Eq, Show)
 
 --------------------------------------------------------------------------------
 -- Event classifiers

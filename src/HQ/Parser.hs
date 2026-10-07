@@ -1,3 +1,4 @@
+{-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 
 module HQ.Parser where
@@ -5,7 +6,7 @@ module HQ.Parser where
 import Relude hiding (many, some)
 import Text.Megaparsec
 import Text.Megaparsec.Char (char, spaceChar)
-import qualified Text.Megaparsec.Char.Lexer as L
+import Text.Megaparsec.Char.Lexer qualified as L
 
 type Parser = Parsec Void Text
 
