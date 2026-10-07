@@ -25,6 +25,9 @@ data TransformationTypeError
     InvalidXor Transformation ValueType
   | -- | A @filter@ predicate does not produce a boolean; offender kept.
     InvalidFilter Transformation ValueType
+  | -- | Division by zero; offender kept. Detected statically so it
+    -- cannot explode mid-stream after partial output.
+    InvalidDivideByZero Transformation
   deriving (Eq, Show)
 
 -- | Infer a transformation's input/output types; 'Compose' steps must
@@ -37,7 +40,9 @@ inferTransformationType = go
     go (Add _) = pure $ TransformationType ValueNumber ValueNumber
     go (Multiply _) = pure $ TransformationType ValueNumber ValueNumber
     go (Subtract _) = pure $ TransformationType ValueNumber ValueNumber
-    go (Divide _) = pure $ TransformationType ValueNumber ValueNumber
+    go (Divide n)
+      | n == 0 = Left (InvalidDivideByZero (Divide n))
+      | otherwise = pure $ TransformationType ValueNumber ValueNumber
     go (Lt _) = pure $ TransformationType ValueNumber ValueBool
     go (Lte _) = pure $ TransformationType ValueNumber ValueBool
     go (ConcatString _) = pure $ TransformationType ValueString ValueString

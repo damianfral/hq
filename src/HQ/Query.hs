@@ -5,6 +5,7 @@
 module HQ.Query where
 
 import HQ.Optic
+import HQ.Optic.AST (inferFocusType)
 import HQ.Transformation (Transformation)
 import HQ.Transformation.AST
 import HQ.Transformation.TransformationType (ValueType (..))
@@ -26,11 +27,17 @@ getOptic (Preview optic) = optic
 getOptic (Over optic _) = optic
 getOptic (Delete optic) = optic
 
-newtype TypeError
+data TypeError
   = InvalidTransformationType TransformationTypeError
+  | -- | The focused values certainly reject the transformation: the
+    -- optic focuses one type, the transformation needs another, and
+    -- neither side is 'ValueAny'. Offenders kept for reporting.
+    InvalidFocusType Optic Transformation ValueType ValueType
   deriving (Eq, Show)
 
 renderTypeError :: TypeError -> Text
+renderTypeError (InvalidTransformationType (InvalidDivideByZero t)) =
+  "division by zero in " <> show t
 renderTypeError (InvalidTransformationType (InvalidCompose t out inn)) =
   "transformation mismatch in "
     <> show t
@@ -53,6 +60,15 @@ renderTypeError (InvalidTransformationType (InvalidXor t out)) =
     <> show t
     <> ": both sides of xor must produce booleans, but a branch produces "
     <> valueTypeName out
+renderTypeError (InvalidFocusType optic t focus expected) =
+  "type mismatch: transformation "
+    <> show t
+    <> " expects "
+    <> valueTypeName expected
+    <> " but the optic "
+    <> show optic
+    <> " focuses "
+    <> valueTypeName focus
 renderTypeError (InvalidTransformationType (InvalidFilter t out)) =
   "filter transformation "
     <> show t
@@ -77,20 +93,34 @@ checkOptic :: Query -> Either TypeError Query
 checkOptic q = go (getOptic q) >> pure q
   where
     go :: Optic -> Either TypeError ()
-    go (Filter o t) = checkPredicate t >> go o
+    go (Filter o t) = checkPredicate o t >> go o
     go (Compose l r) = go l >> go r
     go _ = pure ()
-    checkPredicate :: Transformation -> Either TypeError ()
-    checkPredicate t = case inferTransformationType t of
+    checkPredicate :: Optic -> Transformation -> Either TypeError ()
+    checkPredicate o t = case inferTransformationType t of
       Left e -> Left (InvalidTransformationType e)
-      Right tt ->
-        if transformationOutput tt == ValueBool
-          then pure ()
-          else Left (InvalidTransformationType (InvalidFilter t (transformationOutput tt)))
+      Right tt
+        | transformationOutput tt /= ValueBool ->
+            Left
+              $ InvalidTransformationType
+              $ InvalidFilter t (transformationOutput tt)
+        | otherwise -> checkFocus o t tt
+
+-- | A transformation accepts focused values of unknown shape
+-- ('ValueAny' either side); anything else must match exactly.
+checkFocus ::
+  Optic -> Transformation -> TransformationType -> Either TypeError ()
+checkFocus optic t tt
+  | focus == ValueAny || expected == ValueAny || focus == expected = pure ()
+  | otherwise = Left (InvalidFocusType optic t focus expected)
+  where
+    focus = inferFocusType optic
+    expected = transformationInput tt
 
 checkTransformation :: Query -> Either TypeError Query
-checkTransformation q@(Over _ transformation) =
+checkTransformation q@(Over optic transformation) =
   case inferTransformationType transformation of
-    Left transformationTypeError -> Left $ InvalidTransformationType transformationTypeError
-    Right _ -> pure q
+    Left transformationTypeError ->
+      Left $ InvalidTransformationType transformationTypeError
+    Right tt -> checkFocus optic transformation tt >> pure q
 checkTransformation q = pure q

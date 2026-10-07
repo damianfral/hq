@@ -5,16 +5,21 @@ module HQ.OpticSpec (spec) where
 
 import Data.Aeson (Value (..))
 import HQ.Optic
-import HQ.Optic.AST (inferOpticType)
+import HQ.Optic.AST (inferFocusType, inferOpticType)
 import HQ.Optic.OpticType (OpticType (..))
 import HQ.Optic.Parser (parseOptic)
 import HQ.Transformation hiding (Compose)
+import HQ.Transformation.TransformationType (ValueType (..))
 import Relude hiding (Compose, filter, id, not)
 import Test.Syd
 
 -- | The cardinality of an optic, inferred directly.
 opticTypeOf :: Optic -> OpticType
 opticTypeOf = inferOpticType
+
+-- | The focused value type of an optic, inferred directly.
+opticFocusOf :: Optic -> ValueType
+opticFocusOf = inferFocusType
 
 -- | Parse 'show' output back (replaces the former 'Read Optic' orphan,
 -- which lived in the library only for this check).
@@ -79,3 +84,26 @@ spec = describe "HQ.Optic" $ do
     it "types filter as affine" $ do
       opticTypeOf (Filter (Field "a") (Equal (Number 1))) `shouldBe` OpticAffineTraversal
       opticTypeOf (Compose Each (Filter (Field "a") (Equal (Number 1)))) `shouldBe` OpticTraversal
+
+  describe "inferFocusType classifications" $ do
+    it "leaves unknown shapes as any" $ do
+      opticFocusOf (Field "a") `shouldBe` ValueAny
+      opticFocusOf Each `shouldBe` ValueAny
+      opticFocusOf Values `shouldBe` ValueAny
+      opticFocusOf Id `shouldBe` ValueAny
+      opticFocusOf (Ix 0) `shouldBe` ValueAny
+      opticFocusOf PrismJust `shouldBe` ValueAny
+      opticFocusOf (Filter (Field "a") (Equal (Number 1))) `shouldBe` ValueAny
+
+    it "pins prisms and keys to exact types" $ do
+      opticFocusOf (Prism PString) `shouldBe` ValueString
+      opticFocusOf (Prism PNumber) `shouldBe` ValueNumber
+      opticFocusOf (Prism PBool) `shouldBe` ValueBool
+      opticFocusOf (Prism PNull) `shouldBe` ValueNull
+      opticFocusOf (Prism PArray) `shouldBe` ValueArray
+      opticFocusOf (Prism PObject) `shouldBe` ValueObject
+      opticFocusOf Keys `shouldBe` ValueString
+
+    it "takes the rightmost focus through composition" $ do
+      opticFocusOf (Compose Each (Prism PNumber)) `shouldBe` ValueNumber
+      opticFocusOf (Compose (Field "a") (Field "b")) `shouldBe` ValueAny

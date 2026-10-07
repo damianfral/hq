@@ -182,6 +182,21 @@ increments every user's age, and
 
 strips the prefix from every user's name when present.
 
+### Static checks
+
+Queries are checked before running. Steps that cannot work are
+rejected up front instead of failing mid-stream:
+
+- `/ 0` is rejected: division by zero.
+- A transformation applied where it cannot fit is rejected:
+  `over 'each._Number' '++ "x"'` fails because the optic focuses
+  numbers and the transformation needs a string. Optics without a
+  pinned shape (`@field`, `each`, `ix`) focus values of unknown
+  type and accept anything; only prisms (and `keys`) narrow the
+  focus, so only provable mismatches are reported.
+- `filter` predicates must produce booleans, and accept their
+  sub-optic's focus type.
+
 ## Examples
 
     echo '{"name":"ada","score":96}' | hq fold '@name'

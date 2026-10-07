@@ -26,6 +26,10 @@ spec = describe "HQ.Transformation.AST" $ do
       inferTransformationType (Lte 1)
         `shouldBe` Right (TransformationType ValueNumber ValueBool)
 
+    it "rejects division by zero" $ do
+      inferTransformationType (Divide 0)
+        `shouldBe` Left (InvalidDivideByZero (Divide 0))
+
     it "tags a string step as string to string" $ do
       inferTransformationType (ConcatString " x")
         `shouldBe` Right (TransformationType ValueString ValueString)
