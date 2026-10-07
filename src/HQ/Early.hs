@@ -19,7 +19,7 @@ type role Early nominal
 
 data Early e = Early
 
-data ReturningEarly e = ReturningEarly e
+newtype ReturningEarly e = ReturningEarly e
 
 instance (Typeable e) => Show (ReturningEarly e) where
   show = displayException
