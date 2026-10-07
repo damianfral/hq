@@ -5,7 +5,6 @@ module HQ.QuerySpec (spec) where
 
 import Data.Aeson (Value (..))
 import HQ.Optic
-import HQ.Optic.OpticType (OpticType (..))
 import HQ.Query
 import HQ.Transformation hiding (Compose)
 import qualified HQ.Transformation as T
@@ -33,17 +32,17 @@ spec = describe "HQ.Query" $ do
       let q = Preview Id
       typecheckQuery q `shouldBe` Right q
 
-    it "rejects preview with a traversal" $ do
-      case typecheckQuery (Preview Each) of
-        Left err ->
-          err `shouldBe` InvalidOpticType OpticPrism OpticTraversal
-        Right _ -> expectationFailure "expected a type error"
+    it "accepts preview with a traversal" $ do
+      let q = Preview Each
+      typecheckQuery q `shouldBe` Right q
 
-    it "rejects preview with a traversal composition" $ do
-      case typecheckQuery (Preview (Compose Each (Field "x"))) of
-        Left err ->
-          err `shouldBe` InvalidOpticType OpticPrism OpticTraversal
-        Right _ -> expectationFailure "expected a type error"
+    it "accepts preview with a traversal composition" $ do
+      let q = Preview (Compose Each (Field "x"))
+      typecheckQuery q `shouldBe` Right q
+
+    it "accepts preview with a filtered traversal" $ do
+      let q = Preview (Compose Each (Filter (Field "age") (Equal (Number 29))))
+      typecheckQuery q `shouldBe` Right q
 
     it "accepts over with a field" $ do
       let q = Over (Field "age") (Add 1)
@@ -62,8 +61,6 @@ spec = describe "HQ.Query" $ do
       case typecheckQuery (Over Each bad) of
         Left (InvalidTransformationType err) ->
           err `shouldBe` InvalidCompose bad ValueBool ValueNumber
-        Left err ->
-          expectationFailure $ "wrong error: " <> show err
         Right _ -> expectationFailure "expected a type error"
 
     it "rejects over with a non-boolean or branch" $ do
@@ -71,8 +68,6 @@ spec = describe "HQ.Query" $ do
       case typecheckQuery (Over Each bad) of
         Left (InvalidTransformationType err) ->
           err `shouldBe` InvalidOr bad ValueNumber
-        Left err ->
-          expectationFailure $ "wrong error: " <> show err
         Right _ -> expectationFailure "expected a type error"
 
     it "accepts equal after a step of any type" $ do
@@ -92,8 +87,6 @@ spec = describe "HQ.Query" $ do
       case typecheckQuery (Fold bad) of
         Left (InvalidTransformationType err) ->
           err `shouldBe` InvalidFilter (Add 1) ValueNumber
-        Left err ->
-          expectationFailure $ "wrong error: " <> show err
         Right _ -> expectationFailure "expected a type error"
 
     it "rejects a filter with an ill-formed predicate" $ do
@@ -101,8 +94,6 @@ spec = describe "HQ.Query" $ do
       case typecheckQuery (Fold (Filter (Field "a") bad)) of
         Left (InvalidTransformationType err) ->
           err `shouldBe` InvalidCompose bad ValueBool ValueNumber
-        Left err ->
-          expectationFailure $ "wrong error: " <> show err
         Right _ -> expectationFailure "expected a type error"
 
     it "rejects a nested filter with a bad predicate" $ do
@@ -111,6 +102,4 @@ spec = describe "HQ.Query" $ do
       case typecheckQuery (Fold bad) of
         Left (InvalidTransformationType err) ->
           err `shouldBe` InvalidFilter (Add 2) ValueNumber
-        Left err ->
-          expectationFailure $ "wrong error: " <> show err
         Right _ -> expectationFailure "expected a type error"

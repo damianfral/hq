@@ -5,8 +5,6 @@
 module HQ.Query where
 
 import HQ.Optic
-import HQ.Optic.AST
-import HQ.Optic.OpticType (OpticType (..), canUseAs)
 import HQ.Transformation (Transformation)
 import HQ.Transformation.AST
 import HQ.Transformation.TransformationType (ValueType (..))
@@ -28,24 +26,11 @@ getOptic (Preview optic) = optic
 getOptic (Over optic _) = optic
 getOptic (Delete optic) = optic
 
--- | The optic type a query requires.
-queryOpticType :: Query -> OpticType
-queryOpticType (Fold _) = OpticTraversal
-queryOpticType (Preview _) = OpticPrism
-queryOpticType (Over _ _) = OpticTraversal
-queryOpticType (Delete _) = OpticTraversal
-
-data TypeError
-  = InvalidOpticType OpticType OpticType
-  | InvalidTransformationType TransformationTypeError
+newtype TypeError
+  = InvalidTransformationType TransformationTypeError
   deriving (Eq, Show)
 
 renderTypeError :: TypeError -> Text
-renderTypeError (InvalidOpticType expected actual) =
-  "optic mismatch: this query needs "
-    <> opticTypeName expected
-    <> " but the optic is "
-    <> opticTypeName actual
 renderTypeError (InvalidTransformationType (InvalidCompose t out inn)) =
   "transformation mismatch in "
     <> show t
@@ -74,12 +59,6 @@ renderTypeError (InvalidTransformationType (InvalidFilter t out)) =
     <> " must produce a boolean, but produces "
     <> valueTypeName out
 
-opticTypeName :: OpticType -> Text
-opticTypeName OpticLens = "a lens (exactly one target)"
-opticTypeName OpticPrism = "a prism (at most one target)"
-opticTypeName OpticAffineTraversal = "an affine traversal (at most one target)"
-opticTypeName OpticTraversal = "a traversal"
-
 valueTypeName :: ValueType -> Text
 valueTypeName ValueObject = "object"
 valueTypeName ValueArray = "array"
@@ -89,17 +68,10 @@ valueTypeName ValueBool = "boolean"
 valueTypeName ValueNull = "null"
 valueTypeName ValueAny = "any value"
 
--- | Check a query before running it: optic cardinality, @filter@
--- booleans, 'Over' composition.
+-- | Check a query before running it: @filter@ booleans and 'Over'
+-- composition types. Every query accepts any optic.
 typecheckQuery :: Query -> Either TypeError Query
-typecheckQuery q =
-  if canUseAs expected current
-    then checkOptic q >>= checkTransformation
-    else Left err
-  where
-    err = InvalidOpticType expected current
-    expected = queryOpticType q
-    current = inferOpticType (getOptic q)
+typecheckQuery q = checkOptic q >>= checkTransformation
 
 checkOptic :: Query -> Either TypeError Query
 checkOptic q = go (getOptic q) >> pure q

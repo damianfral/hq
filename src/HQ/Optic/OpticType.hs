@@ -33,8 +33,8 @@ instance Semigroup OpticType where
 
 instance Monoid OpticType where mempty = OpticLens
 
--- | Subsumption: everything folds, so traversals accept anything;
--- at-most-one requirements reject traversals (@preview@ takes first match).
+-- | Subsumption: everything folds, so traversals accept anything.
+-- (All four queries accept traversals; 'Preview' emits the first focus.)
 canUseAs :: OpticType -> OpticType -> Bool
 canUseAs OpticTraversal _ = True
 canUseAs OpticPrism actual = actual /= OpticTraversal

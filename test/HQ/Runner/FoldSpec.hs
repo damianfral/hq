@@ -122,6 +122,12 @@ previewSpec = describe "preview" $ do
     runQueryPreviewTest "each . @name" "[{\"name\":\"alice\"},{\"name\":\"bob\"}]"
     `shouldReturn` Right [JSONString "alice"]
 
+  it "returns the first match through a filter" $ do
+    -- NOTE: spaces around the outer '.' are load-bearing here;
+    -- '== 30.@age' would lex '30.' as a number prefix.
+    runQueryPreviewTest "each.filter @age == 30 . @age" "[{\"age\":20},{\"age\":30}]"
+    `shouldReturn` Right [JSONNumber 30]
+
   it "returns the first array element with ix 0" $ do
     runQueryPreviewTest "ix 0" "[10,20]" `shouldReturn` Right [JSONNumber 10]
 

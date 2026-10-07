@@ -290,7 +290,7 @@ matchIndex i v = case v of
 -- The fold is short-circuited: once the first value has been emitted,
 -- no further input is read from the source. This is library-level
 -- first-match semantics over any optic; the @preview@ CLI command
--- narrows its input to at-most-one optics via 'typecheckQuery'.
+-- exposes it directly (any optic accepted, first focus wins).
 runPreview :: Early HQError -> Optic -> Continuation
 runPreview early optic input = do
   takeFirstValue (runFold early optic input)

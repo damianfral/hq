@@ -12,9 +12,9 @@ Optics are used with different queries:
 | `over OPTIC TRANSFORMATION` | Rewrite each focused value in place. |
 | `delete OPTIC` | Remove each focused value. |
 
-`preview` needs an optic focusing on at most one value (a field, `ix`,
-prism, `filter`, `id`, or compositions of those); `each`, `keys` and
-`values` are rejected before running. `set` takes a JSON literal and
+`preview` accepts any optic and prints its first focus in document
+order, stopping input there; it is `fold` capped at one value.
+`set` takes a JSON literal and
 is `over` with a constant transformation. `over` fails the whole query
 when a focused value rejects the transformation (adding to a string,
 for example). Deleting a missing field, or an empty focus, leaves the
