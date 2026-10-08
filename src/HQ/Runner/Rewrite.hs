@@ -12,7 +12,7 @@ import HQ.Optic (Optic (..), focusesWhole, prismPredicate)
 import HQ.Runner.Cursor (Cursor (..), RewriteContinuation, expectArrayStep, pullCursor, pushCursor, skipValueE)
 import HQ.Runner.Error (RunnerError (..))
 import HQ.Runner.Fold (applyTransformation, gateTake, materializeValue)
-import HQ.Runner.Take (emitChunk, emitKeyAndTake, onEventOrEndChunks, onOpenOrSkipChunks, takeValueChunks, traverseArrayChunks, traverseObjectChunks)
+import HQ.Runner.Take (emitChunk, emitKeyAndTake, flushEncoderChunks, onEventOrEndChunks, onOpenOrSkipChunks, takeValueChunks, traverseArrayChunks, traverseObjectChunks)
 import HQ.Transformation (Transformation (Const), runTransformation)
 import HQ.Transformation.Error (TransformationError (..))
 import Relude hiding (Compose, Const)
@@ -41,7 +41,10 @@ runOver early optic transformation =
 -- values in place; everything else passes through unchanged.
 runRewrite ::
   Early HQError -> Rewriter -> Optic -> EncoderConfig -> RewriteContinuation
-runRewrite early rewriter optic config = run optic
+runRewrite early rewriter optic config cur0 st0 = do
+  (st', after) <- run optic cur0 st0
+  st'' <- flushEncoderChunks st'
+  pure (st'', after)
   where
     run :: Optic -> RewriteContinuation
     run step input st = case step of

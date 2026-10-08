@@ -19,6 +19,7 @@ module HQ.JSON.Decoder.Skip
     skipMemberValueText,
     skipStringCollect,
     skipNumberCollect,
+    skipContainerCollect,
   )
 where
 
@@ -110,6 +111,128 @@ skipContainerText early open decoder text = case open of
         _ : ctxs ->
           pure (finishValue decoder {decoderInput = remainder, decoderStack = ctxs}, rest)
         [] -> pure (finishValue decoder {decoderInput = remainder}, rest)
+
+-- | Skip a whole container value, capturing its raw bytes in compact
+-- canonical form: insignificant whitespace is dropped, everything
+-- else (including escape style and number formats) is preserved
+-- verbatim. Validates exactly like 'skipExpect'; any grammar change
+-- touches both. Used by Take's container fast path so untouched
+-- subtrees bypass event decoding and re-encoding.
+skipContainerCollect ::
+  Early HQError ->
+  JSONEvent ->
+  DecoderState ->
+  StreamIO Text () ->
+  IO (DecoderState, Builder, Int, StreamIO Text ())
+skipContainerCollect early open decoder text = case open of
+  JSONBeginArray -> skipRest ExpectValue (char7 '[') 1
+  JSONBeginObject -> skipRest ExpectKey (char7 '{') 1
+  _ -> pure (decoder, mempty, 0, text)
+  where
+    -- The opener is already consumed (its byte prepended above), so
+    -- the skip ends when the depth pops back below its entry level.
+    skipRest expect openB openS = do
+      let depth = decoderNestDepth decoder
+          base = shallower depth
+      (remainder, bodyB, bodyS, rest) <-
+        collectExpect early mempty 0 base depth (decoderStack decoder) expect (decoderInput decoder) text
+      let accB = openB <> bodyB
+          accS = openS + bodyS
+      case decoderStack decoder of
+        _ : ctxs ->
+          pure (finishValue decoder {decoderInput = remainder, decoderStack = ctxs}, accB, accS, rest)
+        [] -> pure (finishValue decoder {decoderInput = remainder}, accB, accS, rest)
+
+-- | Structural collect loop; ends when the depth pops back to its
+-- entry level. Mirror of 'skipExpect' accumulating raw bytes instead
+-- of discarding: same states, same errors, same termination.
+collectExpect ::
+  Early HQError ->
+  Builder ->
+  Int ->
+  NestDepth ->
+  NestDepth ->
+  [DecodeContext] ->
+  SkipExpect ->
+  Text ->
+  StreamIO Text () ->
+  IO (Text, Builder, Int, StreamIO Text ())
+collectExpect early accB accS base depth stack ExpectValue input text = do
+  (c, rest, text') <- nextSkipChar early input text
+  case c of
+    '{' -> collectExpect early (accB <> char7 '{') (accS + 1) base (deeper depth) (DecodeObject : stack) ExpectKey rest text'
+    '[' -> collectExpect early (accB <> char7 '[') (accS + 1) base (deeper depth) (DecodeArray : stack) ExpectValue rest text'
+    '"' -> do
+      (rest', b1, s1, text'') <- skipStringCollect early rest text'
+      collectAfterValue early (accB <> char7 '"' <> b1 <> char7 '"') (accS + 2 + s1) base depth stack rest' text''
+    't' -> do
+      (rest', b1, s1, text'') <- skipKeywordCollect early rest text' "true"
+      collectAfterValue early (accB <> b1) (accS + s1) base depth stack rest' text''
+    'f' -> do
+      (rest', b1, s1, text'') <- skipKeywordCollect early rest text' "false"
+      collectAfterValue early (accB <> b1) (accS + s1) base depth stack rest' text''
+    'n' -> do
+      (rest', b1, s1, text'') <- skipKeywordCollect early rest text' "null"
+      collectAfterValue early (accB <> b1) (accS + s1) base depth stack rest' text''
+    _
+      | c == '-' || isDigit c -> do
+          let phase = fromMaybe NumberSign (numberPhaseFromFirstChar c)
+          (rest', b1, s1, text'') <- collectNumber early [T.singleton c] 1 phase rest text'
+          collectAfterValue early (accB <> b1) (accS + s1) base depth stack rest' text''
+      | c == ']' -> case stack of
+          DecodeArray : ctxs -> collectAfterValue early (accB <> char7 ']') (accS + 1) base (shallower depth) ctxs rest text'
+          _ -> leave early (HQDecodeError (UnexpectedChar c))
+      | otherwise -> leave early (HQDecodeError (UnexpectedChar c))
+collectExpect early accB accS base depth stack ExpectKey input text = do
+  (c, rest, text') <- nextSkipChar early input text
+  case c of
+    '}' -> case stack of
+      _ : ctxs -> collectAfterValue early (accB <> char7 '}') (accS + 1) base (shallower depth) ctxs rest text'
+      [] -> leave early (HQDecodeError ExpectedObjectKey)
+    '"' -> do
+      (rest', b1, s1, text'') <- skipStringCollect early rest text'
+      collectExpect early (accB <> char7 '"' <> b1 <> char7 '"') (accS + 2 + s1) base depth stack ExpectColon rest' text''
+    _ -> leave early (HQDecodeError ExpectedObjectKey)
+collectExpect early accB accS base depth stack ExpectColon input text = do
+  (c, rest, text') <- nextSkipChar early input text
+  case c of
+    ':' -> collectExpect early (accB <> char7 ':') (accS + 1) base depth stack ExpectValue rest text'
+    _ -> leave early (HQDecodeError ExpectedColon)
+collectExpect early accB accS base depth stack ExpectObjComma input text = do
+  (c, rest, text') <- nextSkipChar early input text
+  case c of
+    ',' -> collectExpect early (accB <> char7 ',') (accS + 1) base depth stack ExpectKey rest text'
+    '}' -> case stack of
+      _ : ctxs -> collectAfterValue early (accB <> char7 '}') (accS + 1) base (shallower depth) ctxs rest text'
+      [] -> leave early (HQDecodeError ExpectedCommaOrEnd)
+    _ -> leave early (HQDecodeError ExpectedCommaOrEnd)
+collectExpect early accB accS base depth stack ExpectArrComma input text = do
+  (c, rest, text') <- nextSkipChar early input text
+  case c of
+    ',' -> collectExpect early (accB <> char7 ',') (accS + 1) base depth stack ExpectValue rest text'
+    ']' -> case stack of
+      _ : ctxs -> collectAfterValue early (accB <> char7 ']') (accS + 1) base (shallower depth) ctxs rest text'
+      [] -> leave early (HQDecodeError ExpectedCommaOrEnd)
+    _ -> leave early (HQDecodeError ExpectedCommaOrEnd)
+
+-- | A value just completed: return at entry depth, else expect the
+-- enclosing separator. Mirror of 'afterValue'.
+collectAfterValue ::
+  Early HQError ->
+  Builder ->
+  Int ->
+  NestDepth ->
+  NestDepth ->
+  [DecodeContext] ->
+  Text ->
+  StreamIO Text () ->
+  IO (Text, Builder, Int, StreamIO Text ())
+collectAfterValue early accB accS base depth stack rest text'
+  | depth <= base = pure (rest, accB, accS, text')
+  | otherwise = case stack of
+      DecodeArray : _ -> collectExpect early accB accS base depth stack ExpectArrComma rest text'
+      DecodeObject : _ -> collectExpect early accB accS base depth stack ExpectObjComma rest text'
+      [] -> pure (rest, accB, accS, text')
 
 -- | Structural skip loop; ends when the depth pops back to its entry level.
 skipExpect ::
@@ -385,6 +508,41 @@ skipKeywordBody early keyword = go
           Nothing -> checkDelim mempty txt
           Just (c, _)
             | isJsonDelimiter c -> pure (inp, txt)
+            | otherwise -> leave early (HQDecodeError (InvalidKeyword keyword))
+
+-- | Skip a keyword, capturing its raw bytes. Mirrors 'skipKeywordBody';
+-- the literal is fixed, so it is appended whole on success.
+skipKeywordCollect ::
+  Early HQError ->
+  Text ->
+  StreamIO Text () ->
+  Text ->
+  IO (Text, Builder, Int, StreamIO Text ())
+skipKeywordCollect early input text keyword = go 1 input text
+  where
+    go !ix !inp !txt
+      | ix == T.length keyword = checkDelim inp txt
+      | T.null inp = do
+          result <- S.next txt
+          case result of
+            Left () -> leave early $ HQDecodeError $ InvalidKeyword keyword
+            Right (chunk, rest) -> go ix chunk rest
+      | otherwise = case T.uncons inp of
+          Nothing -> go ix mempty txt
+          Just (c, rest)
+            | c == T.index keyword ix -> go (ix + 1) rest txt
+            | otherwise -> leave early $ HQDecodeError $ InvalidKeyword keyword
+    checkDelim !inp !txt
+      | T.null inp = do
+          result <- S.next txt
+          case result of
+            Left () -> pure (mempty, encodeUtf8Builder keyword, T.length keyword, txt)
+            Right (chunk, rest) -> checkDelim chunk rest
+      | otherwise = case T.uncons inp of
+          Nothing -> checkDelim mempty txt
+          Just (c, _)
+            | isJsonDelimiter c ->
+                pure (inp, encodeUtf8Builder keyword, T.length keyword, txt)
             | otherwise -> leave early (HQDecodeError (InvalidKeyword keyword))
 
 --------------------------------------------------------------------------------

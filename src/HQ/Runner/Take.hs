@@ -10,7 +10,7 @@ import Data.Text qualified as T
 import HQ.Early (Early, leave)
 import HQ.JSON.Decoder
 import HQ.JSON.Decoder qualified as Decoder
-import HQ.JSON.Decoder.Skip (skipNumberCollect, skipStringCollect)
+import HQ.JSON.Decoder.Skip (skipContainerCollect, skipNumberCollect, skipStringCollect)
 import HQ.JSON.Encoder
 import HQ.JSON.Event (JSONEvent (..), matchingClose)
 import HQ.Runner.Cursor
@@ -118,15 +118,28 @@ takeContainerFrom early closing = go
       (event, dec') <- lift (finishTakeEvent early dec)
       emit event $ Cursor [] dec' (pure ())
 
+emitChunkBuffer :: Builder -> Int -> EncoderState -> ChunkStream IO EncoderState
+emitChunkBuffer b s (EncoderState ctxs depth pend pendSize) =
+  let !pend' = pend <> b
+      !pendSize' = pendSize + s
+   in if pendSize' >= batchSize
+        then do
+          S.yield (Chunk pend' pendSize')
+          pure (EncoderState ctxs depth mempty 0)
+        else pure (EncoderState ctxs depth pend' pendSize')
+
+flushEncoderChunks :: EncoderState -> ChunkStream IO EncoderState
+flushEncoderChunks st = case flushEncoderState st of
+  (Just chunk, st') -> S.yield chunk >> pure st'
+  (Nothing, st') -> pure st'
+
 emitChunk ::
   EncoderConfig ->
   JSONEvent ->
   EncoderState ->
   ChunkStream IO EncoderState
-emitChunk config event st = do
-  let (chunk, st') = formatEvent config st event
-  S.yield chunk
-  pure st'
+emitChunk config event st = case formatEvent config st event of
+  (Chunk b s, st') -> emitChunkBuffer b s st'
 
 --------------------------------------------------------------------------------
 -- Shared chunk walk combinators (single implementation for Rewrite)
@@ -227,11 +240,13 @@ emitKeyAndTake early config key rest s = do
   takeValueChunks early config rest s'
 
 -- | Take one complete value, transcribing it straight to chunks.
--- Strings and numbers take a verbatim raw path ('peekRawScalar'):
--- chunk-side only. The event-side take ('takeValue') always decodes,
--- so both paths must agree on value boundaries; the raw scanners
--- ('skipStringCollect'/'skipNumberCollect') mirror the decoder
--- ('consumeString'/'stepNumber') exactly, and the split/adversarial
+-- Strings and numbers take a verbatim raw path ('peekRawScalar'),
+-- and so do whole containers in compact mode ('takeRawContainerChunks'
+-- below): chunk-side only. The event-side take ('takeValue') always
+-- decodes, so both paths must agree on value boundaries; the raw
+-- scanners ('skipStringCollect'/'skipNumberCollect'/
+-- 'skipContainerCollect') mirror the decoder ('consumeString'/
+-- 'stepNumber'/structural loop) exactly, and the split/adversarial
 -- tests cover the agreement. Change one side only with a test on
 -- the other.
 takeValueChunks ::
@@ -247,14 +262,31 @@ takeValueChunks early config cursor st = case peekRawScalar cursor of
     takeRawNumberChunks early config atNumber dec txt st
   Nothing -> do
     (event, cursor') <- lift (pullOne early cursor)
-    st' <- emitChunk config event st
-    case matchingClose event of
-      Just closing -> takeContainerChunks early config closing cursor' st'
-      Nothing -> case event of
-        JSONEndArray -> lift (leave early $ HQRunnerError UnexpectedEndOfArray)
-        JSONEndObject -> lift (leave early $ HQRunnerError UnexpectedEndOfObject)
-        JSONObjectKey _ -> lift (leave early $ HQRunnerError UnexpectedObjectKey)
-        _ -> pure (st', cursor')
+    let slowPath = do
+          st' <- emitChunk config event st
+          case matchingClose event of
+            Just closing -> takeContainerChunks early config closing cursor' st'
+            Nothing -> case event of
+              JSONEndArray -> lift (leave early $ HQRunnerError UnexpectedEndOfArray)
+              JSONEndObject -> lift (leave early $ HQRunnerError UnexpectedEndOfObject)
+              JSONObjectKey _ -> lift (leave early $ HQRunnerError UnexpectedObjectKey)
+              _ -> pure (st', cursor')
+    -- Wholesale containers bypass event decoding only when nothing is
+    -- buffered (buffered replay has no source text to collect) and the
+    -- output is compact (verbatim bytes are already canonical there;
+    -- pretty output must be generated).
+    case event of
+      JSONBeginArray -> case cursor' of
+        Cursor [] dec txt
+          | outputStyle config == Compact ->
+              takeRawContainerChunks early config event dec txt st
+        _ -> slowPath
+      JSONBeginObject -> case cursor' of
+        Cursor [] dec txt
+          | outputStyle config == Compact ->
+              takeRawContainerChunks early config event dec txt st
+        _ -> slowPath
+      _ -> slowPath
 
 -- | A peeked string or number value: payload after the quote / at the
 -- first digit, pending colon already skipped.
@@ -295,8 +327,8 @@ takeRawStringChunks ::
   ChunkStream IO (EncoderState, Cursor)
 takeRawStringChunks early config afterQuote dec txt st = do
   (remainder, rawB, rawS, rest) <- lift (skipStringCollect early afterQuote txt)
-  let (chunk, st') = transcribeRawString config st rawB rawS
-  S.yield chunk
+  let (Chunk b s, st1) = transcribeRawString config st rawB rawS
+  st' <- emitChunkBuffer b s st1
   pure (st', Cursor [] (finishValue dec {decoderInput = remainder}) rest)
 
 -- | Transcribe a peeked number value verbatim (no 'Scientific' roundtrip).
@@ -310,26 +342,33 @@ takeRawNumberChunks ::
   ChunkStream IO (EncoderState, Cursor)
 takeRawNumberChunks early config atNumber dec txt st = do
   (remainder, rawB, rawS, rest) <- lift (skipNumberCollect early atNumber txt)
-  let (chunk, st') = transcribeRawBytes config st rawB rawS
-  S.yield chunk
+  let (Chunk b s, st1) = transcribeRawBytes config st rawB rawS
+  st' <- emitChunkBuffer b s st1
   pure (st', Cursor [] (finishValue dec {decoderInput = remainder}) rest)
+
+-- | Transcribe a whole container value verbatim in one chunk. The
+-- cursor must be unbuffered with the decoder just past the opening
+-- bracket (same precondition as walking it with 'takeContainerChunks';
+-- the open event itself was already pulled). Encoder-state transitions
+-- match the scalar raw path exactly (one 'transcribeRawBytes'),
+-- since the open/close brackets travel inside the raw bytes.
+takeRawContainerChunks ::
+  Early HQError ->
+  EncoderConfig ->
+  JSONEvent ->
+  DecoderState ->
+  StreamIO Text () ->
+  EncoderState ->
+  ChunkStream IO (EncoderState, Cursor)
+takeRawContainerChunks early config open dec txt st = do
+  (dec', rawB, rawS, rest) <- lift (skipContainerCollect early open dec txt)
+  let (Chunk b s, st1) = transcribeRawBytes config st rawB rawS
+  st' <- emitChunkBuffer b s st1
+  pure (st', Cursor [] dec' rest)
 
 -- | Pending-builder flush threshold; chunk boundaries never change bytes.
 batchSize :: Int
 batchSize = 8192
-
--- | Loop state for 'takeContainerChunks': the cursor plus encoder
--- state plus the pending output builder and its estimated size.
--- Packed so the six loop functions share one state argument instead
--- of a positional 4-tuple (where 'Builder' next to 'Int' is easy to
--- transpose). All fields strict, matching the per-argument bangs the
--- tuple version carried.
-data TakeLoop = TakeLoop
-  { loopCursor :: Cursor,
-    loopEncoder :: EncoderState,
-    loopPending :: Builder,
-    loopPendingSize :: Int
-  }
 
 -- | Take a container body, fusing decode and format per event with no
 -- intermediate event stream.
@@ -340,64 +379,49 @@ takeContainerChunks ::
   Cursor ->
   EncoderState ->
   ChunkStream IO (EncoderState, Cursor)
-takeContainerChunks early config closing c st0 = go (TakeLoop c st0 mempty 0)
+takeContainerChunks early config closing = go
   where
-    go :: TakeLoop -> ChunkStream IO (EncoderState, Cursor)
-    go loop = case loopCursor loop of
+    go :: Cursor -> EncoderState -> ChunkStream IO (EncoderState, Cursor)
+    go cur st = case cur of
       Cursor (event : buffered) dec txt ->
-        emit event (loop {loopCursor = Cursor buffered dec txt})
+        emit event (Cursor buffered dec txt) st
       Cursor [] _ _ ->
-        stepMore loop
-    stepMore :: TakeLoop -> ChunkStream IO (EncoderState, Cursor)
-    stepMore loop@(TakeLoop (Cursor _ dec txt) _ _ _) = case Decoder.step dec of
+        stepMore cur st
+    stepMore :: Cursor -> EncoderState -> ChunkStream IO (EncoderState, Cursor)
+    stepMore (Cursor _ dec txt) st = case Decoder.step dec of
       Left err -> lift (leave early (HQDecodeError err))
       Right (Emit event dec') ->
-        emit event (loop {loopCursor = Cursor [] dec' txt})
+        emit event (Cursor [] dec' txt) st
       Right (NeedInput dec')
-        | hasPending dec' -> stepMore (loop {loopCursor = Cursor [] dec' txt})
-        | otherwise -> pullMore (loop {loopCursor = Cursor [] dec' txt})
+        | hasPending dec' -> stepMore (Cursor [] dec' txt) st
+        | otherwise -> pullMore (Cursor [] dec' txt) st
       Right (Done _) -> lift (leave early $ HQRunnerError UnexpectedEndOfInput)
-    emit :: JSONEvent -> TakeLoop -> ChunkStream IO (EncoderState, Cursor)
-    emit !event loop@(TakeLoop cur st pend pendSize) = do
-      let (Chunk b s, st') = formatEvent config st event
-          pend' = pend <> b
-          pendSize' = pendSize + s
+    emit :: JSONEvent -> Cursor -> EncoderState -> ChunkStream IO (EncoderState, Cursor)
+    emit !event cur st = do
+      st' <- emitChunk config event st
       if event == closing
-        then flush pend' pendSize' >> pure (st', cur)
+        then pure (st', cur)
         else case matchingClose event of
-          Just end -> nested end (loop {loopEncoder = st', loopPending = pend', loopPendingSize = pendSize'})
-          Nothing
-            | pendSize' >= batchSize -> do
-                flush pend' pendSize'
-                go (TakeLoop cur st' mempty 0)
-            | otherwise -> go (loop {loopEncoder = st', loopPending = pend', loopPendingSize = pendSize'})
-    nested :: JSONEvent -> TakeLoop -> ChunkStream IO (EncoderState, Cursor)
-    nested !end (TakeLoop cur st pend pendSize) = do
-      -- Flush before descending: parent bytes buffered so far must
-      -- reach downstream before the nested value's chunks (yield order
-      -- is byte order). Cross-level batching is therefore bounded by
-      -- nesting; threading the buffer through instead would batch
-      -- across levels, at the cost of a less obvious loop (measure
-      -- before changing).
-      flush pend pendSize
+          Just end -> nested end cur st'
+          Nothing -> go cur st'
+    nested :: JSONEvent -> Cursor -> EncoderState -> ChunkStream IO (EncoderState, Cursor)
+    nested !end cur st = do
       (st', cursor') <- takeContainerChunks early config end cur st
-      go (TakeLoop cursor' st' mempty 0)
-    pullMore :: TakeLoop -> ChunkStream IO (EncoderState, Cursor)
-    pullMore loop@(TakeLoop (Cursor _ dec txt) _ _ _) = do
+      go cursor' st'
+    pullMore :: Cursor -> EncoderState -> ChunkStream IO (EncoderState, Cursor)
+    pullMore cur@(Cursor _ dec txt) st = do
       result <- lift (S.next txt)
       case result of
-        Left () -> finishTake loop
+        Left () -> finishTake cur st
         Right (chunk, rest) -> case Decoder.feed chunk dec of
           Left err -> lift (leave early (HQDecodeError err))
           Right (Emit event dec') ->
-            emit event (loop {loopCursor = Cursor [] dec' rest})
-          Right (NeedInput dec') -> stepMore (loop {loopCursor = Cursor [] dec' rest})
+            emit event (Cursor [] dec' rest) st
+          Right (NeedInput dec') -> stepMore (Cursor [] dec' rest) st
           Right (Done _) -> lift (leave early $ HQRunnerError UnexpectedEndOfInput)
     -- Mirror terminal 'finish' policy, emitting the final event as a chunk.
-    finishTake :: TakeLoop -> ChunkStream IO (EncoderState, Cursor)
-    finishTake (TakeLoop (Cursor _ dec _) st pend pendSize) = do
+    finishTake :: Cursor -> EncoderState -> ChunkStream IO (EncoderState, Cursor)
+    finishTake (Cursor _ dec _) st = do
       (event, dec') <- lift (finishTakeEvent early dec)
       let newCursor = Cursor [] dec' (pure ())
-       in emit event (TakeLoop newCursor st pend pendSize)
-    flush :: Builder -> Int -> ChunkStream IO ()
-    flush !pend !pendSize = when (pendSize > 0) $ S.yield $ Chunk pend pendSize
+       in emit event newCursor st

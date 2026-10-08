@@ -19,8 +19,9 @@ module HQ.JSON.Encoder
     ChunkStream,
     BSStream,
     EncodeContext (..),
-    EncoderState,
+    EncoderState (..),
     initialEncoderState,
+    flushEncoderState,
     Raw (..),
     Join (..),
     EncoderConfig (..),
@@ -81,12 +82,21 @@ data EncodeContext
 
 -- | Encoder state threaded through transcription: container contexts
 -- plus their depth, kept in sync by construction (only 'formatEvent'
--- and 'closeContainer' reshape it).
-data EncoderState = EncoderState [EncodeContext] NestDepth
-  deriving (Eq, Show)
+-- and 'closeContainer' reshape it). Also carries pending output
+-- builder and size for chunk batching.
+data EncoderState = EncoderState ![EncodeContext] !NestDepth !Builder !Int
+  deriving (Show)
+
+instance Eq EncoderState where
+  EncoderState c1 d1 _ _ == EncoderState c2 d2 _ _ = c1 == c2 && d1 == d2
 
 initialEncoderState :: EncoderState
-initialEncoderState = EncoderState [] initialDepth
+initialEncoderState = EncoderState [] initialDepth mempty 0
+
+flushEncoderState :: EncoderState -> (Maybe Chunk, EncoderState)
+flushEncoderState (EncoderState ctxs depth pend pendSize)
+  | pendSize > 0 = (Just (Chunk pend pendSize), EncoderState ctxs depth mempty 0)
+  | otherwise = (Nothing, EncoderState ctxs depth mempty 0)
 
 -- | Encode a 'Scientific' in compact JSON-compatible form, directly to
 -- a 'Chunk'.
@@ -202,18 +212,18 @@ formatEvent config@(EncoderConfig style (ValueOptions rawOpt joinOpt)) st event 
 
     -- Push one container context, tracking depth alongside.
     pushCtx :: EncodeContext -> EncoderState -> EncoderState
-    pushCtx ctx (EncoderState ctxs depth) =
-      EncoderState (ctx : ctxs) (deeper depth)
+    pushCtx ctx (EncoderState ctxs depth pend pendSize) =
+      EncoderState (ctx : ctxs) (deeper depth) pend pendSize
 
     -- Render one value event, honoring raw top-level string output.
     valueChunk :: JSONEvent -> EncoderState -> Chunk
-    valueChunk (JSONString text) (EncoderState valueCtxs _)
+    valueChunk (JSONString text) (EncoderState valueCtxs _ _ _)
       | rawOpt == Raw && null valueCtxs = encodeRawString text
     valueChunk ev _ = encodeEvent ev
 
 -- | Separator after a complete top-level value: newline unless 'Join'.
 finishTopValue :: Join -> EncoderState -> Chunk
-finishTopValue joinOpt (EncoderState ctxs' _)
+finishTopValue joinOpt (EncoderState ctxs' _ _ _)
   | joinOpt == NoJoin && null ctxs' = Chunk newline 1
   | otherwise = Chunk mempty 0
 
@@ -236,10 +246,10 @@ transcribeRawString config st rawB rawS =
   transcribeRawBytes config st (char7 '"' <> rawB <> char7 '"') (rawS + 2)
 
 beforeKey :: EncodeStyle -> EncoderState -> (Chunk, EncoderState)
-beforeKey style st@(EncoderState ctxs depth) = case ctxs of
+beforeKey style st@(EncoderState ctxs depth pend pendSize) = case ctxs of
   EncodeObject seen : rest ->
     ( elementSeparator style seen depth,
-      EncoderState (EncodeObjectAfterKey : rest) depth
+      EncoderState (EncodeObjectAfterKey : rest) depth pend pendSize
     )
   -- A key outside a container; emit it bare.
   _ -> (Chunk mempty 0, st)
@@ -249,7 +259,7 @@ beforeKey style st@(EncoderState ctxs depth) = case ctxs of
 -- marks the parent non-empty once the value has arrived, or when a
 -- nested container closes.
 beforeValue :: EncodeStyle -> EncoderState -> (Chunk, EncoderState)
-beforeValue style st@(EncoderState ctxs depth) = case ctxs of
+beforeValue style st@(EncoderState ctxs depth _ _) = case ctxs of
   EncodeObjectAfterKey : _ -> (colonSeparator style, st)
   EncodeArray seen : _ -> member seen
   -- A value where a key was expected (malformed input); recover by
@@ -262,7 +272,7 @@ beforeValue style st@(EncoderState ctxs depth) = case ctxs of
 
 -- | After a value was emitted, mark the innermost container non-empty.
 afterValue :: EncoderState -> EncoderState
-afterValue (EncoderState ctxs depth) = EncoderState (mark ctxs) depth
+afterValue (EncoderState ctxs depth pend pendSize) = EncoderState (mark ctxs) depth pend pendSize
   where
     mark = \case
       [] -> []
@@ -273,10 +283,10 @@ afterValue (EncoderState ctxs depth) = EncoderState (mark ctxs) depth
 -- | Emit the closing delimiter for a container, then pop it and mark
 -- the parent container as having received a value.
 closeContainer :: EncodeStyle -> EncoderState -> (Chunk, EncoderState)
-closeContainer _ st@(EncoderState [] _) = (Chunk mempty 0, st)
-closeContainer style (EncoderState (ctx : rest) depth) =
+closeContainer _ st@(EncoderState [] _ _ _) = (Chunk mempty 0, st)
+closeContainer style (EncoderState (ctx : rest) depth pend pendSize) =
   let depth' = shallower depth
-   in (closingDelimiter style depth' ctx, afterValue (EncoderState rest depth'))
+   in (closingDelimiter style depth' ctx, afterValue (EncoderState rest depth' pend pendSize))
 
 -- | The closing delimiter of the innermost container.  An empty
 -- container stays on one line; a non-empty one is closed on its own

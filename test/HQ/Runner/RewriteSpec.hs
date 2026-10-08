@@ -34,12 +34,94 @@ spec = describe "HQ.Runner.Rewrite" $ do
   ixRewriteSpec
   filterRewriteSpec
   chunkedRewriteSpec
+  compactContainerSpec
   multiDocumentRewriteSpec
 
 -- | Encoder config for rewrite tests: pretty output, matching the
 -- production default.
 testConfig :: EncoderConfig
 testConfig = EncoderConfig (Pretty 2) (ValueOptions NoRaw NoJoin)
+
+-- | Encoder config exercising the compact fast paths (raw scalar and
+-- container capture) in Take. Same value options as 'testConfig',
+-- only the style differs.
+compactTestConfig :: EncoderConfig
+compactTestConfig = EncoderConfig Compact (ValueOptions NoRaw NoJoin)
+
+-- | Whole-container passthrough values: nested objects/arrays with
+-- strings (escapes, unicode), numbers, keywords, empties and
+-- significant whitespace (dropped by compact capture).
+containerCorpus :: [Text]
+containerCorpus =
+  [ "{\"a\":{\"b\":[1,\"x\",true,null]},\"c\":{}}",
+    "{\"a\":[{\"b\":[{\"c\":[]}]}]}",
+    "[{\"k\":\"v\\\"q\",\"n\":-12.5e2,\"t\":true,\"f\":false,\"z\":null,\"e\":{},\"s\":\"a\\u00e9\\n\"}]",
+    "{ \"a\" : [1, 2] }",
+    "{\"deep\":{\"deeper\":{\"deepest\":[[[[1]]]]}}}",
+    "[[],{},[{}],{\"a\":[]}]"
+  ]
+
+malformedContainerCorpus :: [Text]
+malformedContainerCorpus =
+  [ "{\"a\":[1,2}",
+    "{\"a\":1",
+    "[1,,2]",
+    "[1 2]",
+    "{\"a\" 1}",
+    "{\"a\":\"\\x\"}",
+    "{\"a\":nul}",
+    "{\"a\":01}"
+  ]
+
+-- | Compact container capture must agree with the event path
+-- (pretty config): same queries, same documents, every chunk split.
+-- The pretty runs decode and re-encode event by event; the compact
+-- runs capture whole containers verbatim.
+compactContainerSpec :: Spec
+compactContainerSpec = describe "compact container capture" $ do
+  it "over agrees with the event path under every split" $ do
+    forM_ overContainerCases $ \(opticStr, transformation, doc) ->
+      case parseOptic opticStr of
+        Left err -> expectationFailure $ "bad optic: " <> show err
+        Right optic -> do
+          expected <- runRewriteChunks (\early -> runOver early optic transformation testConfig) [doc]
+          forM_ (chunkSplits doc) $ \chunks -> do
+            actual <- runRewriteChunks (\early -> runOver early optic transformation compactTestConfig) chunks
+            actual `shouldBe` expected
+  it "delete agrees with the event path under every split" $ do
+    forM_ deleteContainerCases $ \(opticStr, doc) ->
+      case parseOptic opticStr of
+        Left err -> expectationFailure $ "bad optic: " <> show err
+        Right optic -> do
+          expected <- runRewriteChunks (\early -> runDelete early optic testConfig) [doc]
+          forM_ (chunkSplits doc) $ \chunks -> do
+            actual <- runRewriteChunks (\early -> runDelete early optic compactTestConfig) chunks
+            actual `shouldBe` expected
+  it "fails exactly where the event path fails" $ do
+    Right testOptic <- pure (parseOptic "@a")
+    forM_ malformedContainerCorpus $ \doc -> do
+      forM_ (chunkSplits doc) $ \chunks -> do
+        pretty <- runRewriteChunks (\early -> runDelete early testOptic testConfig) chunks
+        compact <- runRewriteChunks (\early -> runDelete early testOptic compactTestConfig) chunks
+        pretty `shouldSatisfy` isLeft
+        compact `shouldBe` pretty
+  it "normalizes insignificant whitespace like the event path" $ do
+    Right optic <- pure (parseOptic "@b")
+    runRewriteDocumentsTest (\early -> runDelete early optic compactTestConfig) ["{ \"a\" : [1, 2] }"]
+      `shouldReturn` Right "{\"a\":[1,2]}\n"
+  where
+    overContainerCases :: [(Text, Transformation, Text)]
+    overContainerCases =
+      [ ("@a", Add 1, "{\"a\":1,\"nested\":{\"x\":[1,2],\"y\":{}}}"),
+        ("@a", Add 1, "{ \"a\" : 1, \"spaced\" : [1, 2] }"),
+        ("each.@n", Add 1, "[{\"n\":1,\"keep\":{\"deep\":[true,null]}},{\"n\":2}]")
+      ]
+    deleteContainerCases :: [(Text, Text)]
+    deleteContainerCases =
+      [ ("@x", "{\"x\":1,\"keep\":{\"deep\":[1,{\"y\":2}]}}"),
+        ("@a", "{\"a\":1,\"nested\":{\"x\":[1,2],\"y\":{}}}")
+      ]
+        <> [("@x", doc) | doc <- containerCorpus]
 
 -- | Run a document-rewriting query (set/delete), reparse its output
 -- bytes back to events, and collect them. Reparsing through the
