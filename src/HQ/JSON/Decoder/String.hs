@@ -1,4 +1,3 @@
-{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE StrictData #-}
@@ -38,7 +37,7 @@ consumeString target input buffer decoder = case T.uncons rest of
     | otherwise -> Left (UnexpectedChar c)
   where
     (chunk, rest) = T.span isStringChar input
-    !newBuffer = appendStringBuffer chunk buffer
+    newBuffer = appendStringBuffer chunk buffer
 
 consumeStringEscape ::
   StringTarget -> Text -> StringBuffer -> DecoderState -> Either DecodeError DecoderResult
