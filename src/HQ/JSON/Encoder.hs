@@ -149,21 +149,33 @@ integerDigits x = go x (0 :: Int)
       | v < 10 = acc + 1
       | otherwise = go (v `quot` 10) (acc + 1)
 
--- | Encode an event stream to chunks via 'formatEvent', never
--- materializing the document.
-encodeToChunks :: (Monad m) => EncoderConfig -> JSONStream m r -> ChunkStream m r
-encodeToChunks config = go initialEncoderState
+-- | Events to 'ByteString' chunks, flushing roughly every @cSize@ bytes.
+-- Formats and buffers in one loop: unlike @encodeChunks . encodeToChunks@
+-- there is no intermediate chunk stream (one fewer 'S.next'/'S.yield'
+-- pair and no 'Chunk' box per event). The buffering policy mirrors
+-- 'encodeChunks', which stays for pre-chunked streams.
+encode :: (Monad m) => EncoderConfig -> Int -> JSONStream m r -> BSStream m r
+encode config size = go initialEncoderState mempty 0
   where
-    go st events = do
-      result <- lift $ S.next events
-      case result of
-        Left r -> pure r
+    go :: (Monad m) => EncoderState -> Builder -> Int -> JSONStream m r -> BSStream m r
+    go !st !builder !size' stream = do
+      nextResult <- lift $ S.next stream
+      case nextResult of
+        Left r ->
+          if size' == 0 then Return r else S.yield (flush builder) >> Return r
         Right (event, rest) ->
-          let (chunk, st') = formatEvent config st event
-           in S.yield chunk >> go st' rest
+          let (Chunk eventChunk eventSize, st') = formatEvent config st event
+              newSize = size' + eventSize
+              newBuilder = builder <> eventChunk
+           in if size' > 0 && newSize >= size
+                then S.yield (flush newBuilder) >> go st' mempty 0 rest
+                else go st' newBuilder newSize rest
+
+    flush :: Builder -> LByteString
+    flush = toLazyByteString
 
 -- | Format a single event to a 'Chunk', threading the container
--- context. This is one step of 'encodeToChunks', exposed so fused
+-- context. This is one step of 'encode', exposed so fused
 -- pipelines can format events without an intermediate event stream.
 formatEvent :: EncoderConfig -> EncoderState -> JSONEvent -> (Chunk, EncoderState)
 formatEvent config@(EncoderConfig style (ValueOptions rawOpt joinOpt)) st event =
@@ -422,10 +434,6 @@ type JSONStream m r = Stream (Of JSONEvent) m r
 type BSStream m r = Stream (Of LByteString) m r
 
 type ChunkStream m r = Stream (Of Chunk) m r
-
--- | Events to 'ByteString' chunks, flushing roughly every @cSize@ bytes.
-encode :: (Monad m) => EncoderConfig -> Int -> JSONStream m r -> BSStream m r
-encode config size = encodeChunks size . encodeToChunks config
 
 -- | Buffer 'Chunk's into 'ByteString' output, flushing roughly every
 -- @cSize@ bytes.
