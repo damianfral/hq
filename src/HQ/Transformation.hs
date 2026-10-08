@@ -281,6 +281,8 @@ compareValues x y = case compare (valueRank x) (valueRank y) of
   EQ -> compareSame x y
   other -> other
   where
+    compareSame Null Null = EQ
+    compareSame (Bool a) (Bool b) = compare a b
     compareSame (Number a) (Number b) = compare a b
     compareSame (String a) (String b) = compare a b
     compareSame (Array a) (Array b) =
