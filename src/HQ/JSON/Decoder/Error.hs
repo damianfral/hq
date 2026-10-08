@@ -9,11 +9,9 @@ import Relude hiding (Compose, id, many, some, state)
 data DecodeError
   = UnexpectedEnd
   | UnexpectedChar Char
-  | UnexpectedToken Text
   | ExpectedColon
   | ExpectedCommaOrEnd
   | ExpectedObjectKey
-  | ExpectedValue
   | InvalidEscape Char
   | InvalidUnicodeEscape
   | InvalidSurrogatePair

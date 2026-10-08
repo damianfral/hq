@@ -12,7 +12,7 @@ import HQ.Early (Early, leave, orLeave)
 import HQ.Error (HQError (..))
 import HQ.JSON.Decoder (initialDecoder)
 import HQ.JSON.Event
-import HQ.Optic (Optic (..), PrismKind, prismPredicate)
+import HQ.Optic (Optic (..), PrismKind (..), prismPredicate)
 import HQ.Runner.Cursor
 import HQ.Runner.Error (RunnerError (..))
 import HQ.Runner.Take (takeFirstValue, takeValue)
@@ -26,13 +26,14 @@ import Streaming.Prelude qualified as S
 -- returning the value, its events and the cursor after it.
 -- Shared by folding and rewriting so @filter@ gates and @over@
 -- replacements agree on error mapping.
-materializeValue :: Early HQError -> Cursor -> IO (Value, [JSONEvent], Cursor)
+materializeValue :: Early HQError -> Cursor -> IO (Value, NonEmpty JSONEvent, Cursor)
 materializeValue early cur = do
   events :> afterValue <- S.toList (takeValue early cur)
-  v <- orLeave early $ first HQRunnerError $ eventsToValue events
-  case events of
-    [] -> leave early $ HQRunnerError EmptyValue
-    _ -> pure (v, events, afterValue)
+  ne <- case nonEmpty events of
+    Nothing -> leave early $ HQRunnerError EmptyValue
+    Just ne -> pure ne
+  v <- orLeave early $ first HQRunnerError $ eventsToValue (toList ne)
+  pure (v, ne, afterValue)
 
 -- | Test a @filter@ gate, mapping failures to 'HQError'.
 -- Shared by 'runFold' and 'runRewrite'.
@@ -50,13 +51,10 @@ gateTake ::
   Cursor ->
   IO (Bool, JSONEvent, Cursor, Cursor)
 gateTake early o t cur = do
-  (v, events, afterValue) <- materializeValue early cur
+  (v, ne@(firstEv :| _), afterValue) <- materializeValue early cur
   keep <- orLeave early (gateValue o t v)
-  case events of
-    [] -> leave early $ HQRunnerError EmptyValue
-    (firstEv : _) ->
-      let Cursor _ dec txt = afterValue
-       in pure (keep, firstEv, Cursor events dec txt, afterValue)
+  let Cursor _ dec txt = afterValue
+  pure (keep, firstEv, Cursor (toList ne) dec txt, afterValue)
 
 -- | Apply a transformation, mapping failures to 'HQError'.
 -- Shared by rewriting (@over@) replacements.
@@ -209,11 +207,11 @@ focusMany o v = case o of
   Field name -> pure (lookupField name v)
   Each -> pure (eachValues v)
   Keys -> pure (keyValues v)
-  Values -> pure (valuesValues v)
+  Values -> pure (objectValues v)
   Id -> pure [v]
   Compose l r -> do
     ls <- focusMany l v
-    concat <$> traverse (focusMany r) ls
+    mconcat <$> traverse (focusMany r) ls
   Prism kind -> pure $ matchPrism kind v
   PrismJust -> pure $ matchJust v
   Ix i -> pure $ matchIndex i v
@@ -224,15 +222,15 @@ focusMany o v = case o of
 -- | Evaluate a @filter@ gate on an in-memory value: true when the
 -- transformation maps some focused sub-value to true.
 evalFilterGate :: Optic -> Transformation -> Value -> Either TransformationError Bool
-evalFilterGate o t v = focusMany o v >>= anyMatch t
+evalFilterGate o t v = focusMany o v >>= go
   where
-    anyMatch :: Transformation -> [Value] -> Either TransformationError Bool
-    anyMatch _ [] = pure False
-    anyMatch t' (w : ws) = do
-      b <- testValue t' w
-      if b then pure True else anyMatch t' ws
-    testValue :: Transformation -> Value -> Either TransformationError Bool
-    testValue t' w = case runTransformation t' w of
+    go :: [Value] -> Either TransformationError Bool
+    go [] = pure False
+    go (w : ws) = do
+      b <- testValue w
+      if b then pure True else go ws
+    testValue :: Value -> Either TransformationError Bool
+    testValue w = case runTransformation t w of
       Left err -> Left err
       Right (Bool b) -> pure b
       Right _ -> Left FilterNotBoolean
@@ -244,7 +242,8 @@ lookupField name v = case v of
   Object o -> maybeToList (KeyMap.lookup (Key.fromText name) o)
   _ -> []
 
--- | Object member values; arrays and scalars focus on nothing.
+-- | Object member values only; arrays and scalars focus on nothing.
+-- Arrays and scalars focus on nothing; use 'Each' for arrays.
 objectValues :: Value -> [Value]
 objectValues v = case v of
   Object o -> KeyMap.elems o
@@ -263,17 +262,15 @@ keyValues v = case v of
   Object o -> map (String . Key.toText) (KeyMap.keys o)
   _ -> []
 
--- | Object member values only; arrays focus on nothing.
-valuesValues :: Value -> [Value]
-valuesValues = objectValues
-
--- | Match a type prism against an in-memory value, reusing the shared
--- 'prismPredicate' on the value's first event (every value yields at
--- least one event, forced lazily).
+-- | Match a type prism against an in-memory value directly.
 matchPrism :: PrismKind -> Value -> [Value]
-matchPrism kind v = case valueToEvents v of
-  (ev : _) | prismPredicate kind ev -> [v]
-  _ -> []
+matchPrism kind v = case kind of
+  PString -> case v of s@(String _) -> [s]; _ -> []
+  PNumber -> case v of n@(Number _) -> [n]; _ -> []
+  PBool -> case v of b@(Bool _) -> [b]; _ -> []
+  PNull -> case v of Null -> [v]; _ -> []
+  PArray -> case v of a@(Array _) -> [a]; _ -> []
+  PObject -> case v of o@(Object _) -> [o]; _ -> []
 
 matchJust :: Value -> [Value]
 matchJust v = case v of
