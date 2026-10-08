@@ -239,29 +239,51 @@ runTransformation step value = case step of
       _ -> Left XorBranchNotBoolean
   Compose left right -> runTransformation right value >>= runTransformation left
   where
-    withNumber :: (Scientific -> Value) -> Value -> Either TransformationError Value
-    withNumber apply (Number n) = pure (apply n)
-    withNumber _ _ = Left ExpectedNumber
+    -- Eliminate one JSON shape: rebuild on match, fail with the
+    -- shape's error otherwise. Every leaf transformation goes through
+    -- here, so a new shape adds a projector, not a helper.
+    with :: (Value -> Maybe a) -> TransformationError -> (a -> Value) -> Value -> Either TransformationError Value
+    with project err build v = maybe (Left err) (pure . build) (project v)
 
-    withString :: (Text -> Value) -> Value -> Either TransformationError Value
-    withString apply (String s) = pure (apply s)
-    withString _ _ = Left ExpectedString
+    asNumber :: Value -> Maybe Scientific
+    asNumber (Number n) = Just n
+    asNumber _ = Nothing
+
+    asString :: Value -> Maybe Text
+    asString (String s) = Just s
+    asString _ = Nothing
 
     -- \| Strip an affix when present, leaving the value unchanged otherwise.
     stripAffix :: (Text -> Text -> Maybe Text) -> Text -> Text -> Text
     stripAffix stripF affix s = fromMaybe s (stripF affix s)
 
+    asArray :: Value -> Maybe (Vector Value)
+    asArray (Array a) = Just a
+    asArray _ = Nothing
+
+    asObject :: Value -> Maybe (KeyMap.KeyMap Value)
+    asObject (Object o) = Just o
+    asObject _ = Nothing
+
+    asBool :: Value -> Maybe Bool
+    asBool (Bool b) = Just b
+    asBool _ = Nothing
+
+    -- Short names, kept as synonyms of 'with'.
+    withNumber :: (Scientific -> Value) -> Value -> Either TransformationError Value
+    withNumber = with asNumber ExpectedNumber
+
+    withString :: (Text -> Value) -> Value -> Either TransformationError Value
+    withString = with asString ExpectedString
+
     withArray :: (Vector Value -> Value) -> Value -> Either TransformationError Value
-    withArray apply (Array a) = pure (apply a)
-    withArray _ _ = Left ExpectedArray
+    withArray = with asArray ExpectedArray
 
     withObject :: (KeyMap.KeyMap Value -> Value) -> Value -> Either TransformationError Value
-    withObject apply (Object o) = pure (apply o)
-    withObject _ _ = Left ExpectedObject
+    withObject = with asObject ExpectedObject
 
     withBool :: (Bool -> Value) -> Value -> Either TransformationError Value
-    withBool apply (Bool b) = pure (apply b)
-    withBool _ _ = Left ExpectedBoolean
+    withBool = with asBool ExpectedBoolean
 
 -- | Recursive object merge with right-wins conflicts (like jq @*@):
 -- members that are objects on both sides merge recursively, anything
