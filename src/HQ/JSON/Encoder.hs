@@ -89,7 +89,7 @@ initialEncoderState :: EncoderState
 initialEncoderState = EncoderState [] initialDepth
 
 -- | Encode a 'Scientific' in compact JSON-compatible form, directly to
--- a 'ChunkFragment'.
+-- a 'Chunk'.
 --
 -- GHC's 'show' instance for 'Scientific' produces "42.0" for integer
 -- values and "1.0e10" for exponent notation, neither of which is valid
@@ -99,16 +99,16 @@ initialEncoderState = EncoderState [] initialDepth
 -- negative exponents splice the decimal point into the coefficient
 -- digits. Output text is identical to the previous 'show'-based
 -- implementation; only allocation is reduced.
-encodeNumber :: Scientific -> ChunkFragment
+encodeNumber :: Scientific -> Chunk
 encodeNumber n
-  | c == 0 = ChunkFragment (char7 '0') 1
+  | c == 0 = Chunk (char7 '0') 1
   | e >= 0 =
       let signB = if c < 0 then char7 '-' else mempty
           signLen = if c < 0 then 1 else 0
           mag = abs c
           digLen = integerDigits mag
           zerosB = zeroBytes e
-       in ChunkFragment (signB <> integerDec mag <> zerosB) (signLen + digLen + e)
+       in Chunk (signB <> integerDec mag <> zerosB) (signLen + digLen + e)
   | otherwise =
       let signB = if c < 0 then char7 '-' else mempty
           signLen = if c < 0 then 1 else 0
@@ -117,23 +117,27 @@ encodeNumber n
           na = negate e
        in if len <= na
             then
-              ChunkFragment
+              Chunk
                 (signB <> string7 "0." <> zeroBytes (na - len) <> string7 digits)
                 (signLen + 2 + na)
             else
               let (prefix, suffix) = splitAt (len - na) digits
-               in ChunkFragment
+               in Chunk
                     (signB <> string7 prefix <> char7 '.' <> string7 suffix)
                     (signLen + len + 1)
   where
     c = coefficient n
     e = base10Exponent n
 
+-- | Replicated bytes as a builder.
+replicateBytes :: Word8 -> Int -> Builder
+replicateBytes w k
+  | k <= 0 = mempty
+  | otherwise = byteString (BS.replicate k w)
+
 -- | ASCII @'0'@ bytes as a builder: a @memset@, like 'indentSpaces'.
 zeroBytes :: Int -> Builder
-zeroBytes k
-  | k <= 0 = mempty
-  | otherwise = byteString (BS.replicate k 0x30)
+zeroBytes = replicateBytes 0x30
 
 -- | Decimal digit count of a non-zero magnitude. Small values (the
 -- common case: ages, balances, ids) take 1-2 steps; large values loop
@@ -158,14 +162,6 @@ encodeToChunks config = go initialEncoderState
           let (chunk, st') = formatEvent config st event
            in S.yield chunk >> go st' rest
 
--- | A pre-encoded output fragment with its estimated size. The strict
--- pair the separator and event helpers return so 'formatEvent' can
--- assemble a single 'Chunk' per event instead of one 'Chunk' box per
--- fragment and combination. Strict fields plus strict 'case'
--- deconstruction keep every component thunk-free (lazy tuple bindings
--- would reintroduce the selector thunks this removes).
-data ChunkFragment = ChunkFragment !Builder !Int
-
 -- | Format a single event to a 'Chunk', threading the container
 -- context. This is one step of 'encodeToChunks', exposed so fused
 -- pipelines can format events without an intermediate event stream.
@@ -175,25 +171,25 @@ formatEvent (EncoderConfig style (ValueOptions rawOpt joinOpt)) st event =
     JSONEndArray -> closeContainerAndFinish
     JSONEndObject -> closeContainerAndFinish
     JSONBeginArray -> case beforeValue style st of
-      (ChunkFragment sepB sepS, st') ->
+      (Chunk sepB sepS, st') ->
         (Chunk (sepB <> openBracket) (sepS + 1), pushCtx (EncodeArray False) st')
     JSONBeginObject -> case beforeValue style st of
-      (ChunkFragment sepB sepS, st') ->
+      (Chunk sepB sepS, st') ->
         (Chunk (sepB <> openBrace) (sepS + 1), pushCtx (EncodeObject False) st')
     JSONObjectKey _ -> case beforeKey style st of
-      (ChunkFragment sepB sepS, st') -> case encodeEvent event of
-        ChunkFragment evB evS -> (Chunk (sepB <> evB) (sepS + evS), st')
+      (Chunk sepB sepS, st') -> case encodeEvent event of
+        Chunk evB evS -> (Chunk (sepB <> evB) (sepS + evS), st')
     _ -> case beforeValue style st of
-      (ChunkFragment sepB sepS, st') ->
+      (Chunk sepB sepS, st') ->
         let st'' = afterValue st'
          in case valueChunk event st of
-              ChunkFragment evB evS -> case finishTopValue joinOpt st'' of
-                ChunkFragment finB finS ->
+              Chunk evB evS -> case finishTopValue joinOpt st'' of
+                Chunk finB finS ->
                   (Chunk (sepB <> evB <> finB) (sepS + evS + finS), st'')
   where
     closeContainerAndFinish = case closeContainer style st of
-      (ChunkFragment sepB sepS, st') -> case finishTopValue joinOpt st' of
-        ChunkFragment finB finS -> (Chunk (sepB <> finB) (sepS + finS), st')
+      (Chunk sepB sepS, st') -> case finishTopValue joinOpt st' of
+        Chunk finB finS -> (Chunk (sepB <> finB) (sepS + finS), st')
 
     -- Push one container context, tracking depth alongside.
     pushCtx :: EncodeContext -> EncoderState -> EncoderState
@@ -201,16 +197,16 @@ formatEvent (EncoderConfig style (ValueOptions rawOpt joinOpt)) st event =
       EncoderState (ctx : ctxs) (deeper depth)
 
     -- Render one value event, honoring raw top-level string output.
-    valueChunk :: JSONEvent -> EncoderState -> ChunkFragment
+    valueChunk :: JSONEvent -> EncoderState -> Chunk
     valueChunk (JSONString text) (EncoderState valueCtxs _)
       | rawOpt == Raw && null valueCtxs = encodeRawString text
     valueChunk ev _ = encodeEvent ev
 
 -- | Separator after a complete top-level value: newline unless 'Join'.
-finishTopValue :: Join -> EncoderState -> ChunkFragment
+finishTopValue :: Join -> EncoderState -> Chunk
 finishTopValue joinOpt (EncoderState ctxs' _)
-  | joinOpt == NoJoin && null ctxs' = ChunkFragment newline 1
-  | otherwise = ChunkFragment mempty 0
+  | joinOpt == NoJoin && null ctxs' = Chunk newline 1
+  | otherwise = Chunk mempty 0
 
 -- | Transcribe a pre-encoded scalar body in one 'Chunk', exactly as
 -- 'formatEvent' would for the equivalent scalar event.
@@ -219,9 +215,9 @@ transcribeRawBytes ::
 transcribeRawBytes (EncoderConfig style valueOpts) st bodyB bodyS =
   (Chunk (sepB <> bodyB <> finB) (sepS + bodyS + finS), st2)
   where
-    (ChunkFragment sepB sepS, st1) = beforeValue style st
+    (Chunk sepB sepS, st1) = beforeValue style st
     st2 = afterValue st1
-    ChunkFragment finB finS = finishTopValue joinOpt st2
+    Chunk finB finS = finishTopValue joinOpt st2
     (ValueOptions _ joinOpt) = valueOpts
 
 -- | Transcribe a raw string body; escapes stay verbatim.
@@ -230,20 +226,20 @@ transcribeRawString ::
 transcribeRawString config st rawB rawS =
   transcribeRawBytes config st (char7 '"' <> rawB <> char7 '"') (rawS + 2)
 
-beforeKey :: EncodeStyle -> EncoderState -> (ChunkFragment, EncoderState)
+beforeKey :: EncodeStyle -> EncoderState -> (Chunk, EncoderState)
 beforeKey style st@(EncoderState ctxs depth) = case ctxs of
   EncodeObject seen : rest ->
     ( elementSeparator style seen depth,
       EncoderState (EncodeObjectAfterKey : rest) depth
     )
   -- A key outside a container; emit it bare.
-  _ -> (ChunkFragment mempty 0, st)
+  _ -> (Chunk mempty 0, st)
 
 -- | The structural pieces to emit before a value (a scalar or a
 -- container opening).  The context is left unchanged; 'afterValue'
 -- marks the parent non-empty once the value has arrived, or when a
 -- nested container closes.
-beforeValue :: EncodeStyle -> EncoderState -> (ChunkFragment, EncoderState)
+beforeValue :: EncodeStyle -> EncoderState -> (Chunk, EncoderState)
 beforeValue style st@(EncoderState ctxs depth) = case ctxs of
   EncodeObjectAfterKey : _ -> (colonSeparator style, st)
   EncodeArray seen : _ ->
@@ -253,7 +249,7 @@ beforeValue style st@(EncoderState ctxs depth) = case ctxs of
   EncodeObject seen : _ ->
     (elementSeparator style seen depth, st)
   -- A top-level value; no separator.
-  [] -> (ChunkFragment mempty 0, st)
+  [] -> (Chunk mempty 0, st)
 
 -- | After a value was emitted, mark the innermost container non-empty.
 afterValue :: EncoderState -> EncoderState
@@ -267,8 +263,8 @@ afterValue (EncoderState ctxs depth) = EncoderState (mark ctxs) depth
 
 -- | Emit the closing delimiter for a container, then pop it and mark
 -- the parent container as having received a value.
-closeContainer :: EncodeStyle -> EncoderState -> (ChunkFragment, EncoderState)
-closeContainer _ st@(EncoderState [] _) = (ChunkFragment mempty 0, st)
+closeContainer :: EncodeStyle -> EncoderState -> (Chunk, EncoderState)
+closeContainer _ st@(EncoderState [] _) = (Chunk mempty 0, st)
 closeContainer style (EncoderState (ctx : rest) depth) =
   let depth' = shallower depth
    in (closingDelimiter style depth' ctx, afterValue (EncoderState rest depth'))
@@ -277,7 +273,7 @@ closeContainer style (EncoderState (ctx : rest) depth) =
 -- container stays on one line; a non-empty one is closed on its own
 -- line, indented to the depth of the container itself (the parent
 -- depth).
-closingDelimiter :: EncodeStyle -> NestDepth -> EncodeContext -> ChunkFragment
+closingDelimiter :: EncodeStyle -> NestDepth -> EncodeContext -> Chunk
 closingDelimiter style (NestDepth depth) ctx = case ctx of
   EncodeArray seen -> close seen ']'
   EncodeObject seen -> close seen '}'
@@ -287,20 +283,20 @@ closingDelimiter style (NestDepth depth) ctx = case ctx of
       Pretty width
         | seen ->
             let size = width * depth
-             in ChunkFragment (newline <> indentSpaces size <> char7 delim) (size + 2)
-      _ -> ChunkFragment (char7 delim) 1
+             in Chunk (newline <> indentSpaces size <> char7 delim) (size + 2)
+      _ -> Chunk (char7 delim) 1
 
 -- | The chunk emitted before an array element or an object key.
 --
 -- In 'Compact' mode this is just a comma (or nothing for the first
 -- item); in 'Pretty' mode a newline (preceded by a comma except for the
 -- first item) and indentation to @depth@.
-elementSeparator :: EncodeStyle -> Bool -> NestDepth -> ChunkFragment
-elementSeparator Compact seen _ = if seen then ChunkFragment comma 1 else ChunkFragment mempty 0
+elementSeparator :: EncodeStyle -> Bool -> NestDepth -> Chunk
+elementSeparator Compact seen _ = if seen then Chunk comma 1 else Chunk mempty 0
 elementSeparator (Pretty width) seen (NestDepth depth) =
   let size = width * depth
       prefix = if seen then commaNewline else newline
-   in ChunkFragment (prefix <> indentSpaces size) (size + 1 + fromEnum seen)
+   in Chunk (prefix <> indentSpaces size) (size + 1 + fromEnum seen)
 
 -- | Indentation via O(1) slices of a shared padding string.
 indentPadding :: BS.ByteString
@@ -309,7 +305,7 @@ indentPadding = BS.replicate 256 0x20
 indentSpaces :: Int -> Builder
 indentSpaces size
   | size <= BS.length indentPadding = byteString (BS.take size indentPadding)
-  | otherwise = byteString (BS.replicate size 0x20)
+  | otherwise = replicateBytes 0x20 size
 
 -- | Shared output fragments, built once and reused per event.
 commaNewline, newline, colonSpace, colon :: Builder
@@ -333,13 +329,15 @@ jsonTrue = string7 "true"
 jsonFalse = string7 "false"
 
 -- | The chunk emitted between an object key and its value.
-colonSeparator :: EncodeStyle -> ChunkFragment
-colonSeparator Compact = ChunkFragment colon 1
-colonSeparator (Pretty _) = ChunkFragment colonSpace 2
+colonSeparator :: EncodeStyle -> Chunk
+colonSeparator Compact = Chunk colon 1
+colonSeparator (Pretty _) = Chunk colonSpace 2
 
 -- | An output fragment with its size. The size is a flush heuristic
 -- (character count, not exact bytes for non-ASCII), so chunk
 -- boundaries may shift with content; output bytes are unaffected.
+-- Strict fields plus strict 'case' deconstruction keep every component
+-- thunk-free.
 data Chunk = Chunk {chunkBuilder :: !Builder, chunkSize :: !Int}
 
 instance Semigroup Chunk where
@@ -347,27 +345,27 @@ instance Semigroup Chunk where
 
 instance Monoid Chunk where mempty = Chunk mempty 0
 
-encodeEvent :: JSONEvent -> ChunkFragment
+encodeEvent :: JSONEvent -> Chunk
 encodeEvent = \case
-  JSONBeginObject -> ChunkFragment openBrace 1
-  JSONEndObject -> ChunkFragment closeBrace 1
-  JSONBeginArray -> ChunkFragment openBracket 1
-  JSONEndArray -> ChunkFragment closeBracket 1
-  JSONNull -> ChunkFragment jsonNull 4
-  JSONBool True -> ChunkFragment jsonTrue 4
-  JSONBool False -> ChunkFragment jsonFalse 5
+  JSONBeginObject -> Chunk openBrace 1
+  JSONEndObject -> Chunk closeBrace 1
+  JSONBeginArray -> Chunk openBracket 1
+  JSONEndArray -> Chunk closeBracket 1
+  JSONNull -> Chunk jsonNull 4
+  JSONBool True -> Chunk jsonTrue 4
+  JSONBool False -> Chunk jsonFalse 5
   JSONNumber n -> encodeNumber n
   JSONObjectKey text -> encodeString text
   JSONString text -> encodeString text
 
-encodeString :: Text -> ChunkFragment
+encodeString :: Text -> Chunk
 encodeString text =
   case encodeStringBody text of
-    Chunk body bodySize -> ChunkFragment (char7 '"' <> body <> char7 '"') (bodySize + 2)
+    Chunk body bodySize -> Chunk (char7 '"' <> body <> char7 '"') (bodySize + 2)
 
-encodeRawString :: Text -> ChunkFragment
+encodeRawString :: Text -> Chunk
 encodeRawString text =
-  ChunkFragment (stringUtf8 (toString text)) (Text.length text)
+  Chunk (stringUtf8 (toString text)) (Text.length text)
 
 -- | String body; safe runs share the input slice (no copy).
 encodeStringBody :: Text -> Chunk
