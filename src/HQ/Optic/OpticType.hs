@@ -6,7 +6,7 @@ module HQ.Optic.OpticType where
 import Relude hiding (Compose, id)
 
 data OpticType = OpticLens | OpticPrism | OpticAffineTraversal | OpticTraversal
-  deriving (Eq, Show)
+  deriving (Eq, Ord, Show, Enum, Bounded)
 
 {-
           | Lens      | Prism     | Affine    | Traversal
@@ -18,25 +18,16 @@ Traversal | Traversal | Traversal | Traversal | Traversal
 -}
 
 -- | Composition lattice: One + One = One, else Many (see table above).
+-- Constructor order is the lattice order, so composition is 'max'.
 instance Semigroup OpticType where
-  OpticTraversal <> _ = OpticTraversal
-  _ <> OpticTraversal = OpticTraversal
-  OpticLens <> OpticLens = OpticLens
-  OpticLens <> OpticPrism = OpticPrism
-  OpticPrism <> OpticLens = OpticPrism
-  OpticLens <> OpticAffineTraversal = OpticAffineTraversal
-  OpticAffineTraversal <> OpticLens = OpticAffineTraversal
-  OpticPrism <> OpticPrism = OpticPrism
-  OpticPrism <> OpticAffineTraversal = OpticAffineTraversal
-  OpticAffineTraversal <> OpticPrism = OpticAffineTraversal
-  OpticAffineTraversal <> OpticAffineTraversal = OpticAffineTraversal
+  (<>) = max
 
-instance Monoid OpticType where mempty = OpticLens
+instance Monoid OpticType where mempty = minBound
 
--- | Subsumption: everything folds, so traversals accept anything.
--- (All four queries accept traversals; 'Preview' emits the first focus.)
+-- | Subsumption: @canUseAs expected actual@ holds when @actual@ is no
+-- more general than @expected@. A traversal accepts anything; an
+-- affine accepts lens/prism/affine; a prism accepts lens/prism; a
+-- lens accepts only a lens. In particular a prism can be used where
+-- an affine is expected, but not vice versa.
 canUseAs :: OpticType -> OpticType -> Bool
-canUseAs OpticTraversal _ = True
-canUseAs OpticPrism actual = actual /= OpticTraversal
-canUseAs OpticAffineTraversal actual = actual /= OpticTraversal
-canUseAs OpticLens actual = actual == OpticLens
+canUseAs expected actual = actual <= expected
