@@ -33,7 +33,7 @@ import Data.ByteString.Builder (Builder, byteString, char7, charUtf8, integerDec
 import Data.Scientific (Scientific, base10Exponent, coefficient)
 import Data.Text qualified as Text
 import Data.Text.Encoding (encodeUtf8Builder)
-import HQ.JSON.Decoder.Core (NestDepth (..), deeper, initialDepth, shallower)
+import HQ.JSON.Decoder.Core (NestDepth (..), deeper, initialDepth, isStringChar, shallower)
 import HQ.JSON.Event (JSONEvent (..))
 import Relude hiding (Compose, id, many, some, state)
 import Streaming (Of, Stream)
@@ -166,30 +166,27 @@ encodeToChunks config = go initialEncoderState
 -- context. This is one step of 'encodeToChunks', exposed so fused
 -- pipelines can format events without an intermediate event stream.
 formatEvent :: EncoderConfig -> EncoderState -> JSONEvent -> (Chunk, EncoderState)
-formatEvent (EncoderConfig style (ValueOptions rawOpt joinOpt)) st event =
+formatEvent config@(EncoderConfig style (ValueOptions rawOpt joinOpt)) st event =
   case event of
-    JSONEndArray -> closeContainerAndFinish
-    JSONEndObject -> closeContainerAndFinish
-    JSONBeginArray -> case beforeValue style st of
-      (Chunk sepB sepS, st') ->
-        (Chunk (sepB <> openBracket) (sepS + 1), pushCtx (EncodeArray False) st')
-    JSONBeginObject -> case beforeValue style st of
-      (Chunk sepB sepS, st') ->
-        (Chunk (sepB <> openBrace) (sepS + 1), pushCtx (EncodeObject False) st')
+    e | e == JSONEndArray || e == JSONEndObject -> closeContainerAndFinish
+    JSONBeginArray -> openWith openBracket (EncodeArray False)
+    JSONBeginObject -> openWith openBrace (EncodeObject False)
     JSONObjectKey _ -> case beforeKey style st of
       (Chunk sepB sepS, st') -> case encodeEvent event of
         Chunk evB evS -> (Chunk (sepB <> evB) (sepS + evS), st')
-    _ -> case beforeValue style st of
-      (Chunk sepB sepS, st') ->
-        let st'' = afterValue st'
-         in case valueChunk event st of
-              Chunk evB evS -> case finishTopValue joinOpt st'' of
-                Chunk finB finS ->
-                  (Chunk (sepB <> evB <> finB) (sepS + evS + finS), st'')
+    _ -> case valueChunk event st of
+      Chunk evB evS -> transcribeRawBytes config st evB evS
   where
     closeContainerAndFinish = case closeContainer style st of
       (Chunk sepB sepS, st') -> case finishTopValue joinOpt st' of
         Chunk finB finS -> (Chunk (sepB <> finB) (sepS + finS), st')
+
+    -- Shared shape of the two container opens: separator, bracket,
+    -- and a fresh empty context.
+    openWith :: Builder -> EncodeContext -> (Chunk, EncoderState)
+    openWith brack ctx = case beforeValue style st of
+      (Chunk sepB sepS, st') ->
+        (Chunk (sepB <> brack) (sepS + 1), pushCtx ctx st')
 
     -- Push one container context, tracking depth alongside.
     pushCtx :: EncodeContext -> EncoderState -> EncoderState
@@ -242,14 +239,14 @@ beforeKey style st@(EncoderState ctxs depth) = case ctxs of
 beforeValue :: EncodeStyle -> EncoderState -> (Chunk, EncoderState)
 beforeValue style st@(EncoderState ctxs depth) = case ctxs of
   EncodeObjectAfterKey : _ -> (colonSeparator style, st)
-  EncodeArray seen : _ ->
-    (elementSeparator style seen depth, st)
+  EncodeArray seen : _ -> member seen
   -- A value where a key was expected (malformed input); recover by
   -- treating it as an additional array-like member.
-  EncodeObject seen : _ ->
-    (elementSeparator style seen depth, st)
+  EncodeObject seen : _ -> member seen
   -- A top-level value; no separator.
   [] -> (Chunk mempty 0, st)
+  where
+    member seen = (elementSeparator style seen depth, st)
 
 -- | After a value was emitted, mark the innermost container non-empty.
 afterValue :: EncoderState -> EncoderState
@@ -374,7 +371,7 @@ encodeStringBody text = let Chunk b s = go text in Chunk b s
     go t
       | Text.null t = mempty
       | otherwise =
-          let (safe, rest) = Text.span isSafe t
+          let (safe, rest) = Text.span isStringChar t
               -- Estimated size (chars, not bytes): exact enough to drive
               -- flush decisions, and free, unlike a byte-counting pass.
               safeChunk = Chunk (encodeUtf8Builder safe) (Text.length safe)
@@ -382,9 +379,6 @@ encodeStringBody text = let Chunk b s = go text in Chunk b s
                 Nothing -> safeChunk
                 Just (c, rest') ->
                   safeChunk <> encodeEscapedChar c <> go rest'
-
-isSafe :: Char -> Bool
-isSafe c = c >= '\x20' && c /= '"' && c /= '\\'
 
 encodeEscapedChar :: Char -> Chunk
 encodeEscapedChar = \case

@@ -157,11 +157,7 @@ consumeLowSurrogateDigits target input buffer high value digits decoder
   | digits == 4 =
       if isLowSurrogate value
         then
-          let codepoint =
-                0x10000
-                  + ((high - 0xD800) `shiftL` 10)
-                  + (value - 0xDC00)
-              newBuffer = appendCharStringBuffer (chr codepoint) buffer
+          let newBuffer = appendCharStringBuffer (chr (combineSurrogates high value)) buffer
            in consumeString target input newBuffer decoder
         else Left InvalidSurrogatePair
   | otherwise =
@@ -176,11 +172,7 @@ consumeLowSurrogateDigits target input buffer high value digits decoder
             then
               if isLowSurrogate newValue
                 then
-                  let codepoint =
-                        0x10000
-                          + ((high - 0xD800) `shiftL` 10)
-                          + (newValue - 0xDC00)
-                      newBuffer = appendCharStringBuffer (chr codepoint) buffer
+                  let newBuffer = appendCharStringBuffer (chr (combineSurrogates high newValue)) buffer
                    in consumeString target rest newBuffer decoder
                 else Left InvalidSurrogatePair
             else
@@ -199,6 +191,11 @@ consumeLowSurrogateDigits target input buffer high value digits decoder
                         }
                 else
                   Left InvalidUnicodeEscape
+
+-- | Combine a surrogate pair into its codepoint.
+{-# INLINE combineSurrogates #-}
+combineSurrogates :: Int -> Int -> Int
+combineSurrogates high low = 0x10000 + ((high - 0xD800) `shiftL` 10) + (low - 0xDC00)
 
 finishString ::
   StringTarget ->
@@ -220,7 +217,7 @@ finishStringText ::
   Either DecodeError DecoderResult
 finishStringText target text remaining decoder = case target of
   StringValue ->
-    emitScalar (JSONString text) remaining decoder
+    emitEvent (JSONString text) remaining decoder
   StringKey -> do
     let key = JSONObjectKey text
     let newDecoder =

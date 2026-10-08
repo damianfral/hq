@@ -56,8 +56,8 @@ finish decoder = case decoderPhase decoder of
   DecoderPhaseKeyword _ -> finalizeKeyword decoder
   DecoderPhaseFinished -> case decoderStack decoder of
     [] ->
-      let isNull = T.null (decoderInput decoder)
-       in if isNull then Right (Done decoder) else Left TrailingInput
+      let isEmpty = T.null (decoderInput decoder)
+       in if isEmpty then Right (Done decoder) else Left TrailingInput
     _ -> Left UnexpectedEnd
   _ -> Left UnexpectedEnd
 
@@ -90,7 +90,7 @@ parseStructuralChar !c !rest !decoder = case decoderPhase decoder of
     | c == '}' -> case decoderStack decoder of
         (_ : contexts) ->
           let newDecoder = decoder {decoderStack = contexts}
-           in emitContainerEnd JSONEndObject rest newDecoder
+           in emitEvent JSONEndObject rest newDecoder
         [] -> Left ExpectedObjectKey
     | c == '"' -> startString StringKey rest decoder
     | otherwise -> Left ExpectedObjectKey
@@ -105,7 +105,7 @@ parseStructuralChar !c !rest !decoder = case decoderPhase decoder of
     | c == '}' -> case decoderStack decoder of
         (_ : contexts) ->
           let newDecoder = decoder {decoderStack = contexts}
-           in emitContainerEnd JSONEndObject rest newDecoder
+           in emitEvent JSONEndObject rest newDecoder
         [] -> Left ExpectedCommaOrEnd
     | otherwise -> Left ExpectedCommaOrEnd
   DecoderPhaseArrayComma
@@ -113,7 +113,7 @@ parseStructuralChar !c !rest !decoder = case decoderPhase decoder of
         step decoder {decoderInput = rest, decoderPhase = DecoderPhaseValue}
     | c == ']' -> case decoderStack decoder of
         (_ : contexts) ->
-          emitContainerEnd JSONEndArray rest decoder {decoderStack = contexts}
+          emitEvent JSONEndArray rest decoder {decoderStack = contexts}
         [] -> Left ExpectedCommaOrEnd
     | otherwise -> Left ExpectedCommaOrEnd
   DecoderPhaseFinished -> Left TrailingInput
@@ -125,7 +125,7 @@ parseValueChar :: Char -> Text -> DecoderState -> Either DecodeError DecoderResu
 parseValueChar !c !rest !decoder = case decoderStack decoder of
   DecodeArray : contexts
     | c == ']' ->
-        emitContainerEnd JSONEndArray rest decoder {decoderStack = contexts}
+        emitEvent JSONEndArray rest decoder {decoderStack = contexts}
   _ -> startValue c rest decoder
 
 startValue :: Char -> Text -> DecoderState -> Either DecodeError DecoderResult

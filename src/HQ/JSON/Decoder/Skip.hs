@@ -6,12 +6,14 @@
 
 -- | Text-level value skipping: validate like the decoder but
 -- materialize nothing (no events, no 'Text's, no 'Scientific').
--- Discard-only: unlike the removed @collect*@ raw-capture path there
--- is no verbatim transcription here since 'takeValueChunks' is
--- canonical event-based output. Used by 'HQ.Runner.Cursor' for
--- container bodies ('skipContainerText') and member values
--- ('skipMemberValueText') when no replayed events are buffered;
--- anything else drains event by event.
+-- Two modes share the scan: discard-only ('skipContainerText',
+-- 'skipMemberValueText') for bodies and member values with no
+-- buffered replay, and verbatim raw-capture ('skipStringCollect',
+-- 'skipNumberCollect') feeding the chunk fast path in Take.
+-- Used by 'HQ.Runner.Cursor' for container bodies
+-- ('skipContainerText') and member values ('skipMemberValueText')
+-- when no replayed events are buffered; anything else drains event
+-- by event.
 module HQ.JSON.Decoder.Skip
   ( skipContainerText,
     skipMemberValueText,
@@ -21,7 +23,7 @@ module HQ.JSON.Decoder.Skip
 where
 
 import Data.ByteString.Builder (Builder, char7, charUtf8)
-import Data.Char (digitToInt, isDigit, isHexDigit)
+import Data.Char (isDigit)
 import Data.Text qualified as T
 import Data.Text.Encoding (encodeUtf8Builder)
 import HQ.Early (Early, leave)
@@ -312,10 +314,10 @@ skipLowDigits early !input !text !value !digits = do
         then skipLowDigits early mempty rest0 value' digits'
         else leave early (HQDecodeError InvalidUnicodeEscape)
 
--- | Skip a number starting at its first character. The consumed text is
--- threaded through only for 'InvalidNumber' payloads (matching the
--- decoder); on success nothing is retained and no 'Scientific' is
--- built.
+-- | Skip a number starting at its first character. Consumed fragments
+-- are threaded through (newest first) only for 'InvalidNumber'
+-- payloads, concatenated on error; on success nothing is retained and
+-- no 'Scientific' is built.
 skipNumberBody ::
   Early HQError ->
   Char ->
@@ -324,31 +326,31 @@ skipNumberBody ::
   IO (Text, StreamIO Text ())
 skipNumberBody early c inp txt =
   let phase = fromMaybe NumberSign (numberPhaseFromFirstChar c)
-   in go phase (T.singleton c) inp txt
+   in go phase [T.singleton c] inp txt
   where
-    go !phase !buf !cur !stream
+    go !phase !frags !cur !stream
       | T.null cur = do
           result <- S.next stream
           case result of
             Left ()
               | isValidNumberFinal phase -> pure (mempty, stream)
-              | otherwise -> leave early $ HQDecodeError $ InvalidNumber buf
-            Right (chunk, rest) -> go phase buf chunk rest
-      | otherwise = scan phase buf 0
+              | otherwise -> leave early $ HQDecodeError $ InvalidNumber (T.concat (reverse frags))
+            Right (chunk, rest) -> go phase frags chunk rest
+      | otherwise = scan phase frags 0
       where
         len = T.length cur
-        scan !ph !b !pos
-          | pos >= len = go ph (b <> cur) mempty stream
+        scan !ph !fs !pos
+          | pos >= len = go ph (cur : fs) mempty stream
           | otherwise =
               let ch = T.index cur pos
                in case advanceNumber ph ch of
                     NumberEnd
                       | isValidNumberFinal ph -> pure (T.drop pos cur, stream)
                       | otherwise ->
-                          leave early $ HQDecodeError $ InvalidNumber (b <> T.take pos cur)
+                          leave early $ HQDecodeError $ InvalidNumber (T.concat (reverse fs) <> T.take pos cur)
                     NumberError ->
-                      leave early $ HQDecodeError $ InvalidNumber (b <> T.take pos cur <> T.singleton ch)
-                    NumberStep ph' -> scan ph' b (pos + 1)
+                      leave early $ HQDecodeError $ InvalidNumber (T.concat (reverse fs) <> T.take pos cur <> T.singleton ch)
+                    NumberStep ph' -> scan ph' fs (pos + 1)
 
 -- | Skip a keyword whose first character was consumed. A complete
 -- keyword at exhaustion succeeds, mirroring the decoder.
@@ -587,14 +589,9 @@ collectLowDigits early !accB !accS !input !text !high !value !digits
       case T.uncons chunk of
         Nothing -> collectLowDigits early accB accS mempty rest high value digits
         Just _ -> do
-          let remaining = 4 - digits
-              limited = T.take remaining chunk
-              (hexDigits, _) = T.span isHexDigit limited
-              consumed = T.length hexDigits
-              value' = T.foldl' (\ac c -> ac * 16 + digitToInt c) value hexDigits
-              digits' = digits + consumed
-              rest' = T.drop consumed chunk
-              accB' = accB <> encodeUtf8Builder hexDigits
+          let (value', digits', rest') = accumulateHex value digits chunk
+              consumed = digits' - digits
+              accB' = accB <> encodeUtf8Builder (T.take consumed chunk)
               accS' = accS + consumed
           if digits' == 4
             then

@@ -8,7 +8,7 @@
 module HQ.Optic where
 
 import GHC.Show (Show (showsPrec), appPrec, showParen, showString, shows)
-import HQ.JSON.Event (JSONEvent, isArray, isBool, isNull, isNumber, isObject, isString)
+import HQ.JSON.Event (JSONEvent (..))
 import HQ.Transformation (Transformation)
 import HQ.Transformation qualified as Trans
 import Relude hiding (Compose, Const, filter, id, many, some)
@@ -115,12 +115,13 @@ instance Show Optic where
 
 -- | First-event predicate for each type prism; total over 'PrismKind'.
 prismPredicate :: PrismKind -> JSONEvent -> Bool
-prismPredicate PString = isString
-prismPredicate PNumber = isNumber
-prismPredicate PBool = isBool
-prismPredicate PNull = isNull
-prismPredicate PArray = isArray
-prismPredicate PObject = isObject
+prismPredicate PString (JSONString _) = True
+prismPredicate PNumber (JSONNumber _) = True
+prismPredicate PBool (JSONBool _) = True
+prismPredicate PNull JSONNull = True
+prismPredicate PArray JSONBeginArray = True
+prismPredicate PObject JSONBeginObject = True
+prismPredicate _ _ = False
 
 -- | Compose with 'Id' elimination on either side: @( '<>' )@ with
 -- 'Id' as identity. Reassociation preserves focusing semantics (both
@@ -145,7 +146,7 @@ focusesWhole optic event = case optic of
   Values -> False
   Ix _ -> False
   Prism kind -> prismPredicate kind event
-  PrismJust -> not (isNull event)
+  PrismJust -> event /= JSONNull
   Filter _ _ -> False
   Compose l r -> focusesWhole l event && focusesWhole r event
 

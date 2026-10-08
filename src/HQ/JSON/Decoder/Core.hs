@@ -145,8 +145,12 @@ data DecoderResult
   | Done DecoderState
   deriving (Eq, Show)
 
-emitScalar :: JSONEvent -> Text -> DecoderState -> Either DecodeError DecoderResult
-emitScalar event remaining decoder =
+-- | Emit one event, continuing after the value (container ends pop
+-- and mark the parent via 'finishValue'). Single policy for scalars
+-- and container ends. Inlined into the call sites.
+{-# INLINE emitEvent #-}
+emitEvent :: JSONEvent -> Text -> DecoderState -> Either DecodeError DecoderResult
+emitEvent event remaining decoder =
   let newDec = decoder {decoderInput = remaining}
    in Right $ Emit event $ finishValue newDec
 
@@ -157,11 +161,6 @@ finishValue decoder = case decoderStack decoder of
     decoder {decoderPhase = DecoderPhaseArrayComma}
   DecodeObject : _ ->
     decoder {decoderPhase = DecoderPhaseObjectComma}
-
-emitContainerEnd :: JSONEvent -> Text -> DecoderState -> Either DecodeError DecoderResult
-emitContainerEnd event remaining decoder =
-  let decoder' = decoder {decoderInput = remaining}
-   in Right $ Emit event (finishValue decoder')
 
 isWhitespace :: Char -> Bool
 isWhitespace c = c `elem` [' ', '\t', '\n', '\r']

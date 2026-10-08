@@ -107,7 +107,7 @@ finalizeNumber decoder = case decoderPhase decoder of
   DecoderPhaseNumber numState
     | isValidNumberFinal (numberPhase numState) ->
         let value = parseNumberBuffer (reversedStringToText $ numberBuffer numState)
-         in emitScalar
+         in emitEvent
               (JSONNumber value)
               (decoderInput decoder)
               decoder

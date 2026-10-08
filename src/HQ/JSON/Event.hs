@@ -34,38 +34,8 @@ data JSONEvent
 -- Event classifiers
 --------------------------------------------------------------------------------
 
-isString :: JSONEvent -> Bool
-isString = \case
-  JSONString _ -> True
-  _ -> False
-
-isNumber :: JSONEvent -> Bool
-isNumber = \case
-  JSONNumber _ -> True
-  _ -> False
-
-isBool :: JSONEvent -> Bool
-isBool = \case
-  JSONBool _ -> True
-  _ -> False
-
-isNull :: JSONEvent -> Bool
-isNull = \case
-  JSONNull -> True
-  _ -> False
-
-isArray :: JSONEvent -> Bool
-isArray = \case
-  JSONBeginArray -> True
-  _ -> False
-
-isObject :: JSONEvent -> Bool
-isObject = \case
-  JSONBeginObject -> True
-  _ -> False
-
 -- | Matching close for a container open; 'Nothing' for non-opens.
--- Single table for the 5x open/close dispatch in Take/Cursor.
+-- Single table for the open/close dispatch in Take/Cursor.
 matchingClose :: JSONEvent -> Maybe JSONEvent
 matchingClose = \case
   JSONBeginArray -> Just JSONEndArray
@@ -92,19 +62,30 @@ eventsToValue events =
     parseValue _ = Left ExpectedJSONValue
 
     parseElements :: [JSONEvent] -> Either RunnerError ([Value], [JSONEvent])
-    parseElements (JSONEndArray : rest) = Right ([], rest)
-    parseElements input = do
-      (value, rest) <- parseValue input
-      (values, rest') <- parseElements rest
-      Right (value : values, rest')
+    parseElements = parseDelimited JSONEndArray parseValue
 
     parseMembers :: [JSONEvent] -> Either RunnerError ([(Key.Key, Value)], [JSONEvent])
-    parseMembers (JSONEndObject : rest) = Right ([], rest)
-    parseMembers (JSONObjectKey key : rest) = do
-      (value, rest') <- parseValue rest
-      (members, rest'') <- parseMembers rest'
-      Right ((Key.fromText key, value) : members, rest'')
-    parseMembers _ = Left ExpectedObjectKeyEvent
+    parseMembers = parseDelimited JSONEndObject $ \case
+      (JSONObjectKey key : rest) -> first (\v -> (Key.fromText key, v)) <$> parseValue rest
+      _ -> Left ExpectedObjectKeyEvent
+
+-- | Parse a delimited list ending in @end@; @parseOne@ parses a
+-- single element (failing on anything else). Shared by 'parseElements'
+-- and 'parseMembers', which differ only in end token and element shape.
+-- Inlined so @parseOne@ specializes per list kind.
+{-# INLINE parseDelimited #-}
+parseDelimited ::
+  JSONEvent ->
+  ([JSONEvent] -> Either RunnerError (a, [JSONEvent])) ->
+  [JSONEvent] ->
+  Either RunnerError ([a], [JSONEvent])
+parseDelimited end parseOne = go
+  where
+    go (ev : rest) | ev == end = Right ([], rest)
+    go input = do
+      (x, rest) <- parseOne input
+      (xs, rest') <- go rest
+      Right (x : xs, rest')
 
 -- | Encode a JSON value as a sequence of events.
 valueToEvents :: Value -> [JSONEvent]
