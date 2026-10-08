@@ -13,8 +13,11 @@ module HQ.Runner
   )
 where
 
+import Control.Exception (evaluate, try)
 import Data.ByteString qualified as BS
 import Data.ByteString.Lazy qualified as LBS
+import Data.Text qualified as T
+import Data.Text.Encoding (Decoding (..), streamDecodeUtf8)
 import Data.Text.IO (hPutStrLn)
 import HQ.Early (Early, leave, runEarly)
 import HQ.Error (HQError (..), renderHQError)
@@ -142,53 +145,37 @@ rewriteDocuments early action cur st =
     go cur' (st', _) = action cur' st'
 
 decodeUtf8Stream :: Early HQError -> StreamIO ByteString () -> StreamIO Text ()
-decodeUtf8Stream early = go mempty
+decodeUtf8Stream early stream = case streamDecodeUtf8 mempty of
+  Some _ _ cont -> go mempty cont stream
   where
-    go :: ByteString -> StreamIO ByteString () -> StreamIO Text ()
-    go leftover stream = do
-      result <- lift $ S.next stream
+    -- The continuation carries partial sequences internally: feed it
+    -- new bytes only (re-feeding the carry would decode them twice).
+    -- The returned carry is only inspected at end of input, where a
+    -- non-empty remainder means truncation.
+    go ::
+      ByteString ->
+      (ByteString -> Decoding) ->
+      StreamIO ByteString () ->
+      StreamIO Text ()
+    go leftover cont str = do
+      result <- lift $ S.next str
       case result of
-        Left () -> when (leftover /= mempty) $ decodeAndYield leftover
+        Left ()
+          | BS.null leftover -> pure ()
+          -- A non-empty carry is a truncated sequence: invalid, exactly
+          -- as the old all-or-nothing decode reported it.
+          | otherwise -> lift (leave early (HQRunnerError InvalidUtf8))
         Right (chunk, rest) -> do
-          let combined = leftover <> chunk
-              safeLen = safePrefixLen combined
-              (safe, trailing) = BS.splitAt safeLen combined
-          when (safe /= mempty) $ decodeAndYield safe
-          go trailing rest
+          Some text leftover' cont' <- lift (decodeStep (cont chunk))
+          when (not $ T.null text) $ S.yield text
+          go leftover' cont' rest
 
-    decodeAndYield :: ByteString -> StreamIO Text ()
-    decodeAndYield bs = case decodeUtf8' bs of
-      Left _ -> lift (leave early (HQRunnerError InvalidUtf8))
-      Right text -> S.yield text
-
--- | Longest prefix of complete UTF-8 sequences; a trailing partial
--- sequence carries over to the next chunk.
-safePrefixLen :: ByteString -> Int
-safePrefixLen bs = total - partialTail
-  where
-    total = BS.length bs
-    -- Index of the lead byte of the final sequence, found by stepping
-    -- back over at most three trailing continuation bytes.
-    leadIdx = seekLead (total - 1) (0 :: Int)
-    seekLead i continuations
-      | i < 0 = -1
-      | continuations > 3 = -1
-      | isContinuation (BS.index bs i) = seekLead (i - 1) (continuations + 1)
-      | otherwise = i
-
-    -- Number of bytes of the final sequence that are present.
-    partialTail
-      | total == 0 = 0
-      | leadIdx < 0 = 0
-      | present >= expected = 0
-      | otherwise = present
-      where
-        lead = BS.index bs leadIdx
-        present = total - leadIdx
-        expected
-          | lead < 0x80 = 1
-          | lead < 0xC0 = 1
-          | lead < 0xE0 = 2
-          | lead < 0xF0 = 3
-          | otherwise = 4
-    isContinuation b = b >= 0x80 && b < 0xC0
+    -- Step the incremental decoder strictly: it throws
+    -- 'UnicodeException' on invalid input, mapped here to the
+    -- runner's 'InvalidUtf8' (the same errors 'decodeUtf8'' reported).
+    decodeStep :: Decoding -> IO Decoding
+    decodeStep decoding = do
+      result <- try (evaluate decoding) :: IO (Either UnicodeException Decoding)
+      case result of
+        Left _ -> leave early (HQRunnerError InvalidUtf8)
+        Right dec' -> pure dec'
