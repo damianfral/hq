@@ -175,32 +175,50 @@ onEventOrEnd early input f = do
     Nothing -> pure input
     Just pair -> f pair
 
+-- | Match the next event against a table of opens; anything else is
+-- skipped as a whole value. Unifies the open-or-skip preamble in
+-- Fold (@runField@/@runEach@/@runKeys@/@runValues@/@runIndex@).
+-- Inlined so the table specializes per call site.
+{-# INLINE onOpenOrSkip #-}
+onOpenOrSkip ::
+  Early HQError ->
+  Cursor ->
+  [(JSONEvent, Cursor -> EventStream Cursor)] ->
+  EventStream Cursor
+onOpenOrSkip early input arms =
+  onEventOrEnd early input $ \(event, rest) ->
+    case [handle | (open, handle) <- arms, open == event] of
+      (handle : _) -> handle rest
+      [] -> skipValue early (pushCursor event rest)
+
+-- | Loop pulling member steps until the container ends; @body@ handles
+-- each step, returning the cursor to continue from. Shared by
+-- 'traverseObject' and 'traverseArray'. Inlined so @next@/@body@
+-- specialize per walk.
+{-# INLINE walkMembers #-}
+walkMembers ::
+  (Cursor -> IO (Either Cursor (a, Cursor))) ->
+  ((a, Cursor) -> EventStream Cursor) ->
+  Cursor ->
+  EventStream Cursor
+walkMembers next body = go
+  where
+    go stream = do
+      step <- lift (next stream)
+      case step of
+        Left rest -> pure rest
+        Right pair -> body pair >>= go
+
 -- | Walk an object body step by step; @body@ handles each member key,
 -- returning the cursor to continue from. Emits nothing, returns the
 -- cursor after @JSONEndObject@.
 traverseObject :: Early HQError -> Cursor -> ((Text, Cursor) -> EventStream Cursor) -> EventStream Cursor
-traverseObject early input body = go input
-  where
-    go stream = do
-      step <- lift (expectObjectStep early stream)
-      case step of
-        Left rest -> pure rest
-        Right (key, rest) -> do
-          after <- body (key, rest)
-          go after
+traverseObject early input body = walkMembers (expectObjectStep early) body input
 
 -- | Walk an array body step by step; @body@ handles each element event,
 -- returning the cursor to continue from.
 traverseArray :: Early HQError -> Cursor -> ((JSONEvent, Cursor) -> EventStream Cursor) -> EventStream Cursor
-traverseArray early input body = go input
-  where
-    go stream = do
-      step <- lift (expectArrayStep early stream)
-      case step of
-        Left rest -> pure rest
-        Right (event, rest) -> do
-          after <- body (event, rest)
-          go after
+traverseArray early input body = walkMembers (expectArrayStep early) body input
 
 -- | Consume the rest of an object body (all remaining members).
 skipRestOfObject :: Early HQError -> Cursor -> EventStream Cursor

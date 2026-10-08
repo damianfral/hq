@@ -12,7 +12,7 @@ import HQ.Optic (Optic (..), focusesWhole, prismPredicate)
 import HQ.Runner.Cursor (Cursor (..), RewriteContinuation, expectArrayStep, pullCursor, pushCursor, skipValueE)
 import HQ.Runner.Error (RunnerError (..))
 import HQ.Runner.Fold (applyTransformation, gateTake, materializeValue)
-import HQ.Runner.Take (emitChunk, emitKeyAndTake, onEventOrEndChunks, takeValueChunks, traverseArrayChunks, traverseObjectChunks)
+import HQ.Runner.Take (emitChunk, emitKeyAndTake, onEventOrEndChunks, onOpenOrSkipChunks, takeValueChunks, traverseArrayChunks, traverseObjectChunks)
 import HQ.Transformation (Transformation (Const), runTransformation)
 import HQ.Transformation.Error (TransformationError (..))
 import Relude hiding (Compose, Const)
@@ -116,12 +116,16 @@ runRewrite early rewriter optic config = run optic
     -- rest of the array. Non-arrays pass through unchanged.
     rewriteIndex :: Int -> Optic -> RewriteContinuation
     rewriteIndex index suffix input st =
-      onEventOrEndChunks early input st $ \case
-        (JSONBeginArray, rest) -> do
-          st' <- emitChunk config JSONBeginArray st
-          go index rest st'
-        (event, rest) -> takeValueChunks early config (pushCursor event rest) st
+      onOpenOrSkipChunks early config input st eventsWithCont
       where
+        eventsWithCont =
+          [ ( JSONBeginArray,
+              \rest s -> do
+                s' <- emitChunk config JSONBeginArray s
+                go index rest s'
+            )
+          ]
+
         go n stream s = do
           step <- lift (expectArrayStep early stream)
           case step of
@@ -142,40 +146,54 @@ runRewrite early rewriter optic config = run optic
     -- every other member through unchanged.
     rewriteField :: Text -> Optic -> RewriteContinuation
     rewriteField name suffix input st =
-      onEventOrEndChunks early input st $ \case
-        (JSONBeginObject, rest) -> do
-          st' <- emitChunk config JSONBeginObject st
-          traverseObjectChunks early config rest st' $ \key rest' s ->
-            if key == name
-              then rewriteOneMember suffix key rest' s
-              else emitKeyAndTake early config key rest' s
-        (event, rest) -> takeValueChunks early config (pushCursor event rest) st
+      onOpenOrSkipChunks early config input st eventsWithCont
+      where
+        eventsWithCont =
+          [ ( JSONBeginObject,
+              \rest s -> do
+                st' <- emitChunk config JSONBeginObject s
+                traverseObjectChunks early config rest st' $ \key rest' s' ->
+                  if key == name
+                    then rewriteOneMember suffix key rest' s'
+                    else emitKeyAndTake early config key rest' s'
+            )
+          ]
 
     -- \| The @each@ traversal: rewrite every array element, or every
     -- object member value. Non-containers pass through.
     rewriteEach :: Optic -> RewriteContinuation
     rewriteEach suffix input st =
-      onEventOrEndChunks early input st $ \case
-        (JSONBeginArray, rest) -> do
-          st' <- emitChunk config JSONBeginArray st
-          traverseArrayChunks early config rest st' $ \(event, rest') s ->
-            run suffix (pushCursor event rest') s
-        (JSONBeginObject, rest) -> do
-          st' <- emitChunk config JSONBeginObject st
-          traverseObjectChunks early config rest st' $ \key rest' s ->
-            rewriteOneMember suffix key rest' s
-        (event, rest) -> takeValueChunks early config (pushCursor event rest) st
+      onOpenOrSkipChunks early config input st eventsWithCont
+      where
+        eventsWithCont =
+          [ ( JSONBeginArray,
+              \rest s -> do
+                st' <- emitChunk config JSONBeginArray s
+                traverseArrayChunks early config rest st' $ \(event, rest') s' ->
+                  run suffix (pushCursor event rest') s'
+            ),
+            ( JSONBeginObject,
+              \rest s -> do
+                st' <- emitChunk config JSONBeginObject s
+                traverseObjectChunks early config rest st' $ \key rest' s' ->
+                  rewriteOneMember suffix key rest' s'
+            )
+          ]
 
     -- \| The @values@ traversal: rewrite every object member value.
     -- Arrays and scalars pass through unchanged (unlike 'rewriteEach').
     rewriteValues :: Optic -> RewriteContinuation
     rewriteValues suffix input st =
-      onEventOrEndChunks early input st $ \case
-        (JSONBeginObject, rest) -> do
-          st' <- emitChunk config JSONBeginObject st
-          traverseObjectChunks early config rest st' $ \key rest' s ->
-            rewriteOneMember suffix key rest' s
-        (event, rest) -> takeValueChunks early config (pushCursor event rest) st
+      onOpenOrSkipChunks early config input st eventsWithCont
+      where
+        eventsWithCont =
+          [ ( JSONBeginObject,
+              \rest s -> do
+                st' <- emitChunk config JSONBeginObject s
+                traverseObjectChunks early config rest st' $ \key rest' s' ->
+                  rewriteOneMember suffix key rest' s'
+            )
+          ]
 
     -- \| The @filter@ optic: gate the focused value as a whole, running
     -- the suffix on kept values and passing dropped values through
@@ -193,14 +211,17 @@ runRewrite early rewriter optic config = run optic
     -- Arrays and scalars pass through unchanged (@keys@ is objects-only).
     rewriteKeys :: Optic -> RewriteContinuation
     rewriteKeys suffix input st =
-      onEventOrEndChunks early input st $ \case
-        (JSONBeginObject, rest) -> do
-          st' <- emitChunk config JSONBeginObject st
-          traverseObjectChunks early config rest st' $ \key rest' s -> do
-            action <- lift (rewriteKeyText suffix rewriter key)
-            applyKeyAction action key rest' s
-        (event, rest) -> takeValueChunks early config (pushCursor event rest) st
+      onOpenOrSkipChunks early config input st eventsWithCont
       where
+        eventsWithCont =
+          [ ( JSONBeginObject,
+              \rest s -> do
+                st' <- emitChunk config JSONBeginObject s
+                traverseObjectChunks early config rest st' $ \key rest' s' -> do
+                  action <- lift (rewriteKeyText suffix rewriter key)
+                  applyKeyAction action key rest' s'
+            )
+          ]
         applyKeyAction DropKey _ rest s = do
           after <- lift (skipValueE early rest)
           pure (s, after)

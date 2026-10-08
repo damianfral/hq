@@ -149,6 +149,50 @@ onEventOrEndChunks early input st f = do
     Nothing -> pure (st, input)
     Just pair -> f pair
 
+-- | Match the next event against a table of opens; anything else is
+-- passed through as a whole value. Chunk-stream analogue of
+-- 'HQ.Runner.Cursor.onOpenOrSkip'. Inlined so the table specializes
+-- per call site.
+{-# INLINE onOpenOrSkipChunks #-}
+onOpenOrSkipChunks ::
+  Early HQError ->
+  EncoderConfig ->
+  Cursor ->
+  EncoderState ->
+  [(JSONEvent, Cursor -> EncoderState -> ChunkStream IO (EncoderState, Cursor))] ->
+  ChunkStream IO (EncoderState, Cursor)
+onOpenOrSkipChunks early config input st arms =
+  onEventOrEndChunks early input st $ \(event, rest) ->
+    case [handle | (open, handle) <- arms, open == event] of
+      (handle : _) -> handle rest st
+      [] -> takeValueChunks early config (pushCursor event rest) st
+
+-- | Loop pulling member steps until the container ends, emitting
+-- @close@; @body@ handles each step, threading the encoder state.
+-- Shared by 'traverseObjectChunks' and 'traverseArrayChunks': the
+-- close emission is the only difference. Inlined so @close@/@next@/
+-- @body@ specialize per walk.
+{-# INLINE walkMembersChunks #-}
+walkMembersChunks ::
+  JSONEvent ->
+  EncoderConfig ->
+  (Cursor -> IO (Either Cursor (a, Cursor))) ->
+  ((a, Cursor) -> EncoderState -> ChunkStream IO (EncoderState, Cursor)) ->
+  Cursor ->
+  EncoderState ->
+  ChunkStream IO (EncoderState, Cursor)
+walkMembersChunks close config next body = go
+  where
+    go stream s = do
+      step' <- lift (next stream)
+      case step' of
+        Left rest -> do
+          s' <- emitChunk config close s
+          pure (s', rest)
+        Right pair -> do
+          (s', after) <- body pair s
+          go after s'
+
 -- | Walk an object body, emitting @JSONEndObject@ at the end.
 -- Caller must have emitted @JSONBeginObject@ already.
 traverseObjectChunks ::
@@ -158,17 +202,8 @@ traverseObjectChunks ::
   EncoderState ->
   (Text -> Cursor -> EncoderState -> ChunkStream IO (EncoderState, Cursor)) ->
   ChunkStream IO (EncoderState, Cursor)
-traverseObjectChunks early config input st body = go input st
-  where
-    go stream s = do
-      step' <- lift (expectObjectStep early stream)
-      case step' of
-        Left rest -> do
-          s' <- emitChunk config JSONEndObject s
-          pure (s', rest)
-        Right (key, rest) -> do
-          (s', after) <- body key rest s
-          go after s'
+traverseObjectChunks early config input st body =
+  walkMembersChunks JSONEndObject config (expectObjectStep early) (uncurry body) input st
 
 -- | Walk an array body, emitting @JSONEndArray@ at the end.
 traverseArrayChunks ::
@@ -178,17 +213,8 @@ traverseArrayChunks ::
   EncoderState ->
   ((JSONEvent, Cursor) -> EncoderState -> ChunkStream IO (EncoderState, Cursor)) ->
   ChunkStream IO (EncoderState, Cursor)
-traverseArrayChunks early config input st body = go input st
-  where
-    go stream s = do
-      step' <- lift (expectArrayStep early stream)
-      case step' of
-        Left rest -> do
-          s' <- emitChunk config JSONEndArray s
-          pure (s', rest)
-        Right (event, rest) -> do
-          (s', after) <- body (event, rest) s
-          go after s'
+traverseArrayChunks early config input st body =
+  walkMembersChunks JSONEndArray config (expectArrayStep early) body input st
 
 -- | Emit a key then passthrough its value; the 4x pattern in
 -- @rewriteMember@/pairs/allKeys@.

@@ -84,9 +84,7 @@ runFold early optic = run optic (takeValue early)
 
     runField :: Text -> Continuation -> Continuation
     runField name k input =
-      onEventOrEnd early input $ \case
-        (JSONBeginObject, rest) -> findField name k rest
-        (event, rest) -> skipValue early (pushCursor event rest)
+      onOpenOrSkip early input [(JSONBeginObject, findField name k)]
 
     findField :: Text -> Continuation -> Continuation
     findField name k = go
@@ -104,37 +102,47 @@ runFold early optic = run optic (takeValue early)
     ----------------------------------------------------------------
 
     runEach :: Continuation -> Continuation
-    runEach k input =
-      onEventOrEnd early input $ \case
-        (JSONBeginArray, rest) ->
-          traverseArray early rest $ \(event, rest') -> k (pushCursor event rest')
-        (JSONBeginObject, rest) ->
-          traverseObject early rest $ \(_, rest') -> k rest'
-        (event, rest) -> skipValue early (pushCursor event rest)
+    runEach k input = onOpenOrSkip early input eventsWithCont
+      where
+        eventsWithCont =
+          [ ( JSONBeginArray,
+              \rest ->
+                traverseArray early rest
+                  $ \(event, rest') -> k (pushCursor event rest')
+            ),
+            ( JSONBeginObject,
+              \rest -> traverseObject early rest $ \(_, rest') -> k rest'
+            )
+          ]
 
     ----------------------------------------------------------------
     -- Keys: object keys as strings (objects only)
     ----------------------------------------------------------------
 
     runKeys :: Continuation -> Continuation
-    runKeys k input =
-      onEventOrEnd early input $ \case
-        (JSONBeginObject, rest) ->
-          traverseObject early rest $ \(key, rest') -> do
-            _ <- k (Cursor [JSONString key] initialDecoder (pure ()))
-            skipMemberValue early rest'
-        (event, rest) -> skipValue early (pushCursor event rest)
+    runKeys k input = onOpenOrSkip early input eventsWithCont
+      where
+        eventsWithCont =
+          [ ( JSONBeginObject,
+              \rest ->
+                traverseObject early rest $ \(key, rest') -> do
+                  _ <- k (Cursor [JSONString key] initialDecoder (pure ()))
+                  skipMemberValue early rest'
+            )
+          ]
 
     ----------------------------------------------------------------
     -- Values: object member values only (arrays focus on nothing)
     ----------------------------------------------------------------
 
     runValues :: Continuation -> Continuation
-    runValues k input =
-      onEventOrEnd early input $ \case
-        (JSONBeginObject, rest) ->
-          traverseObject early rest $ \(_, rest') -> k rest'
-        (event, rest) -> skipValue early (pushCursor event rest)
+    runValues k input = onOpenOrSkip early input eventsWithCont
+      where
+        eventsWithCont =
+          [ ( JSONBeginObject,
+              \rest -> traverseObject early rest $ \(_, rest') -> k rest'
+            )
+          ]
 
     ----------------------------------------------------------------
     -- Filter: keep the value when the predicate holds of the
@@ -176,9 +184,7 @@ runFold early optic = run optic (takeValue early)
 
     runIndex :: Int -> Continuation -> Continuation
     runIndex index k input =
-      onEventOrEnd early input $ \case
-        (JSONBeginArray, rest) -> findIndex index rest
-        (event, rest) -> skipValue early (pushCursor event rest)
+      onOpenOrSkip early input [(JSONBeginArray, findIndex index)]
       where
         findIndex n stream
           | n < 0 = skipRestOfArray early stream
