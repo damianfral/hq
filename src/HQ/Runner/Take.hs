@@ -19,12 +19,8 @@ import Streaming.Prelude qualified as S
 
 -- | Pull a single event, with the advanced cursor.
 pullOne :: Early HQError -> Cursor -> IO (JSONEvent, Cursor)
-pullOne _ (Cursor (event : buffered) decoder text) = pure (event, Cursor buffered decoder text)
-pullOne early (Cursor [] decoder text) = do
-  pulled <- pullEvent early decoder text
-  case pulled of
-    EndOfInput -> leave early $ HQRunnerError UnexpectedEndOfInput
-    NextEvent event decoder' rest -> pure (event, Cursor [] decoder' rest)
+pullOne early cur =
+  pullCursor early cur >>= maybe (leave early $ HQRunnerError UnexpectedEndOfInput) pure
 
 -- | True when the decoder still holds pending input that must be
 -- stepped before pulling more text. Single name for the 4x
