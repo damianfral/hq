@@ -1,5 +1,6 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE ImportQualifiedPost #-}
+{-# LANGUAGE StrictData #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 
 module HQ.Runner.Take where
@@ -226,6 +227,13 @@ emitKeyAndTake early config key rest s = do
   takeValueChunks early config rest s'
 
 -- | Take one complete value, transcribing it straight to chunks.
+-- Strings and numbers take a verbatim raw path ('peekRawScalar'):
+-- chunk-side only. The event-side take ('takeValue') always decodes,
+-- so both paths must agree on value boundaries; the raw scanners
+-- ('skipStringCollect'/'skipNumberCollect') mirror the decoder
+-- ('consumeString'/'stepNumber') exactly, and the split/adversarial
+-- tests cover the agreement. Change one side only with a test on
+-- the other.
 takeValueChunks ::
   Early HQError ->
   EncoderConfig ->
@@ -310,6 +318,19 @@ takeRawNumberChunks early config atNumber dec txt st = do
 batchSize :: Int
 batchSize = 8192
 
+-- | Loop state for 'takeContainerChunks': the cursor plus encoder
+-- state plus the pending output builder and its estimated size.
+-- Packed so the six loop functions share one state argument instead
+-- of a positional 4-tuple (where 'Builder' next to 'Int' is easy to
+-- transpose). All fields strict, matching the per-argument bangs the
+-- tuple version carried.
+data TakeLoop = TakeLoop
+  { loopCursor :: Cursor,
+    loopEncoder :: EncoderState,
+    loopPending :: Builder,
+    loopPendingSize :: Int
+  }
+
 -- | Take a container body, fusing decode and format per event with no
 -- intermediate event stream.
 takeContainerChunks ::
@@ -319,93 +340,64 @@ takeContainerChunks ::
   Cursor ->
   EncoderState ->
   ChunkStream IO (EncoderState, Cursor)
-takeContainerChunks early config closing c st0 = go c st0 mempty 0
+takeContainerChunks early config closing c st0 = go (TakeLoop c st0 mempty 0)
   where
-    go ::
-      Cursor ->
-      EncoderState ->
-      Builder ->
-      Int ->
-      ChunkStream IO (EncoderState, Cursor)
-    go (Cursor buf' dec txt) !st !pend !pendSize = case buf' of
-      event : rest -> emit event (Cursor rest dec txt) st pend pendSize
-      [] -> stepMore dec txt st pend pendSize
-    stepMore ::
-      DecoderState ->
-      StreamIO Text () ->
-      EncoderState ->
-      Builder ->
-      Int ->
-      ChunkStream IO (EncoderState, Cursor)
-    stepMore !dec !txt !st !pend !pendSize = case Decoder.step dec of
+    go :: TakeLoop -> ChunkStream IO (EncoderState, Cursor)
+    go loop = case loopCursor loop of
+      Cursor (event : buffered) dec txt ->
+        emit event (loop {loopCursor = Cursor buffered dec txt})
+      Cursor [] _ _ ->
+        stepMore loop
+    stepMore :: TakeLoop -> ChunkStream IO (EncoderState, Cursor)
+    stepMore loop@(TakeLoop (Cursor _ dec txt) _ _ _) = case Decoder.step dec of
       Left err -> lift (leave early (HQDecodeError err))
       Right (Emit event dec') ->
-        let newCursor = Cursor [] dec' txt
-         in emit event newCursor st pend pendSize
+        emit event (loop {loopCursor = Cursor [] dec' txt})
       Right (NeedInput dec')
-        | hasPending dec' -> stepMore dec' txt st pend pendSize
-        | otherwise -> pullMore dec' txt st pend pendSize
+        | hasPending dec' -> stepMore (loop {loopCursor = Cursor [] dec' txt})
+        | otherwise -> pullMore (loop {loopCursor = Cursor [] dec' txt})
       Right (Done _) -> lift (leave early $ HQRunnerError UnexpectedEndOfInput)
-    emit ::
-      JSONEvent ->
-      Cursor ->
-      EncoderState ->
-      Builder ->
-      Int ->
-      ChunkStream IO (EncoderState, Cursor)
-    emit !event !cursor !st !pend !pendSize = do
+    emit :: JSONEvent -> TakeLoop -> ChunkStream IO (EncoderState, Cursor)
+    emit !event loop@(TakeLoop cur st pend pendSize) = do
       let (Chunk b s, st') = formatEvent config st event
           pend' = pend <> b
           pendSize' = pendSize + s
       if event == closing
-        then flush pend' pendSize' >> pure (st', cursor)
+        then flush pend' pendSize' >> pure (st', cur)
         else case matchingClose event of
-          Just end -> nested end cursor st' pend' pendSize'
+          Just end -> nested end (loop {loopEncoder = st', loopPending = pend', loopPendingSize = pendSize'})
           Nothing
             | pendSize' >= batchSize -> do
                 flush pend' pendSize'
-                go cursor st' mempty 0
-            | otherwise -> go cursor st' pend' pendSize'
-    nested ::
-      JSONEvent ->
-      Cursor ->
-      EncoderState ->
-      Builder ->
-      Int ->
-      ChunkStream IO (EncoderState, Cursor)
-    nested !end !cursor !st !pend !pendSize = do
-      -- Flush before descending so nested chunks yield after us.
+                go (TakeLoop cur st' mempty 0)
+            | otherwise -> go (loop {loopEncoder = st', loopPending = pend', loopPendingSize = pendSize'})
+    nested :: JSONEvent -> TakeLoop -> ChunkStream IO (EncoderState, Cursor)
+    nested !end (TakeLoop cur st pend pendSize) = do
+      -- Flush before descending: parent bytes buffered so far must
+      -- reach downstream before the nested value's chunks (yield order
+      -- is byte order). Cross-level batching is therefore bounded by
+      -- nesting; threading the buffer through instead would batch
+      -- across levels, at the cost of a less obvious loop (measure
+      -- before changing).
       flush pend pendSize
-      (st', cursor') <- takeContainerChunks early config end cursor st
-      go cursor' st' mempty 0
-    pullMore ::
-      DecoderState ->
-      StreamIO Text () ->
-      EncoderState ->
-      Builder ->
-      Int ->
-      ChunkStream IO (EncoderState, Cursor)
-    pullMore !dec !txt !st !pend !pendSize = do
+      (st', cursor') <- takeContainerChunks early config end cur st
+      go (TakeLoop cursor' st' mempty 0)
+    pullMore :: TakeLoop -> ChunkStream IO (EncoderState, Cursor)
+    pullMore loop@(TakeLoop (Cursor _ dec txt) _ _ _) = do
       result <- lift (S.next txt)
       case result of
-        Left () -> finishTake dec st pend pendSize
+        Left () -> finishTake loop
         Right (chunk, rest) -> case Decoder.feed chunk dec of
           Left err -> lift (leave early (HQDecodeError err))
           Right (Emit event dec') ->
-            let newCursor = Cursor [] dec' rest
-             in emit event newCursor st pend pendSize
-          Right (NeedInput dec') -> stepMore dec' rest st pend pendSize
+            emit event (loop {loopCursor = Cursor [] dec' rest})
+          Right (NeedInput dec') -> stepMore (loop {loopCursor = Cursor [] dec' rest})
           Right (Done _) -> lift (leave early $ HQRunnerError UnexpectedEndOfInput)
     -- Mirror terminal 'finish' policy, emitting the final event as a chunk.
-    finishTake ::
-      DecoderState ->
-      EncoderState ->
-      Builder ->
-      Int ->
-      ChunkStream IO (EncoderState, Cursor)
-    finishTake !dec !st !pend !pendSize = do
+    finishTake :: TakeLoop -> ChunkStream IO (EncoderState, Cursor)
+    finishTake (TakeLoop (Cursor _ dec _) st pend pendSize) = do
       (event, dec') <- lift (finishTakeEvent early dec)
       let newCursor = Cursor [] dec' (pure ())
-       in emit event newCursor st pend pendSize
+       in emit event (TakeLoop newCursor st pend pendSize)
     flush :: Builder -> Int -> ChunkStream IO ()
     flush !pend !pendSize = when (pendSize > 0) $ S.yield $ Chunk pend pendSize
