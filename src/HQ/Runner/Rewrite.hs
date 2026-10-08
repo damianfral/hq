@@ -8,7 +8,7 @@ import HQ.Early (Early, leave, orLeave)
 import HQ.Error (HQError (..))
 import HQ.JSON.Encoder (ChunkStream, EncoderConfig, EncoderState)
 import HQ.JSON.Event
-import HQ.Optic (Optic (..), appendOptic, focusesWhole, prismPredicate)
+import HQ.Optic (Optic (..), focusesWhole, prismPredicate)
 import HQ.Runner.Cursor (Cursor (..), RewriteContinuation, expectArrayStep, pullCursor, pushCursor, skipValueE)
 import HQ.Runner.Error (RunnerError (..))
 import HQ.Runner.Fold (applyTransformation, gateTake, materializeValue)
@@ -51,7 +51,7 @@ runRewrite early rewriter optic config = run optic
     navigate :: Optic -> Optic -> RewriteContinuation
     navigate step suffix input st = case step of
       Id -> run suffix input st
-      Compose left right -> navigate left (appendOptic right suffix) input st
+      Compose left right -> navigate left (right <> suffix) input st
       Field name -> rewriteField name suffix input st
       Each -> rewriteEach suffix input st
       Keys -> rewriteKeys suffix input st

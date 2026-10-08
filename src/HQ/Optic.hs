@@ -122,10 +122,18 @@ prismPredicate PNull = isNull
 prismPredicate PArray = isArray
 prismPredicate PObject = isObject
 
--- | Compose with 'Id' elimination.
+-- | Compose with 'Id' elimination on either side: @( '<>' )@ with
+-- 'Id' as identity. Reassociation preserves focusing semantics (both
+-- runners induct through the continuation), though structural 'Eq'
+-- still distinguishes nestings.
 appendOptic :: Optic -> Optic -> Optic
 appendOptic Id rest = rest
+appendOptic step Id = step
 appendOptic step rest = Compose step rest
+
+instance Semigroup Optic where (<>) = appendOptic
+
+instance Monoid Optic where mempty = Id
 
 -- | Whether a suffix focuses the whole value starting at @event@.
 focusesWhole :: Optic -> JSONEvent -> Bool

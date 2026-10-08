@@ -85,6 +85,27 @@ spec = describe "HQ.Optic" $ do
       opticTypeOf (Filter (Field "a") (Equal (Number 1))) `shouldBe` OpticAffineTraversal
       opticTypeOf (Compose Each (Filter (Field "a") (Equal (Number 1)))) `shouldBe` OpticTraversal
 
+  describe "appendOptic monoid" $ do
+    it "eliminates Id on either side" $ do
+      appendOptic Id (Field "a") `shouldBe` Field "a"
+      appendOptic (Field "a") Id `shouldBe` Field "a"
+      appendOptic Id Id `shouldBe` Id
+
+    it "associates Compose otherwise" $ do
+      appendOptic Each (Field "a") `shouldBe` Compose Each (Field "a")
+
+    it "satisfies the monoid identity laws" $ do
+      (mempty :: Optic) `shouldBe` Id
+      (Each <> Field "a") `shouldBe` Compose Each (Field "a")
+      (Field "a" <> Id) `shouldBe` Field "a"
+      (Id <> Field "a") `shouldBe` Field "a"
+
+    it "agrees on cardinality across reassociation" $ do
+      let l = Field "a"
+          c = Each
+          r = Ix 0
+      opticTypeOf ((l <> c) <> r) `shouldBe` opticTypeOf (l <> (c <> r))
+
   describe "inferFocusType classifications" $ do
     it "leaves unknown shapes as any" $ do
       opticFocusOf (Field "a") `shouldBe` ValueAny
