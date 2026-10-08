@@ -95,7 +95,15 @@ parserSpec = describe "parseQuery" $ do
     it "parses filter with parens" $ do
       let inner = Filter (Compose Each (Field "age")) (Equal (Number 30))
           expected = Fold (Compose (Field "users") inner)
-      parseQuery "fold @users.filter (each . @age == 30)" `shouldBe` Right expected
+      parseQuery "fold @users.filter (each . @age) (== 30)" `shouldBe` Right expected
+
+    it "rejects a filter group without per-side parens" $ case parseQuery "fold @users.filter (each . @age == 30)" of
+      Left _ -> pure ()
+      Right q -> expectationFailure $ "Expected parse error, got: " <> show q
+
+    it "rejects a comma-separated filter group" $ case parseQuery "fold @users.filter (each . @age, == 30)" of
+      Left _ -> pure ()
+      Right q -> expectationFailure $ "Expected parse error, got: " <> show q
 
     it "parses filter mid-path with a trailing transformation" $ do
       let inner = Filter (Field "age") (Equal (Number 30))
@@ -108,7 +116,7 @@ parserSpec = describe "parseQuery" $ do
       parseQuery "fold (@foo . @bar)"
         `shouldBe` Right (Fold (Compose (Field "foo") (Field "bar")))
 
-    it "tolerates redundant parentheses around filter sides" $ do
+    it "tolerates parentheses around filter sides" $ do
       let expected = Fold (Filter (Field "age") (Equal (Number 30)))
       parseQuery "fold filter (@age) (== 30)" `shouldBe` Right expected
 

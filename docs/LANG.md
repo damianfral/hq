@@ -63,12 +63,12 @@ Single atoms stay bare:
 
     filter @age == 30
 
-Anything longer takes one paren group:
+Anything longer takes its own paren group per side:
 
     filter (each . @age) (== 30)
 
 A `.` after a bare optic starts an outer composition, so a dotted optic
-inside `filter` needs the grouped form:
+inside `filter` needs its sides parenthesized:
 
     each . filter (@tags . each) (== "x")
 
@@ -208,7 +208,7 @@ rejected up front instead of failing mid-stream:
     echo '{"a":[1,2,3]}' | hq fold '@a . each'
     # 1, 2, 3 (one per line)
 
-    echo '[{"a":90},{"a":96}]' | hq fold 'each . filter (@a == 90)' -c
+    echo '[{"a":90},{"a":96}]' | hq fold 'each . filter (@a) (== 90)' -c
     # [{"a":90}]
 
     echo '{"a":1}' | hq over '@a' '+ 1' -c

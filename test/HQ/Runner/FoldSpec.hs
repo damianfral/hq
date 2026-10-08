@@ -299,7 +299,7 @@ filterSpec = describe "filter" $ do
     `shouldReturn` Right [JSONString "a"]
 
   it "keeps nested filtered values" $ do
-    runQueryTest "filter (filter @a == 1 == {\"a\":1})" "{\"a\":1}"
+    runQueryTest "filter (filter @a == 1) (== {\"a\":1})" "{\"a\":1}"
     `shouldReturn` Right [JSONBeginObject, JSONObjectKey "a", JSONNumber 1, JSONEndObject]
 
   it "fails when the predicate does not fit" $ do
@@ -354,7 +354,7 @@ differentialOptics =
     "each . @x",
     "@a . each",
     "filter @a == 1",
-    "filter (each . @x == 2)",
+    "filter (each . @x) (== 2)",
     "each . filter @b == 2"
   ]
 

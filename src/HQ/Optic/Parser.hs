@@ -7,7 +7,7 @@ module HQ.Optic.Parser where
 import Control.Monad.Combinators.Expr (Operator (..), makeExprParser)
 import HQ.Optic
 import HQ.Parser (Parser, keyword, lexeme, parens, parseTop, symbol)
-import HQ.Transformation.Parser (atomParser, transformationParser)
+import HQ.Transformation.Parser (atomParser)
 import Relude hiding (Compose, filter, id, many, some)
 import Text.Megaparsec
 import Text.Megaparsec.Char (alphaNumChar, char)
@@ -52,15 +52,15 @@ keysParser = keyword "keys" Keys
 valuesParser :: Parser Optic
 valuesParser = keyword "values" Values
 
--- | @filter OPTIC TRANSFORMATION@: one group wrapping both sides, or
--- two bare atoms. A @.@ after a bare optic starts an outer composition,
--- so dotted optics need the group form.
+-- | @filter OPTIC TRANSFORMATION@: two bare atoms, each optionally
+-- parenthesized. Non-atoms take their own paren group
+-- (@filter (each . @age) (== 30)@), which keeps the split
+-- deterministic: a @.@ after a bare optic starts an outer
+-- composition, and one shared group would force two parsers to
+-- greedily share a token stream.
 filterParser :: Parser Optic
-filterParser = keyword "filter" () >> (try grouped <|> bare)
+filterParser = keyword "filter" () >> bare
   where
-    grouped = do
-      (o, t) <- parens ((,) <$> opticParser <*> transformationParser)
-      pure (Filter o t)
     bare = Filter <$> opticAtomParser <*> transArg
     transArg = atomParser
 

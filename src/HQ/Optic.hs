@@ -90,7 +90,9 @@ instance Show Optic where
     where
       filterPrec = appPrec
       -- Single atoms stay bare (@filter @age == 30@); anything longer
-      -- goes in one paren group (@filter (each . @age == 30)@).
+      -- takes its own paren group per side
+      -- (@filter (each . @age) (== 30)@), which reparses
+      -- deterministically.
       showsArgs oo tt
         | isAtomOptic oo && isAtomTrans tt =
             showsPrec (filterPrec + 1) oo
@@ -99,7 +101,7 @@ instance Show Optic where
         | otherwise =
             showString "("
               . shows oo
-              . showString " "
+              . showString ") ("
               . shows tt
               . showString ")"
       isAtomOptic (Compose _ _) = False

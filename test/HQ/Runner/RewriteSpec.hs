@@ -842,7 +842,7 @@ filterRewriteSpec = describe "filter rewrite" $ do
       ]
 
   it "removes the whole member when the gate keeps it" $ do
-    runDeleteTest "@users . filter (each == 1)" "{\"users\":[1],\"b\":2}"
+    runDeleteTest "@users . filter (each) (== 1)" "{\"users\":[1],\"b\":2}"
     `shouldReturn` Right
       [JSONBeginObject, JSONObjectKey "b", JSONNumber 2, JSONEndObject]
 
