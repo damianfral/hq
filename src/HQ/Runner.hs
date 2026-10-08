@@ -1,15 +1,12 @@
 {-# LANGUAGE DerivingStrategies #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE ImportQualifiedPost #-}
+{-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE StrictData #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 
 module HQ.Runner
-  ( module HQ.Runner.Cursor,
-    module HQ.Runner.Take,
-    module HQ.Runner.Fold,
-    module HQ.Runner.Rewrite,
-    runRunnerIOWith,
+  ( executeRunnerAction,
     jsonRunner,
     foldDocuments,
     rewriteDocuments,
@@ -31,6 +28,7 @@ import HQ.Runner.Fold
 import HQ.Runner.Rewrite
 import HQ.Runner.Take
 import Relude hiding (Compose, Const)
+import Streaming (Of, Stream)
 import Streaming.Prelude qualified as S
 import System.IO (hSetBinaryMode)
 
@@ -50,26 +48,29 @@ newtype RunnerF a = Runner (ReaderT RunnerEnv IO a)
       MonadReader RunnerEnv
     )
 
-type Runner = RunnerF (BSStream IO ())
+type RunnerAction = RunnerF (BSStream IO ())
 
-runRunner ::
+-- | Evaluate a runner action into its output stream, without
+-- draining it. Contrast 'executeRunnerAction', which runs the stream
+-- to stdout.
+evalRunnerAction ::
   Early HQError ->
-  Runner ->
+  RunnerAction ->
   Query ->
   EncoderConfig ->
   Handle ->
   IO (BSStream IO ())
-runRunner early (Runner runner) query config handle = runReaderT runner env
+evalRunnerAction early (Runner runner) query config handle = runReaderT runner env
   where
     env = RunnerEnv early query (streamHandle 256 handle) config
 
 -- | Run a query to stdout; errors go to stderr with a failing exit.
-runRunnerIOWith :: Runner -> Query -> EncoderConfig -> Handle -> IO ()
-runRunnerIOWith runner query encConfig handle = do
+executeRunnerAction :: RunnerAction -> Query -> EncoderConfig -> Handle -> IO ()
+executeRunnerAction runner query encConfig handle = do
   hSetBuffering stdout $ BlockBuffering Nothing
   hSetBinaryMode stdout True
   r <- runEarly $ \early -> do
-    byteStream <- runRunner early runner query encConfig handle
+    byteStream <- evalRunnerAction early runner query encConfig handle
     S.mapM_ write byteStream
   case r of
     Left e -> hPutStrLn stderr (renderHQError e) >> exitFailure
@@ -87,33 +88,45 @@ streamHandle size handle = do
     then pure ()
     else S.yield chunk >> streamHandle size handle
 
-jsonRunner :: Runner
+jsonRunner :: RunnerAction
 jsonRunner = do
-  early <- asks runnerEnvEarly
-  query <- asks runnerEnvQuery
-  input <- asks runnerEnvInput
-  config <- asks runnerEnvConfig
-  let cursor = Cursor [] initialDecoder (decodeUtf8Stream early input)
-  pure $ case query of
-    Preview optic -> void $ do
-      encode config 65536 (takeFirstValue (runFold early optic cursor))
-    Fold optic -> void $ encode config 65536 (foldDocuments early optic cursor)
-    Over optic transformation -> void $ do
-      encodeChunks 65536 $ do
-        let transform = RewriteTransform transformation
-        rewriteDocuments early (runRewrite early transform optic config) cursor initialEncoderState
-    Delete optic -> do
-      let rewriting = runRewrite early RewriteDelete optic config
-      void $ encodeChunks 65536 (rewriteDocuments early rewriting cursor initialEncoderState)
+  RunnerEnv {..} <- ask
+  let cursor = Cursor [] initialDecoder (decodeUtf8Stream runnerEnvEarly runnerEnvInput)
+      foldWith docs = void $ encode runnerEnvConfig 65536 docs
+      rewriteWith rewriter optic =
+        void
+          $ encodeChunks 65536
+          $ rewriteDocuments
+            runnerEnvEarly
+            (runRewrite runnerEnvEarly rewriter optic runnerEnvConfig)
+            cursor
+            initialEncoderState
+  pure $ case runnerEnvQuery of
+    Preview optic -> foldWith (takeFirstValue (runFold runnerEnvEarly optic cursor))
+    Fold optic -> foldWith (foldDocuments runnerEnvEarly optic cursor)
+    Over optic transformation -> rewriteWith (RewriteTransform transformation) optic
+    Delete optic -> rewriteWith RewriteDelete optic
+
+-- | Run @act@ over every top-level document in turn, threading loop
+-- state @s@ through; @project@ recovers the cursor to advance from.
+-- Both 'foldDocuments' (state is the cursor) and 'rewriteDocuments'
+-- (state is @(EncoderState, Cursor)@) are instances.
+forDocuments ::
+  (Cursor -> IO (Maybe Cursor)) ->
+  (s -> Cursor) ->
+  (Cursor -> s -> Stream (Of e) IO s) ->
+  s ->
+  Stream (Of e) IO s
+forDocuments next project act st = do
+  mcur <- lift (next (project st))
+  case mcur of
+    Nothing -> pure st
+    Just cur' -> act cur' st >>= forDocuments next project act
 
 -- | Run a fold query over every top-level document in turn, yielding
 -- each document's focused values downstream.
 foldDocuments :: Early HQError -> Optic -> Cursor -> EventStream Cursor
-foldDocuments early optic cur = do
-  next <- lift (nextDocument early cur)
-  case next of
-    Nothing -> pure cur
-    Just cur' -> runFold early optic cur' >>= foldDocuments early optic
+foldDocuments early optic = forDocuments (nextDocument early) id (\cur _ -> runFold early optic cur)
 
 -- | Run a rewrite query over every top-level document in turn,
 -- threading the encoder state (empty at document boundaries).
@@ -123,13 +136,10 @@ rewriteDocuments ::
   Cursor ->
   EncoderState ->
   ChunkStream IO (EncoderState, Cursor)
-rewriteDocuments early action cur st = do
-  next <- lift (nextDocument early cur)
-  case next of
-    Nothing -> pure (st, cur)
-    Just cur' -> do
-      (st', cur'') <- action cur' st
-      rewriteDocuments early action cur'' st'
+rewriteDocuments early action cur st =
+  forDocuments (nextDocument early) snd go (st, cur)
+  where
+    go cur' (st', _) = action cur' st'
 
 decodeUtf8Stream :: Early HQError -> StreamIO ByteString () -> StreamIO Text ()
 decodeUtf8Stream early = go mempty

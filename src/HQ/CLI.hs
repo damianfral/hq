@@ -18,7 +18,7 @@ import HQ.JSON.Parser (parseValue)
 import HQ.Optic (Optic)
 import HQ.Optic.Parser (parseOptic)
 import HQ.Query
-import HQ.Runner (jsonRunner, runRunnerIOWith)
+import HQ.Runner (executeRunnerAction, jsonRunner)
 import HQ.Transformation (Transformation (..))
 import HQ.Transformation.Parser (parseTransformation)
 import Options.Applicative hiding (Const)
@@ -110,4 +110,4 @@ runCLI = do
     Left err -> hPutStrLn stderr (renderTypeError err) >> exitFailure
     Right q -> pure q
   let cfg = Enc.EncoderConfig optCompact $ Enc.ValueOptions optRaw optJoin
-  withInput optFile $ runRunnerIOWith jsonRunner query cfg
+  withInput optFile $ executeRunnerAction jsonRunner query cfg
