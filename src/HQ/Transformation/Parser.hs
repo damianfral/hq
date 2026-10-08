@@ -39,9 +39,9 @@ transformationParser = makeExprParser atomParser table
   where
     table =
       [ [InfixL (Compose <$ symbol ".")],
-        [InfixL (And <$ (symbol "and" <|> symbol "&&"))],
-        [InfixL (Xor <$ (symbol "xor" <|> symbol "^^"))],
-        [InfixL (Or <$ (symbol "or" <|> symbol "||"))]
+        [InfixL (keyword "and" And <|> (And <$ symbol "&&"))],
+        [InfixL (keyword "xor" Xor <|> (Xor <$ symbol "^^"))],
+        [InfixL (keyword "or" Or <|> (Or <$ symbol "||"))]
       ]
 
 atomParser :: Parser Transformation
@@ -81,7 +81,7 @@ parenParser :: Parser Transformation
 parenParser = parens transformationParser
 
 constParser :: Parser Transformation
-constParser = Const <$> (symbol "const" *> jsonValueParser)
+constParser = Const <$> (keyword "const" () *> jsonValueParser)
 
 equalParser :: Parser Transformation
 equalParser = do
@@ -119,7 +119,7 @@ strConcatParser :: Parser Transformation
 strConcatParser = prefixOp "++" jsonText ConcatString
 
 arrayConcatParser :: Parser Transformation
-arrayConcatParser = prefixOp "concat" jsonArray ConcatArray
+arrayConcatParser = prefixWordOp "concat" jsonArray ConcatArray
 
 trimParser :: Parser Transformation
 trimParser = keyword "trim" Trim
@@ -128,22 +128,22 @@ notParser :: Parser Transformation
 notParser = keyword "not" Not
 
 replaceParser :: Parser Transformation
-replaceParser = Replace <$> (symbol "replace" *> jsonText) <*> jsonText
+replaceParser = Replace <$> (keyword "replace" () *> jsonText) <*> jsonText
 
 stripPrefixParser :: Parser Transformation
-stripPrefixParser = prefixOp "stripPrefix" jsonText StripPrefix
+stripPrefixParser = prefixWordOp "stripPrefix" jsonText StripPrefix
 
 stripSuffixParser :: Parser Transformation
-stripSuffixParser = prefixOp "stripSuffix" jsonText StripSuffix
+stripSuffixParser = prefixWordOp "stripSuffix" jsonText StripSuffix
 
 isPrefixOfParser :: Parser Transformation
-isPrefixOfParser = prefixOp "isPrefixOf" jsonText IsPrefixOf
+isPrefixOfParser = prefixWordOp "isPrefixOf" jsonText IsPrefixOf
 
 isSuffixOfParser :: Parser Transformation
-isSuffixOfParser = prefixOp "isSuffixOf" jsonText IsSuffixOf
+isSuffixOfParser = prefixWordOp "isSuffixOf" jsonText IsSuffixOf
 
 isInfixOfParser :: Parser Transformation
-isInfixOfParser = prefixOp "isInfixOf" jsonText IsInfixOf
+isInfixOfParser = prefixWordOp "isInfixOf" jsonText IsInfixOf
 
 isEmptyParser :: Parser Transformation
 isEmptyParser = keyword "isEmpty" IsEmpty
@@ -164,12 +164,19 @@ sortParser :: Parser Transformation
 sortParser = keyword "sort" ArraySort
 
 mergeParser :: Parser Transformation
-mergeParser = prefixOp "merge" jsonObject Merge
+mergeParser = prefixWordOp "merge" jsonObject Merge
 
 deepMergeParser :: Parser Transformation
-deepMergeParser = prefixOp "deepMerge" jsonObject DeepMerge
+deepMergeParser = prefixWordOp "deepMerge" jsonObject DeepMerge
 
 -- | Parse @OP operand@ and apply the constructor: shared shape of the
 -- symbolic and single-operand parsers.
 prefixOp :: Text -> Parser a -> (a -> Transformation) -> Parser Transformation
 prefixOp op operand constr = constr <$> (symbol op *> operand)
+
+-- | Word-operator variant of 'prefixOp': the operator must end on a
+-- word boundary so @sortOn@/@concatenate@ don't lex as @sort@/@concat@
+-- plus residue. Symbolic operators ('+', '++', '<='...) keep 'prefixOp'
+-- since their operands ('+1', '"x"') may follow without a space.
+prefixWordOp :: Text -> Parser a -> (a -> Transformation) -> Parser Transformation
+prefixWordOp op operand constr = constr <$> (keyword op () *> operand)

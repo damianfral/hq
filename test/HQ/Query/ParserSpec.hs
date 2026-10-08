@@ -157,6 +157,18 @@ parserSpec = describe "parseQuery" $ do
       Left _ -> pure ()
       Right q -> expectationFailure $ "Expected parse error, got: " <> show q
 
+    it "rejects command keyword prefixes" $ case parseQuery "folder @foo" of
+      Left _ -> pure ()
+      Right q -> expectationFailure $ "Expected parse error, got: " <> show q
+
+    it "rejects optic keyword prefixes" $ case parseQuery "fold eachx" of
+      Left _ -> pure ()
+      Right q -> expectationFailure $ "Expected parse error, got: " <> show q
+
+    it "rejects spaceless ix operand" $ case parseQuery "fold ix0" of
+      Left _ -> pure ()
+      Right q -> expectationFailure $ "Expected parse error, got: " <> show q
+
 prismParserSpec :: Spec
 prismParserSpec = describe "parseQuery (prisms)" $ do
   it "parses _String" $ do

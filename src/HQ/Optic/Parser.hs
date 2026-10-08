@@ -56,7 +56,7 @@ valuesParser = keyword "values" Values
 -- two bare atoms. A @.@ after a bare optic starts an outer composition,
 -- so dotted optics need the group form.
 filterParser :: Parser Optic
-filterParser = symbol "filter" >> (try grouped <|> bare)
+filterParser = keyword "filter" () >> (try grouped <|> bare)
   where
     grouped = do
       (o, t) <- parens ((,) <$> opticParser <*> transformationParser)
@@ -71,7 +71,7 @@ prismParser :: Parser Optic
 prismParser = char '_' *> prismNameParser
 
 ixParser :: Parser Optic
-ixParser = symbol "ix" >> Ix <$> lexeme decimal
+ixParser = keyword "ix" () >> Ix <$> lexeme decimal
 
 prismNameParser :: Parser Optic
 prismNameParser =

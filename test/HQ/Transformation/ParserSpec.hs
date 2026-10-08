@@ -186,3 +186,11 @@ spec = describe "HQ.Transformation.Parser" $ do
       parseTransformation "not == 1" `shouldSatisfy` isLeft
     it "rejects bang" $ do
       parseTransformation "!" `shouldSatisfy` isLeft
+    it "rejects keyword prefixes" $ do
+      parseTransformation "const1" `shouldSatisfy` isLeft
+      parseTransformation "sortOn" `shouldSatisfy` isLeft
+      parseTransformation "android" `shouldSatisfy` isLeft
+      parseTransformation "== 1 orange == 2" `shouldSatisfy` isLeft
+    it "parses word operators attached to punctuation" $ do
+      parseTransformation "concat[1,2]"
+        `shouldBe` Right (ConcatArray [Number 1, Number 2])

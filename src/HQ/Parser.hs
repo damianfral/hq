@@ -5,7 +5,7 @@ module HQ.Parser where
 
 import Relude hiding (many, some)
 import Text.Megaparsec
-import Text.Megaparsec.Char (char, spaceChar)
+import Text.Megaparsec.Char (alphaNumChar, char, spaceChar, string)
 import Text.Megaparsec.Char.Lexer qualified as L
 
 type Parser = Parsec Void Text
@@ -23,7 +23,7 @@ lexeme :: Parser a -> Parser a
 lexeme = L.lexeme sc
 
 keyword :: Text -> a -> Parser a
-keyword w v = symbol w $> v
+keyword w v = lexeme (string w <* notFollowedBy (alphaNumChar <|> char '_' <|> char '-')) $> v
 
 parens :: Parser a -> Parser a
 parens p = lexeme (char '(') *> p <* lexeme (char ')')
