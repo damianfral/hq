@@ -28,18 +28,14 @@ pullOne early cur =
 hasPending :: DecoderState -> Bool
 hasPending dec = not (T.null (decoderInput dec))
 
--- | Shared 'finish' decision for take loops; throws on all non-emit
--- outcomes, returning the final event otherwise. Unifies the two
--- @finishTake@ copies plus terminal @finish@ policy.
+-- | Shared 'finish' decision for take loops: top-level exhaustion
+-- means a truncated take here (contrast 'atEnd'/'finishEnd', where it
+-- ends cleanly). Decided by 'classifyTerminal', like both drivers.
 finishTakeEvent :: Early HQError -> DecoderState -> IO (JSONEvent, DecoderState)
-finishTakeEvent early dec = case finish dec of
-  Left UnexpectedEnd
-    | decoderPhase dec == DecoderPhaseValue && null (decoderStack dec) ->
-        leave early $ HQRunnerError UnexpectedEndOfInput
-  Left err -> leave early (HQDecodeError err)
-  Right (Done _) -> leave early $ HQRunnerError UnexpectedEndOfInput
-  Right (NeedInput _) -> leave early (HQDecodeError UnexpectedEnd)
-  Right (Emit event dec') -> pure (event, dec')
+finishTakeEvent early dec = case classifyTerminal dec of
+  TerminalEnd -> leave early $ HQRunnerError UnexpectedEndOfInput
+  TerminalError err -> leave early (HQDecodeError err)
+  TerminalEmit event dec' -> pure (event, dec')
 
 -- | Stream the events of exactly one complete JSON value. Lazy: stops
 -- pulling once the value is complete.

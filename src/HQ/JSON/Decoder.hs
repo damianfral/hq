@@ -15,6 +15,8 @@ module HQ.JSON.Decoder
     step,
     decodeTexts,
     pullEvent,
+    Terminal (..),
+    classifyTerminal,
   )
 where
 
@@ -168,10 +170,47 @@ isRootDone :: DecoderState -> Bool
 isRootDone decoder =
   decoderPhase decoder == DecoderPhaseFinished && null (decoderStack decoder)
 
+-- | The decoder consumed nothing yet: empty input with initial stack,
+-- depth and phase. Cheaper and more precise than '(== initialDecoder)',
+-- which compares the whole state (including the input text).
+isEmptyDecoder :: DecoderState -> Bool
+isEmptyDecoder dec = getAll $ foldMap All predicates
+  where
+    predicates =
+      [ T.null (decoderInput dec),
+        null (decoderStack dec),
+        decoderNestDepth dec == initialDepth,
+        decoderPhase dec == DecoderPhaseValue
+      ]
+
+-- | Terminal reading of a finished decoder: the single policy behind
+-- 'decodeTexts' (@atEnd@), 'pullEvent' (@finishEnd@) and Take's
+-- @finishTakeEvent@. All three must agree on which 'finish' outcomes
+-- end cleanly, fail, or yield one more event — that table lives here,
+-- each driver only embeds it in its own monad (top-level exhaustion
+-- means clean end for the first two, truncated take for the third).
+-- NOTE: lives here rather than in Core because it runs 'finish',
+-- which Core cannot see without an import cycle (via Number/Keyword).
+data Terminal
+  = TerminalEnd
+  | TerminalError DecodeError
+  | TerminalEmit JSONEvent DecoderState
+  deriving (Eq, Show)
+
+classifyTerminal :: DecoderState -> Terminal
+classifyTerminal dec = case finish dec of
+  Left UnexpectedEnd
+    | decoderPhase dec == DecoderPhaseValue && null (decoderStack dec) -> TerminalEnd
+  Left err -> TerminalError err
+  Right (Done _) -> TerminalEnd
+  Right (NeedInput _) -> TerminalError UnexpectedEnd
+  Right (Emit event dec') -> TerminalEmit event dec'
+
 -- | Decode complete text chunks to events (single-shot list driver for
 -- embedded literals and tests). Steps 'step' directly and finalizes
--- with 'finish', mirroring 'pullEvent' terminal policy: pending input
--- always takes precedence over pulling more chunks.
+-- with 'finish'; terminal outcomes go through 'classifyTerminal', the
+-- policy shared with 'pullEvent': pending input always takes
+-- precedence over pulling more chunks.
 decodeTexts :: [Text] -> Either DecodeError [JSONEvent]
 decodeTexts = go initialDecoder
   where
@@ -195,13 +234,10 @@ decodeTexts = go initialDecoder
             then trailing dec' rest
             else Left TrailingInput
       | otherwise = Left TrailingInput
-    atEnd dec' = case finish dec' of
-      Left UnexpectedEnd
-        | decoderPhase dec' == DecoderPhaseValue && null (decoderStack dec') -> Right []
-      Left err -> Left err
-      Right (Done _) -> Right []
-      Right (NeedInput _) -> Left UnexpectedEnd
-      Right (Emit event dec'') -> (event :) <$> atEnd dec''
+    atEnd dec' = case classifyTerminal dec' of
+      TerminalEnd -> Right []
+      TerminalError err -> Left err
+      TerminalEmit event dec'' -> (event :) <$> atEnd dec''
 
 -- | Pull a single event; bulk loops drive 'step' directly.
 pullEvent :: Early HQError -> DecoderState -> StreamIO Text () -> IO Next
@@ -213,8 +249,8 @@ pullEvent early decoder txtStream = case step decoder of
   where
     pullMore :: DecoderState -> StreamIO Text () -> IO Next
     pullMore dec txt
-      -- Pending input takes precedence over pulling more text,
-      -- mirroring drain: only a truly drained decoder may end.
+      -- Pending input takes precedence over pulling more text (same
+      -- precedence as 'drain'): only a truly drained decoder may end.
       | not (T.null (decoderInput dec)) = case step dec of
           Left err -> leave early (HQDecodeError err)
           Right (Emit event dec') -> pure (NextEvent event dec' txt)
@@ -224,7 +260,7 @@ pullEvent early decoder txtStream = case step decoder of
           result <- S.next txt
           case result of
             Left ()
-              | isRootDone dec || dec == initialDecoder -> pure EndOfInput
+              | isRootDone dec || isEmptyDecoder dec -> pure EndOfInput
               | otherwise -> finishEnd dec
             Right (chunk, rest) -> case feed chunk dec of
               Left err -> leave early (HQDecodeError err)
@@ -243,11 +279,7 @@ pullEvent early decoder txtStream = case step decoder of
                 else leave early (HQDecodeError TrailingInput)
           | otherwise -> leave early (HQDecodeError TrailingInput)
     finishEnd :: DecoderState -> IO Next
-    finishEnd dec = case finish dec of
-      Left UnexpectedEnd
-        | decoderPhase dec == DecoderPhaseValue && null (decoderStack dec) ->
-            pure EndOfInput
-      Left err -> leave early (HQDecodeError err)
-      Right (Done _) -> pure EndOfInput
-      Right (NeedInput _) -> leave early (HQDecodeError UnexpectedEnd)
-      Right (Emit event dec') -> pure $ NextEvent event dec' $ pure ()
+    finishEnd dec = case classifyTerminal dec of
+      TerminalEnd -> pure EndOfInput
+      TerminalError err -> leave early (HQDecodeError err)
+      TerminalEmit event dec' -> pure $ NextEvent event dec' $ pure ()
