@@ -5,12 +5,14 @@
 
 module HQ.Runner.Take where
 
+import Control.Exception (try)
 import Data.Char (isDigit)
 import Data.Text qualified as T
+import Data.Text.Encoding (encodeUtf8Builder)
 import HQ.Early (Early, leave)
 import HQ.JSON.Decoder
 import HQ.JSON.Decoder qualified as Decoder
-import HQ.JSON.Decoder.Skip (skipContainerCollect, skipNumberCollect, skipStringCollect)
+import HQ.JSON.Decoder.Skip (CollectPaused (..), SkipExpect (..), collectExpect, finishContainer, skipNumberCollect, skipStringCollect)
 import HQ.JSON.Encoder
 import HQ.JSON.Event (JSONEvent (..), matchingClose)
 import HQ.Runner.Cursor
@@ -280,12 +282,12 @@ takeValueChunks early config cursor st = case peekRawScalar cursor of
       JSONBeginArray -> case cursor' of
         Cursor [] dec txt
           | outputStyle config == Compact ->
-              takeRawContainerChunks early config event dec txt st
+              takeRawContainerChunks early config JSONEndArray JSONBeginArray dec txt st
         _ -> slowPath
       JSONBeginObject -> case cursor' of
         Cursor [] dec txt
           | outputStyle config == Compact ->
-              takeRawContainerChunks early config event dec txt st
+              takeRawContainerChunks early config JSONEndObject JSONBeginObject dec txt st
         _ -> slowPath
       _ -> slowPath
 
@@ -317,7 +319,15 @@ peekRawScalar cursor
         _ -> Nothing
     peekValue _ _ = Nothing
 
--- | Transcribe a peeked string value verbatim (escapes preserved).
+-- | Build the output bytes from newest-first raw fragments. A single
+-- right-nested fold: 'toLazyByteString' then streams in constant
+-- space, where left-nested @acc <> piece@ accumulation retained ~150x
+-- the collected size (measured on a 1.3 MB untouched array).
+buildFrags :: [Text] -> Builder
+buildFrags = foldl' (\acc t -> encodeUtf8Builder t <> acc) mempty
+
+-- | Transcribe a peeked string value verbatim (escapes preserved,
+-- quotes included in the fragments).
 takeRawStringChunks ::
   Early HQError ->
   EncoderConfig ->
@@ -327,8 +337,8 @@ takeRawStringChunks ::
   EncoderState ->
   ChunkStream IO (EncoderState, Cursor)
 takeRawStringChunks early config afterQuote dec txt st = do
-  (remainder, rawB, rawS, rest) <- lift (skipStringCollect early afterQuote txt)
-  let (Chunk b s, st1) = transcribeRawString config st rawB rawS
+  (remainder, frags, rawS, rest) <- lift (skipStringCollect early afterQuote txt)
+  let (Chunk b s, st1) = transcribeRawBytes config st (buildFrags frags) rawS
   st' <- emitChunkBuffer b s st1
   pure (st', Cursor [] (finishValue dec {decoderInput = remainder}) rest)
 
@@ -342,30 +352,56 @@ takeRawNumberChunks ::
   EncoderState ->
   ChunkStream IO (EncoderState, Cursor)
 takeRawNumberChunks early config atNumber dec txt st = do
-  (remainder, rawB, rawS, rest) <- lift (skipNumberCollect early atNumber txt)
-  let (Chunk b s, st1) = transcribeRawBytes config st rawB rawS
+  (remainder, frags, rawS, rest) <- lift (skipNumberCollect early atNumber txt)
+  let (Chunk b s, st1) = transcribeRawBytes config st (buildFrags frags) rawS
   st' <- emitChunkBuffer b s st1
   pure (st', Cursor [] (finishValue dec {decoderInput = remainder}) rest)
 
--- | Transcribe a whole container value verbatim in one chunk. The
--- cursor must be unbuffered with the decoder just past the opening
+-- | Transcribe a whole container value verbatim in bounded segments.
+-- The cursor must be unbuffered with the decoder just past the opening
 -- bracket (same precondition as walking it with 'takeContainerChunks';
--- the open event itself was already pulled). Encoder-state transitions
--- match the scalar raw path exactly (one 'transcribeRawBytes'),
--- since the open/close brackets travel inside the raw bytes.
+-- the open event itself was already pulled). Separators wrap the whole
+-- body exactly once ('transcribeRawOpen'/'transcribeRawTail', the head
+-- and tail of 'transcribeRawBytes'), so segment emission composes
+-- byte-identically to one uninterrupted collect while each segment
+-- stays under 'collectBudget'.
 takeRawContainerChunks ::
   Early HQError ->
   EncoderConfig ->
+  JSONEvent ->
   JSONEvent ->
   DecoderState ->
   StreamIO Text () ->
   EncoderState ->
   ChunkStream IO (EncoderState, Cursor)
-takeRawContainerChunks early config open dec txt st = do
-  (dec', rawB, rawS, rest) <- lift (skipContainerCollect early open dec txt)
-  let (Chunk b s, st1) = transcribeRawBytes config st rawB rawS
-  st' <- emitChunkBuffer b s st1
-  pure (st', Cursor [] dec' rest)
+takeRawContainerChunks early config closing open dec txt st = case closing of
+  JSONEndArray -> segmented ExpectValue
+  JSONEndObject -> segmented ExpectKey
+  -- Unreachable: callers pass literal closings. Collect nothing.
+  _ -> pure (st, Cursor [] dec txt)
+  where
+    segmented expect = do
+      let (Chunk openB openS, stOpen) = transcribeRawOpen config open st
+      stBracket <- emitChunkBuffer openB openS stOpen
+      let depth = decoderNestDepth dec
+          base = shallower depth
+      (stBody, rest, stream) <-
+        collectLoop stBracket expect base depth (decoderStack dec) (decoderInput dec) txt
+      let (Chunk finB finS, stTail) = transcribeRawTail config stBody
+      st' <- emitChunkBuffer finB finS stTail
+      pure (st', Cursor [] (finishContainer dec rest) stream)
+    -- Collect one budget-bounded segment, emit it verbatim, resume
+    -- until the container completes. The resume state is exact loop
+    -- state, so pausing is invisible downstream.
+    collectLoop st0 exp0 base0 dep0 stk0 inp0 stream0 = do
+      mseg <- liftIO $ try (collectExpect early [] 0 base0 dep0 stk0 exp0 inp0 stream0)
+      case mseg of
+        Right (rest, frags, size, stream') -> do
+          st' <- emitChunkBuffer (buildFrags frags) size st0
+          pure (st', rest, stream')
+        Left (CollectPaused frags size exp1 base1 dep1 stk1 inp1 stream1) -> do
+          st' <- emitChunkBuffer (buildFrags frags) size st0
+          collectLoop st' exp1 base1 dep1 stk1 inp1 stream1
 
 -- | Pending-builder flush threshold; chunk boundaries never change bytes.
 batchSize :: Int

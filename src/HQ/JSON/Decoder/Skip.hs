@@ -19,14 +19,18 @@ module HQ.JSON.Decoder.Skip
     skipMemberValueText,
     skipStringCollect,
     skipNumberCollect,
-    skipContainerCollect,
+    collectExpect,
+    finishContainer,
+    SkipExpect (..),
+    CollectPaused (..),
+    collectBudget,
   )
 where
 
-import Data.ByteString.Builder (Builder, char7, charUtf8)
+import Control.Exception (throwIO)
 import Data.Char (isDigit)
 import Data.Text qualified as T
-import Data.Text.Encoding (encodeUtf8Builder)
+import GHC.Show (Show (showsPrec), showString)
 import HQ.Early (Early, leave)
 import HQ.Error (HQError (..))
 import HQ.JSON.Decoder.Core
@@ -44,6 +48,34 @@ data SkipExpect
   | ExpectObjComma
   | ExpectArrComma
   deriving (Eq, Show)
+
+-- | Bodies collected past this size pause for emission: fragment
+-- transients scale ~150x the body (measured), so collection proceeds
+-- in bounded segments that emit verbatim and resume. Small values
+-- (the common case) complete in one segment.
+collectBudget :: Int
+collectBudget = 16384
+
+-- | A raw container collect paused for exceeding 'collectBudget': the
+-- fragments so far (newest first) and the exact state to resume from
+-- (position, depth context and live input). The caller emits the
+-- fragments verbatim, then resumes; the concatenation is byte-identical
+-- to one uninterrupted collect.
+data CollectPaused
+  = CollectPaused
+      [Text]
+      Int
+      SkipExpect
+      NestDepth
+      NestDepth
+      [DecodeContext]
+      Text
+      (StreamIO Text ())
+
+instance Show CollectPaused where
+  showsPrec _ _ = showString "CollectPaused: raw container segment ready, resuming collect"
+
+instance Exception CollectPaused
 
 -- | Pull the next chunk, skipping empties. Exhaustion here is
 -- 'UnexpectedEnd'.
@@ -112,43 +144,20 @@ skipContainerText early open decoder text = case open of
           pure (finishValue decoder {decoderInput = remainder, decoderStack = ctxs}, rest)
         [] -> pure (finishValue decoder {decoderInput = remainder}, rest)
 
--- | Skip a whole container value, capturing its raw bytes in compact
--- canonical form: insignificant whitespace is dropped, everything
--- else (including escape style and number formats) is preserved
--- verbatim. Validates exactly like 'skipExpect'; any grammar change
--- touches both. Used by Take's container fast path so untouched
--- subtrees bypass event decoding and re-encoding.
-skipContainerCollect ::
-  Early HQError ->
-  JSONEvent ->
-  DecoderState ->
-  StreamIO Text () ->
-  IO (DecoderState, Builder, Int, StreamIO Text ())
-skipContainerCollect early open decoder text = case open of
-  JSONBeginArray -> skipRest ExpectValue (char7 '[') 1
-  JSONBeginObject -> skipRest ExpectKey (char7 '{') 1
-  _ -> pure (decoder, mempty, 0, text)
-  where
-    -- The opener is already consumed (its byte prepended above), so
-    -- the skip ends when the depth pops back below its entry level.
-    skipRest expect openB openS = do
-      let depth = decoderNestDepth decoder
-          base = shallower depth
-      (remainder, bodyB, bodyS, rest) <-
-        collectExpect early mempty 0 base depth (decoderStack decoder) expect (decoderInput decoder) text
-      let accB = openB <> bodyB
-          accS = openS + bodyS
-      case decoderStack decoder of
-        _ : ctxs ->
-          pure (finishValue decoder {decoderInput = remainder, decoderStack = ctxs}, accB, accS, rest)
-        [] -> pure (finishValue decoder {decoderInput = remainder}, accB, accS, rest)
+-- | Pop one container context and mark the parent, after the
+-- container's closing bracket was consumed. Shared by every raw
+-- container collect, however many segments it took.
+finishContainer :: DecoderState -> Text -> DecoderState
+finishContainer decoder remainder = case decoderStack decoder of
+  _ : ctxs -> finishValue decoder {decoderInput = remainder, decoderStack = ctxs}
+  [] -> finishValue decoder {decoderInput = remainder}
 
 -- | Structural collect loop; ends when the depth pops back to its
 -- entry level. Mirror of 'skipExpect' accumulating raw bytes instead
 -- of discarding: same states, same errors, same termination.
 collectExpect ::
   Early HQError ->
-  Builder ->
+  [Text] ->
   Int ->
   NestDepth ->
   NestDepth ->
@@ -156,83 +165,93 @@ collectExpect ::
   SkipExpect ->
   Text ->
   StreamIO Text () ->
-  IO (Text, Builder, Int, StreamIO Text ())
-collectExpect early accB accS base depth stack ExpectValue input text = do
-  (c, rest, text') <- nextSkipChar early input text
-  case c of
-    '{' -> collectExpect early (accB <> char7 '{') (accS + 1) base (deeper depth) (DecodeObject : stack) ExpectKey rest text'
-    '[' -> collectExpect early (accB <> char7 '[') (accS + 1) base (deeper depth) (DecodeArray : stack) ExpectValue rest text'
-    '"' -> do
-      (rest', b1, s1, text'') <- skipStringCollect early rest text'
-      collectAfterValue early (accB <> char7 '"' <> b1 <> char7 '"') (accS + 2 + s1) base depth stack rest' text''
-    't' -> do
-      (rest', b1, s1, text'') <- skipKeywordCollect early rest text' "true"
-      collectAfterValue early (accB <> b1) (accS + s1) base depth stack rest' text''
-    'f' -> do
-      (rest', b1, s1, text'') <- skipKeywordCollect early rest text' "false"
-      collectAfterValue early (accB <> b1) (accS + s1) base depth stack rest' text''
-    'n' -> do
-      (rest', b1, s1, text'') <- skipKeywordCollect early rest text' "null"
-      collectAfterValue early (accB <> b1) (accS + s1) base depth stack rest' text''
-    _
-      | c == '-' || isDigit c -> do
-          let phase = fromMaybe NumberSign (numberPhaseFromFirstChar c)
-          (rest', b1, s1, text'') <- collectNumber early [T.singleton c] 1 phase rest text'
-          collectAfterValue early (accB <> b1) (accS + s1) base depth stack rest' text''
-      | c == ']' -> case stack of
-          DecodeArray : ctxs -> collectAfterValue early (accB <> char7 ']') (accS + 1) base (shallower depth) ctxs rest text'
-          _ -> leave early (HQDecodeError (UnexpectedChar c))
-      | otherwise -> leave early (HQDecodeError (UnexpectedChar c))
-collectExpect early accB accS base depth stack ExpectKey input text = do
-  (c, rest, text') <- nextSkipChar early input text
-  case c of
-    '}' -> case stack of
-      _ : ctxs -> collectAfterValue early (accB <> char7 '}') (accS + 1) base (shallower depth) ctxs rest text'
-      [] -> leave early (HQDecodeError ExpectedObjectKey)
-    '"' -> do
-      (rest', b1, s1, text'') <- skipStringCollect early rest text'
-      collectExpect early (accB <> char7 '"' <> b1 <> char7 '"') (accS + 2 + s1) base depth stack ExpectColon rest' text''
-    _ -> leave early (HQDecodeError ExpectedObjectKey)
-collectExpect early accB accS base depth stack ExpectColon input text = do
-  (c, rest, text') <- nextSkipChar early input text
-  case c of
-    ':' -> collectExpect early (accB <> char7 ':') (accS + 1) base depth stack ExpectValue rest text'
-    _ -> leave early (HQDecodeError ExpectedColon)
-collectExpect early accB accS base depth stack ExpectObjComma input text = do
-  (c, rest, text') <- nextSkipChar early input text
-  case c of
-    ',' -> collectExpect early (accB <> char7 ',') (accS + 1) base depth stack ExpectKey rest text'
-    '}' -> case stack of
-      _ : ctxs -> collectAfterValue early (accB <> char7 '}') (accS + 1) base (shallower depth) ctxs rest text'
-      [] -> leave early (HQDecodeError ExpectedCommaOrEnd)
-    _ -> leave early (HQDecodeError ExpectedCommaOrEnd)
-collectExpect early accB accS base depth stack ExpectArrComma input text = do
-  (c, rest, text') <- nextSkipChar early input text
-  case c of
-    ',' -> collectExpect early (accB <> char7 ',') (accS + 1) base depth stack ExpectValue rest text'
-    ']' -> case stack of
-      _ : ctxs -> collectAfterValue early (accB <> char7 ']') (accS + 1) base (shallower depth) ctxs rest text'
-      [] -> leave early (HQDecodeError ExpectedCommaOrEnd)
-    _ -> leave early (HQDecodeError ExpectedCommaOrEnd)
+  IO (Text, [Text], Int, StreamIO Text ())
+collectExpect early acc accSize base depth stack ExpectValue input text
+  | accSize > collectBudget = throwIO (CollectPaused acc accSize ExpectValue base depth stack input text)
+  | otherwise = do
+      (c, rest, text') <- nextSkipChar early input text
+      case c of
+        '{' -> collectExpect early (T.singleton '{' : acc) (accSize + 1) base (deeper depth) (DecodeObject : stack) ExpectKey rest text'
+        '[' -> collectExpect early (T.singleton '[' : acc) (accSize + 1) base (deeper depth) (DecodeArray : stack) ExpectValue rest text'
+        '"' -> do
+          (rest', frags, size, text'') <- skipStringCollect early rest text'
+          collectAfterValue early (frags <> acc) (size + accSize) base depth stack rest' text''
+        't' -> do
+          (rest', frags, size, text'') <- skipKeywordCollect early rest text' "true"
+          collectAfterValue early (frags <> acc) (size + accSize) base depth stack rest' text''
+        'f' -> do
+          (rest', frags, size, text'') <- skipKeywordCollect early rest text' "false"
+          collectAfterValue early (frags <> acc) (size + accSize) base depth stack rest' text''
+        'n' -> do
+          (rest', frags, size, text'') <- skipKeywordCollect early rest text' "null"
+          collectAfterValue early (frags <> acc) (size + accSize) base depth stack rest' text''
+        _
+          | c == '-' || isDigit c -> do
+              let phase = fromMaybe NumberSign (numberPhaseFromFirstChar c)
+              (rest', frags, size, text'') <- collectNumber early [T.singleton c] 1 phase rest text'
+              collectAfterValue early (frags <> acc) (size + accSize) base depth stack rest' text''
+          | c == ']' -> case stack of
+              DecodeArray : ctxs -> collectAfterValue early (T.singleton ']' : acc) (accSize + 1) base (shallower depth) ctxs rest text'
+              _ -> leave early (HQDecodeError (UnexpectedChar c))
+          | otherwise -> leave early (HQDecodeError (UnexpectedChar c))
+collectExpect early acc accSize base depth stack ExpectKey input text
+  | accSize > collectBudget = throwIO (CollectPaused acc accSize ExpectKey base depth stack input text)
+  | otherwise = do
+      (c, rest, text') <- nextSkipChar early input text
+      case c of
+        '}' -> case stack of
+          _ : ctxs -> collectAfterValue early (T.singleton '}' : acc) (accSize + 1) base (shallower depth) ctxs rest text'
+          [] -> leave early (HQDecodeError ExpectedObjectKey)
+        '"' -> do
+          (rest', frags, size, text'') <- skipStringCollect early rest text'
+          collectExpect early (frags <> acc) (size + accSize) base depth stack ExpectColon rest' text''
+        _ -> leave early (HQDecodeError ExpectedObjectKey)
+collectExpect early acc accSize base depth stack ExpectColon input text
+  | accSize > collectBudget = throwIO (CollectPaused acc accSize ExpectColon base depth stack input text)
+  | otherwise = do
+      (c, rest, text') <- nextSkipChar early input text
+      case c of
+        ':' -> collectExpect early (T.singleton ':' : acc) (accSize + 1) base depth stack ExpectValue rest text'
+        _ -> leave early (HQDecodeError ExpectedColon)
+collectExpect early acc accSize base depth stack ExpectObjComma input text
+  | accSize > collectBudget = throwIO (CollectPaused acc accSize ExpectObjComma base depth stack input text)
+  | otherwise = do
+      (c, rest, text') <- nextSkipChar early input text
+      case c of
+        ',' -> collectExpect early (T.singleton ',' : acc) (accSize + 1) base depth stack ExpectKey rest text'
+        '}' -> case stack of
+          _ : ctxs -> collectAfterValue early (T.singleton '}' : acc) (accSize + 1) base (shallower depth) ctxs rest text'
+          [] -> leave early (HQDecodeError ExpectedCommaOrEnd)
+        _ -> leave early (HQDecodeError ExpectedCommaOrEnd)
+collectExpect early acc accSize base depth stack ExpectArrComma input text
+  | accSize > collectBudget = throwIO (CollectPaused acc accSize ExpectArrComma base depth stack input text)
+  | otherwise = do
+      (c, rest, text') <- nextSkipChar early input text
+      case c of
+        ',' -> collectExpect early (T.singleton ',' : acc) (accSize + 1) base depth stack ExpectValue rest text'
+        ']' -> case stack of
+          _ : ctxs -> collectAfterValue early (T.singleton ']' : acc) (accSize + 1) base (shallower depth) ctxs rest text'
+          [] -> leave early (HQDecodeError ExpectedCommaOrEnd)
+        _ -> leave early (HQDecodeError ExpectedCommaOrEnd)
 
 -- | A value just completed: return at entry depth, else expect the
 -- enclosing separator. Mirror of 'afterValue'.
 collectAfterValue ::
   Early HQError ->
-  Builder ->
+  [Text] ->
   Int ->
   NestDepth ->
   NestDepth ->
   [DecodeContext] ->
   Text ->
   StreamIO Text () ->
-  IO (Text, Builder, Int, StreamIO Text ())
-collectAfterValue early accB accS base depth stack rest text'
-  | depth <= base = pure (rest, accB, accS, text')
+  IO (Text, [Text], Int, StreamIO Text ())
+collectAfterValue early acc accSize base depth stack rest text'
+  | depth <= base = pure (rest, acc, accSize, text')
   | otherwise = case stack of
-      DecodeArray : _ -> collectExpect early accB accS base depth stack ExpectArrComma rest text'
-      DecodeObject : _ -> collectExpect early accB accS base depth stack ExpectObjComma rest text'
-      [] -> pure (rest, accB, accS, text')
+      DecodeArray : _ -> collectExpect early acc accSize base depth stack ExpectArrComma rest text'
+      DecodeObject : _ -> collectExpect early acc accSize base depth stack ExpectObjComma rest text'
+      [] -> pure (rest, acc, accSize, text')
 
 -- | Structural skip loop; ends when the depth pops back to its entry level.
 skipExpect ::
@@ -522,13 +541,13 @@ skipKeywordBody early keyword = go
             | otherwise -> leave early (HQDecodeError (InvalidKeyword keyword))
 
 -- | Skip a keyword, capturing its raw bytes. Mirrors 'skipKeywordBody';
--- the literal is fixed, so it is appended whole on success.
+-- the literal is fixed, so it is returned whole on success.
 skipKeywordCollect ::
   Early HQError ->
   Text ->
   StreamIO Text () ->
   Text ->
-  IO (Text, Builder, Int, StreamIO Text ())
+  IO (Text, [Text], Int, StreamIO Text ())
 skipKeywordCollect early input text keyword = go 1 input text
   where
     go !ix !inp !txt
@@ -547,13 +566,13 @@ skipKeywordCollect early input text keyword = go 1 input text
       | T.null inp = do
           result <- S.next txt
           case result of
-            Left () -> pure (mempty, encodeUtf8Builder keyword, T.length keyword, txt)
+            Left () -> pure (mempty, [keyword], T.length keyword, txt)
             Right (chunk, rest) -> checkDelim chunk rest
       | otherwise = case T.uncons inp of
           Nothing -> checkDelim mempty txt
           Just (c, _)
             | isJsonDelimiter c ->
-                pure (inp, encodeUtf8Builder keyword, T.length keyword, txt)
+                pure (inp, [keyword], T.length keyword, txt)
             | otherwise -> leave early (HQDecodeError (InvalidKeyword keyword))
 
 --------------------------------------------------------------------------------
@@ -570,7 +589,7 @@ skipNumberCollect ::
   Early HQError ->
   Text ->
   StreamIO Text () ->
-  IO (Text, Builder, Int, StreamIO Text ())
+  IO (Text, [Text], Int, StreamIO Text ())
 skipNumberCollect early input text = case T.uncons input of
   Nothing -> do
     (chunk, rest) <- pullSkipText early mempty text
@@ -586,13 +605,13 @@ collectNumber ::
   NumberPhase ->
   Text ->
   StreamIO Text () ->
-  IO (Text, Builder, Int, StreamIO Text ())
+  IO (Text, [Text], Int, StreamIO Text ())
 collectNumber early frags size phase inp txt
   | T.null inp = do
       result <- S.next txt
       case result of
         Left ()
-          | isValidNumberFinal phase -> pure (mempty, build (reverse frags), size, txt)
+          | isValidNumberFinal phase -> pure (mempty, frags, size, txt)
           | otherwise ->
               leave early $ HQDecodeError $ InvalidNumber (T.concat (reverse frags))
         Right (chunk, rest) -> collectNumber early frags size phase chunk rest
@@ -616,7 +635,7 @@ collectNumber early frags size phase inp txt
             NumberEnd
               | isValidNumberFinal p' ->
                   let frags' = T.take pos' inp : f'
-                   in pure (T.drop pos' inp, build (reverse frags'), s' + pos', txt)
+                   in pure (T.drop pos' inp, frags', s' + pos', txt)
               | otherwise ->
                   leave early
                     $ HQDecodeError
@@ -626,157 +645,158 @@ collectNumber early frags size phase inp txt
                 $ HQDecodeError
                 $ InvalidNumber (T.concat (reverse f' <> [T.take pos' inp]) <> T.singleton c)
             NumberStep p'' -> loop f' s' p'' (pos' + 1)
-    build = foldMap encodeUtf8Builder
 
--- | Skip a string, capturing its raw bytes (quotes excluded).
+-- | Skip a string, capturing its raw bytes, quotes included. The
+-- opening quote seeds the fragments (oldest position); the closing
+-- quote is consed at the end. Newest first, like the number frags.
 skipStringCollect ::
   Early HQError ->
   Text ->
   StreamIO Text () ->
-  IO (Text, Builder, Int, StreamIO Text ())
-skipStringCollect early = collectStringGo early mempty 0
+  IO (Text, [Text], Int, StreamIO Text ())
+skipStringCollect early = collectStringGo early [T.singleton '"'] 1
 
 collectStringGo ::
   Early HQError ->
-  Builder ->
+  [Text] ->
   Int ->
   Text ->
   StreamIO Text () ->
-  IO (Text, Builder, Int, StreamIO Text ())
-collectStringGo early !accB !accS !inp !txt = do
+  IO (Text, [Text], Int, StreamIO Text ())
+collectStringGo early !acc !accSize !inp !txt = do
   let (safe, rest) = T.span isStringChar inp
-      accB' = accB <> encodeUtf8Builder safe
-      accS' = accS + T.length safe
+      acc' = safe : acc
+      accSize' = accSize + T.length safe
   case T.uncons rest of
     Nothing -> do
       (chunk, rest') <- pullSkipText early mempty txt
-      collectStringGo early accB' accS' chunk rest'
+      collectStringGo early acc' accSize' chunk rest'
     Just (c, rest')
-      | c == '"' -> pure (rest', accB', accS', txt)
-      | c == '\\' -> collectEscape early accB' accS' rest' txt
+      | c == '"' -> pure (rest', T.singleton '"' : acc', accSize' + 1, txt)
+      | c == '\\' -> collectEscape early acc' accSize' rest' txt
       | otherwise -> leave early (HQDecodeError (UnexpectedChar c))
 
--- | Capture one escape sequence, appending its raw bytes.
+-- | Capture one escape sequence, prepending its raw bytes.
 collectEscape ::
   Early HQError ->
-  Builder ->
+  [Text] ->
   Int ->
   Text ->
   StreamIO Text () ->
-  IO (Text, Builder, Int, StreamIO Text ())
-collectEscape early !accB !accS !input !text = do
+  IO (Text, [Text], Int, StreamIO Text ())
+collectEscape early !acc !accSize !input !text = do
   (chunk, rest) <- pullSkipText early input text
   case T.uncons chunk of
-    Nothing -> collectEscape early accB accS mempty rest
+    Nothing -> collectEscape early acc accSize mempty rest
     Just (c, rest')
       | c == 'u' -> collectUnicode early (esc 'u') rest' rest 0 0
       | isSimpleEscape c -> collectString (esc c) rest' rest
       | otherwise -> leave early (HQDecodeError (InvalidEscape c))
   where
-    esc c = (accB <> char7 '\\' <> charUtf8 c, accS + 2)
+    esc c = (T.pack ['\\', c] : acc, accSize + 2)
     collectString (b, s) = collectStringGo early b s
 
 -- | Capture a @\u@ escape's four hex digits. Single hex path via 'accumulateHex'.
 collectUnicode ::
   Early HQError ->
-  (Builder, Int) ->
+  ([Text], Int) ->
   Text ->
   StreamIO Text () ->
   Int ->
   Int ->
-  IO (Text, Builder, Int, StreamIO Text ())
-collectUnicode early (!accB, !accS) !input !text !value !digits = do
+  IO (Text, [Text], Int, StreamIO Text ())
+collectUnicode early (!acc, !accSize) !input !text !value !digits = do
   (chunk, rest0) <- pullSkipText early input text
   let (value', digits', rest') = accumulateHex value digits chunk
-      accB' = accB <> encodeUtf8Builder (T.take (T.length chunk - T.length rest') chunk)
-      accS' = accS + (T.length chunk - T.length rest')
+      acc' = T.take (T.length chunk - T.length rest') chunk : acc
+      accSize' = accSize + (T.length chunk - T.length rest')
   if digits' >= 4
-    then finishUnicodeCollect early accB' accS' rest' rest0 value'
+    then finishUnicodeCollect early acc' accSize' rest' rest0 value'
     else
       if T.null rest'
-        then collectUnicode early (accB', accS') mempty rest0 value' digits'
+        then collectUnicode early (acc', accSize') mempty rest0 value' digits'
         else leave early (HQDecodeError InvalidUnicodeEscape)
 
 -- | Validate a completed @\u@ escape.
 finishUnicodeCollect ::
   Early HQError ->
-  Builder ->
+  [Text] ->
   Int ->
   Text ->
   StreamIO Text () ->
   Int ->
-  IO (Text, Builder, Int, StreamIO Text ())
-finishUnicodeCollect early !accB !accS !input !text !value
-  | isHighSurrogate value = collectLowSurrogate early accB accS input text value
+  IO (Text, [Text], Int, StreamIO Text ())
+finishUnicodeCollect early !acc !accSize !input !text !value
+  | isHighSurrogate value = collectLowSurrogate early acc accSize input text value
   | isLowSurrogate value = leave early (HQDecodeError InvalidSurrogatePair)
-  | otherwise = collectStringGo early accB accS input text
+  | otherwise = collectStringGo early acc accSize input text
 
 -- | Capture a low-surrogate escape after a high surrogate.
 collectLowSurrogate ::
   Early HQError ->
-  Builder ->
+  [Text] ->
   Int ->
   Text ->
   StreamIO Text () ->
   Int ->
-  IO (Text, Builder, Int, StreamIO Text ())
-collectLowSurrogate early !accB !accS !input !text !high = do
+  IO (Text, [Text], Int, StreamIO Text ())
+collectLowSurrogate early !acc !accSize !input !text !high = do
   (chunk, rest) <- pullSkipText early input text
   case T.uncons chunk of
-    Nothing -> collectLowSurrogate early accB accS mempty rest high
+    Nothing -> collectLowSurrogate early acc accSize mempty rest high
     Just ('\\', rest') -> case T.uncons rest' of
-      Nothing -> collectLowSurrogateBackslash early (accB <> char7 '\\') (accS + 1) rest high
+      Nothing -> collectLowSurrogateBackslash early (T.singleton '\\' : acc) (accSize + 1) rest high
       Just ('u', rest'') ->
-        collectLowDigits early (accB <> char7 '\\' <> charUtf8 'u') (accS + 2) rest'' rest high 0 0
+        collectLowDigits early (T.pack ['\\', 'u'] : acc) (accSize + 2) rest'' rest high 0 0
       _ -> leave early (HQDecodeError InvalidSurrogatePair)
     _ -> leave early (HQDecodeError InvalidSurrogatePair)
 
 -- | The low surrogate's backslash arrived at a chunk end.
 collectLowSurrogateBackslash ::
   Early HQError ->
-  Builder ->
+  [Text] ->
   Int ->
   StreamIO Text () ->
   Int ->
-  IO (Text, Builder, Int, StreamIO Text ())
-collectLowSurrogateBackslash early !accB !accS !text !high = do
+  IO (Text, [Text], Int, StreamIO Text ())
+collectLowSurrogateBackslash early !acc !accSize !text !high = do
   (chunk, rest) <- pullSkipText early mempty text
   case T.uncons chunk of
-    Nothing -> collectLowSurrogateBackslash early accB accS rest high
-    Just ('u', rest') -> collectLowDigits early (accB <> charUtf8 'u') (accS + 1) rest' rest high 0 0
+    Nothing -> collectLowSurrogateBackslash early acc accSize rest high
+    Just ('u', rest') -> collectLowDigits early (T.singleton 'u' : acc) (accSize + 1) rest' rest high 0 0
     _ -> leave early (HQDecodeError InvalidSurrogatePair)
 
 -- | Capture the low surrogate's four hex digits.
 collectLowDigits ::
   Early HQError ->
-  Builder ->
+  [Text] ->
   Int ->
   Text ->
   StreamIO Text () ->
   Int ->
   Int ->
   Int ->
-  IO (Text, Builder, Int, StreamIO Text ())
-collectLowDigits early !accB !accS !input !text !high !value !digits
+  IO (Text, [Text], Int, StreamIO Text ())
+collectLowDigits early !acc !accSize !input !text !high !value !digits
   | digits == 4 =
       if isLowSurrogate value
-        then collectStringGo early accB accS input text
+        then collectStringGo early acc accSize input text
         else leave early $ HQDecodeError InvalidSurrogatePair
   | otherwise = do
       (chunk, rest) <- pullSkipText early input text
       case T.uncons chunk of
-        Nothing -> collectLowDigits early accB accS mempty rest high value digits
+        Nothing -> collectLowDigits early acc accSize mempty rest high value digits
         Just _ -> do
           let (value', digits', rest') = accumulateHex value digits chunk
               consumed = digits' - digits
-              accB' = accB <> encodeUtf8Builder (T.take consumed chunk)
-              accS' = accS + consumed
+              acc' = T.take consumed chunk : acc
+              accSize' = accSize + consumed
           if digits' == 4
             then
               if isLowSurrogate value'
-                then collectStringGo early accB' accS' rest' rest
+                then collectStringGo early acc' accSize' rest' rest
                 else leave early $ HQDecodeError InvalidSurrogatePair
             else
               if T.null rest'
-                then collectLowDigits early accB' accS' mempty rest high value' digits'
+                then collectLowDigits early acc' accSize' mempty rest high value' digits'
                 else leave early $ HQDecodeError InvalidUnicodeEscape

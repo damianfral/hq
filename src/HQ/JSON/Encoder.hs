@@ -14,6 +14,8 @@ module HQ.JSON.Encoder
     formatEvent,
     transcribeRawBytes,
     transcribeRawString,
+    transcribeRawOpen,
+    transcribeRawTail,
     Builder,
     Chunk (..),
     ChunkStream,
@@ -244,6 +246,31 @@ transcribeRawString ::
   EncoderConfig -> EncoderState -> Builder -> Int -> (Chunk, EncoderState)
 transcribeRawString config st rawB rawS =
   transcribeRawBytes config st (char7 '"' <> rawB <> char7 '"') (rawS + 2)
+
+-- | Open a verbatim container body: the separator plus the opening
+-- bracket, exactly the head of 'transcribeRawBytes'. Split out so a
+-- container collected in bounded segments emits separators once around
+-- the whole body instead of once per segment.
+transcribeRawOpen ::
+  EncoderConfig -> JSONEvent -> EncoderState -> (Chunk, EncoderState)
+transcribeRawOpen (EncoderConfig style _) open st =
+  case beforeValue style st of
+    (Chunk sepB sepS, st') ->
+      let (brackB, brackS) = case open of
+            JSONBeginArray -> (openBracket, 1)
+            JSONBeginObject -> (openBrace, 1)
+            _ -> (mempty, 0)
+       in (Chunk (sepB <> brackB) (sepS + brackS), st')
+
+-- | Close a verbatim container body: mark the parent non-empty and
+-- emit the top-level separator, exactly the tail of
+-- 'transcribeRawBytes'. Split out so a container collected in bounded
+-- segments composes byte-identically to one uninterrupted collect.
+transcribeRawTail :: EncoderConfig -> EncoderState -> (Chunk, EncoderState)
+transcribeRawTail (EncoderConfig _ (ValueOptions _ joinOpt)) st =
+  let st' = afterValue st
+      Chunk finB finS = finishTopValue joinOpt st'
+   in (Chunk finB finS, st')
 
 beforeKey :: EncodeStyle -> EncoderState -> (Chunk, EncoderState)
 beforeKey style st@(EncoderState ctxs depth pend pendSize) = case ctxs of
