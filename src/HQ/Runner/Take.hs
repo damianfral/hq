@@ -12,7 +12,7 @@ import Data.Text.Encoding (encodeUtf8Builder)
 import HQ.Early (Early, leave)
 import HQ.JSON.Decoder
 import HQ.JSON.Decoder qualified as Decoder
-import HQ.JSON.Decoder.Skip (CollectPaused (..), SkipExpect (..), collectExpect, finishContainer, skipNumberCollect, skipStringCollect)
+import HQ.JSON.Decoder.Skip
 import HQ.JSON.Encoder
 import HQ.JSON.Event (JSONEvent (..), matchingClose)
 import HQ.Runner.Cursor
@@ -21,7 +21,7 @@ import Relude hiding (Compose, id, many, some, state)
 import Streaming.Prelude qualified as S
 
 -- | Pull a single event, with the advanced cursor.
-pullOne :: Early HQError -> Cursor -> IO (JSONEvent, Cursor)
+pullOne :: Early HQError -> Cursor -> IO Step
 pullOne early =
   pullCursor early
     >=> maybe (leave early $ HQRunnerError UnexpectedEndOfInput) pure
@@ -39,13 +39,13 @@ finishTakeEvent :: Early HQError -> DecoderState -> IO (JSONEvent, DecoderState)
 finishTakeEvent early dec = case classifyTerminal dec of
   TerminalEnd -> leave early $ HQRunnerError UnexpectedEndOfInput
   TerminalError err -> leave early (HQDecodeError err)
-  TerminalEmit event dec' -> pure (event, dec')
+  TerminalEmit (TerminalEmitted event dec') -> pure (event, dec')
 
 -- | Stream the events of exactly one complete JSON value. Lazy: stops
 -- pulling once the value is complete.
 takeValue :: Early HQError -> Continuation
 takeValue early cursor = do
-  (event, cursor') <- lift (pullOne early cursor)
+  (Step event cursor') <- lift (pullOne early cursor)
   S.yield event
   case matchingClose event of
     Just closing -> takeContainerFrom early closing cursor'
@@ -154,13 +154,13 @@ onEventOrEndChunks ::
   Early HQError ->
   Cursor ->
   EncoderState ->
-  ((JSONEvent, Cursor) -> ChunkStream IO (EncoderState, Cursor)) ->
-  ChunkStream IO (EncoderState, Cursor)
+  (Step -> ChunkStream IO RewriteResult) ->
+  ChunkStream IO RewriteResult
 onEventOrEndChunks early input st f = do
   result <- lift (pullCursor early input)
   case result of
-    Nothing -> pure (st, input)
-    Just pair -> f pair
+    Nothing -> pure (RewriteResult st input)
+    Just pulled -> f pulled
 
 -- | Match the next event against a table of opens; anything else is
 -- passed through as a whole value. Chunk-stream analogue of
@@ -172,10 +172,10 @@ onOpenOrSkipChunks ::
   EncoderConfig ->
   Cursor ->
   EncoderState ->
-  [(JSONEvent, Cursor -> EncoderState -> ChunkStream IO (EncoderState, Cursor))] ->
-  ChunkStream IO (EncoderState, Cursor)
+  [(JSONEvent, Cursor -> EncoderState -> ChunkStream IO RewriteResult)] ->
+  ChunkStream IO RewriteResult
 onOpenOrSkipChunks early config input st arms =
-  onEventOrEndChunks early input st $ \(event, rest) ->
+  onEventOrEndChunks early input st $ \(Step event rest) ->
     case [handle | (open, handle) <- arms, open == event] of
       (handle : _) -> handle rest st
       [] -> takeValueChunks early config (pushCursor event rest) st
@@ -189,11 +189,11 @@ onOpenOrSkipChunks early config input st arms =
 walkMembersChunks ::
   JSONEvent ->
   EncoderConfig ->
-  (Cursor -> IO (Either Cursor (a, Cursor))) ->
-  ((a, Cursor) -> EncoderState -> ChunkStream IO (EncoderState, Cursor)) ->
+  (Cursor -> IO (Either Cursor s)) ->
+  (s -> EncoderState -> ChunkStream IO RewriteResult) ->
   Cursor ->
   EncoderState ->
-  ChunkStream IO (EncoderState, Cursor)
+  ChunkStream IO RewriteResult
 walkMembersChunks close config next body = go
   where
     go stream s = do
@@ -201,9 +201,9 @@ walkMembersChunks close config next body = go
       case step' of
         Left rest -> do
           s' <- emitChunk config close s
-          pure (s', rest)
+          pure (RewriteResult s' rest)
         Right pair -> do
-          (s', after) <- body pair s
+          RewriteResult s' after <- body pair s
           go after s'
 
 -- | Walk an object body, emitting @JSONEndObject@ at the end.
@@ -213,10 +213,10 @@ traverseObjectChunks ::
   EncoderConfig ->
   Cursor ->
   EncoderState ->
-  (Text -> Cursor -> EncoderState -> ChunkStream IO (EncoderState, Cursor)) ->
-  ChunkStream IO (EncoderState, Cursor)
+  (ObjectStep -> EncoderState -> ChunkStream IO RewriteResult) ->
+  ChunkStream IO RewriteResult
 traverseObjectChunks early config input st body =
-  walkMembersChunks JSONEndObject config (expectObjectStep early) (uncurry body) input st
+  walkMembersChunks JSONEndObject config (expectObjectStep early) body input st
 
 -- | Walk an array body, emitting @JSONEndArray@ at the end.
 traverseArrayChunks ::
@@ -224,8 +224,8 @@ traverseArrayChunks ::
   EncoderConfig ->
   Cursor ->
   EncoderState ->
-  ((JSONEvent, Cursor) -> EncoderState -> ChunkStream IO (EncoderState, Cursor)) ->
-  ChunkStream IO (EncoderState, Cursor)
+  (Step -> EncoderState -> ChunkStream IO RewriteResult) ->
+  ChunkStream IO RewriteResult
 traverseArrayChunks early config input st body =
   walkMembersChunks JSONEndArray config (expectArrayStep early) body input st
 
@@ -237,7 +237,7 @@ emitKeyAndTake ::
   Text ->
   Cursor ->
   EncoderState ->
-  ChunkStream IO (EncoderState, Cursor)
+  ChunkStream IO RewriteResult
 emitKeyAndTake early config key rest s = do
   s' <- emitChunk config (JSONObjectKey key) s
   takeValueChunks early config rest s'
@@ -257,14 +257,14 @@ takeValueChunks ::
   EncoderConfig ->
   Cursor ->
   EncoderState ->
-  ChunkStream IO (EncoderState, Cursor)
+  ChunkStream IO RewriteResult
 takeValueChunks early config cursor st = case peekRawScalar cursor of
   Just (RawString afterQuote, dec, txt) ->
     takeRawStringChunks early config afterQuote dec txt st
   Just (RawNumber atNumber, dec, txt) ->
     takeRawNumberChunks early config atNumber dec txt st
   Nothing -> do
-    (event, cursor') <- lift (pullOne early cursor)
+    (Step event cursor') <- lift (pullOne early cursor)
     let slowPath = do
           st' <- emitChunk config event st
           case matchingClose event of
@@ -273,7 +273,7 @@ takeValueChunks early config cursor st = case peekRawScalar cursor of
               JSONEndArray -> lift (leave early $ HQRunnerError UnexpectedEndOfArray)
               JSONEndObject -> lift (leave early $ HQRunnerError UnexpectedEndOfObject)
               JSONObjectKey _ -> lift (leave early $ HQRunnerError UnexpectedObjectKey)
-              _ -> pure (st', cursor')
+              _ -> pure (RewriteResult st' cursor')
     -- Wholesale containers bypass event decoding only when nothing is
     -- buffered (buffered replay has no source text to collect) and the
     -- output is compact (verbatim bytes are already canonical there;
@@ -319,12 +319,12 @@ peekRawScalar cursor
         _ -> Nothing
     peekValue _ _ = Nothing
 
--- | Build the output bytes from newest-first raw fragments. A single
--- right-nested fold: 'toLazyByteString' then streams in constant
--- space, where left-nested @acc <> piece@ accumulation retained ~150x
--- the collected size (measured on a 1.3 MB untouched array).
-buildFrags :: [Text] -> Builder
-buildFrags = foldl' (\acc t -> encodeUtf8Builder t <> acc) mempty
+-- | Build the output bytes from a raw body. A single right-nested
+-- fold: 'toLazyByteString' then streams in constant space, where
+-- left-nested @acc <> piece@ accumulation retained ~150x the
+-- collected size (measured on a 1.3 MB untouched array).
+buildFrags :: RawBody -> Builder
+buildFrags = foldl' (\acc t -> encodeUtf8Builder t <> acc) mempty . rawFrags
 
 -- | Transcribe a peeked string value verbatim (escapes preserved,
 -- quotes included in the fragments).
@@ -335,12 +335,12 @@ takeRawStringChunks ::
   DecoderState ->
   StreamIO Text () ->
   EncoderState ->
-  ChunkStream IO (EncoderState, Cursor)
+  ChunkStream IO RewriteResult
 takeRawStringChunks early config afterQuote dec txt st = do
-  (remainder, frags, rawS, rest) <- lift (skipStringCollect early afterQuote txt)
-  let (Chunk b s, st1) = transcribeRawBytes config st (buildFrags frags) rawS
+  (Collected (SkipRest remainder rest) body) <- lift (skipStringCollect early afterQuote txt)
+  let (Chunk b s, st1) = transcribeRawBytes config st (buildFrags body) (rawSize body)
   st' <- emitChunkBuffer b s st1
-  pure (st', Cursor [] (finishValue dec {decoderInput = remainder}) rest)
+  pure (RewriteResult st' (Cursor [] (finishValue dec {decoderInput = remainder}) rest))
 
 -- | Transcribe a peeked number value verbatim (no 'Scientific' roundtrip).
 takeRawNumberChunks ::
@@ -350,12 +350,12 @@ takeRawNumberChunks ::
   DecoderState ->
   StreamIO Text () ->
   EncoderState ->
-  ChunkStream IO (EncoderState, Cursor)
+  ChunkStream IO RewriteResult
 takeRawNumberChunks early config atNumber dec txt st = do
-  (remainder, frags, rawS, rest) <- lift (skipNumberCollect early atNumber txt)
-  let (Chunk b s, st1) = transcribeRawBytes config st (buildFrags frags) rawS
+  (Collected (SkipRest remainder rest) body) <- lift (skipNumberCollect early atNumber txt)
+  let (Chunk b s, st1) = transcribeRawBytes config st (buildFrags body) (rawSize body)
   st' <- emitChunkBuffer b s st1
-  pure (st', Cursor [] (finishValue dec {decoderInput = remainder}) rest)
+  pure (RewriteResult st' (Cursor [] (finishValue dec {decoderInput = remainder}) rest))
 
 -- | Transcribe a whole container value verbatim in bounded segments.
 -- The cursor must be unbuffered with the decoder just past the opening
@@ -373,34 +373,34 @@ takeRawContainerChunks ::
   DecoderState ->
   StreamIO Text () ->
   EncoderState ->
-  ChunkStream IO (EncoderState, Cursor)
+  ChunkStream IO RewriteResult
 takeRawContainerChunks early config closing open dec txt st = case closing of
   JSONEndArray -> segmented ExpectValue
   JSONEndObject -> segmented ExpectKey
   -- Unreachable: callers pass literal closings. Collect nothing.
-  _ -> pure (st, Cursor [] dec txt)
+  _ -> pure (RewriteResult st (Cursor [] dec txt))
   where
     segmented expect = do
       let (Chunk openB openS, stOpen) = transcribeRawOpen config open st
       stBracket <- emitChunkBuffer openB openS stOpen
       let depth = decoderNestDepth dec
           base = shallower depth
-      (stBody, rest, stream) <-
+      (RewriteResult stBody cur) <-
         collectLoop stBracket expect base depth (decoderStack dec) (decoderInput dec) txt
       let (Chunk finB finS, stTail) = transcribeRawTail config stBody
       st' <- emitChunkBuffer finB finS stTail
-      pure (st', Cursor [] (finishContainer dec rest) stream)
+      pure (RewriteResult st' cur)
     -- Collect one budget-bounded segment, emit it verbatim, resume
     -- until the container completes. The resume state is exact loop
     -- state, so pausing is invisible downstream.
     collectLoop st0 exp0 base0 dep0 stk0 inp0 stream0 = do
-      mseg <- liftIO $ try (collectExpect early [] 0 base0 dep0 stk0 exp0 inp0 stream0)
+      mseg <- liftIO $ try (collectExpect early mempty base0 dep0 stk0 exp0 inp0 stream0)
       case mseg of
-        Right (rest, frags, size, stream') -> do
-          st' <- emitChunkBuffer (buildFrags frags) size st0
-          pure (st', rest, stream')
-        Left (CollectPaused frags size exp1 base1 dep1 stk1 inp1 stream1) -> do
-          st' <- emitChunkBuffer (buildFrags frags) size st0
+        Right (Collected (SkipRest rest stream') body) -> do
+          st' <- emitChunkBuffer (buildFrags body) (rawSize body) st0
+          pure (RewriteResult st' (Cursor [] (finishContainer dec rest) stream'))
+        Left (CollectPaused body exp1 base1 dep1 stk1 inp1 stream1) -> do
+          st' <- emitChunkBuffer (buildFrags body) (rawSize body) st0
           collectLoop st' exp1 base1 dep1 stk1 inp1 stream1
 
 -- | Pending-builder flush threshold; chunk boundaries never change bytes.
@@ -415,16 +415,16 @@ takeContainerChunks ::
   JSONEvent ->
   Cursor ->
   EncoderState ->
-  ChunkStream IO (EncoderState, Cursor)
+  ChunkStream IO RewriteResult
 takeContainerChunks early config closing = go
   where
-    go :: Cursor -> EncoderState -> ChunkStream IO (EncoderState, Cursor)
+    go :: Cursor -> EncoderState -> ChunkStream IO RewriteResult
     go cur st = case cur of
       Cursor (event : buffered) dec txt ->
         emit event (Cursor buffered dec txt) st
       Cursor [] _ _ ->
         stepMore cur st
-    stepMore :: Cursor -> EncoderState -> ChunkStream IO (EncoderState, Cursor)
+    stepMore :: Cursor -> EncoderState -> ChunkStream IO RewriteResult
     stepMore (Cursor _ dec txt) st = case Decoder.step dec of
       Left err -> lift (leave early (HQDecodeError err))
       Right (Emit event dec') ->
@@ -433,19 +433,19 @@ takeContainerChunks early config closing = go
         | hasPending dec' -> stepMore (Cursor [] dec' txt) st
         | otherwise -> pullMore (Cursor [] dec' txt) st
       Right (Done _) -> lift (leave early $ HQRunnerError UnexpectedEndOfInput)
-    emit :: JSONEvent -> Cursor -> EncoderState -> ChunkStream IO (EncoderState, Cursor)
+    emit :: JSONEvent -> Cursor -> EncoderState -> ChunkStream IO RewriteResult
     emit !event cur st = do
       st' <- emitChunk config event st
       if event == closing
-        then pure (st', cur)
+        then pure (RewriteResult st' cur)
         else case matchingClose event of
           Just end -> nested end cur st'
           Nothing -> go cur st'
-    nested :: JSONEvent -> Cursor -> EncoderState -> ChunkStream IO (EncoderState, Cursor)
+    nested :: JSONEvent -> Cursor -> EncoderState -> ChunkStream IO RewriteResult
     nested !end cur st = do
-      (st', cursor') <- takeContainerChunks early config end cur st
+      RewriteResult st' cursor' <- takeContainerChunks early config end cur st
       go cursor' st'
-    pullMore :: Cursor -> EncoderState -> ChunkStream IO (EncoderState, Cursor)
+    pullMore :: Cursor -> EncoderState -> ChunkStream IO RewriteResult
     pullMore cur@(Cursor _ dec txt) st = do
       result <- lift (S.next txt)
       case result of
@@ -457,7 +457,7 @@ takeContainerChunks early config closing = go
           Right (NeedInput dec') -> stepMore (Cursor [] dec' rest) st
           Right (Done _) -> lift (leave early $ HQRunnerError UnexpectedEndOfInput)
     -- Mirror terminal 'finish' policy, emitting the final event as a chunk.
-    finishTake :: Cursor -> EncoderState -> ChunkStream IO (EncoderState, Cursor)
+    finishTake :: Cursor -> EncoderState -> ChunkStream IO RewriteResult
     finishTake (Cursor _ dec _) st = do
       (event, dec') <- lift (finishTakeEvent early dec)
       let newCursor = Cursor [] dec' (pure ())

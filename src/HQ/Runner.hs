@@ -128,7 +128,8 @@ forDocuments next project act st = do
 -- | Run a fold query over every top-level document in turn, yielding
 -- each document's focused values downstream.
 foldDocuments :: Early HQError -> Optic -> Cursor -> EventStream Cursor
-foldDocuments early optic = forDocuments (nextDocument early) id (\cur _ -> runFold early optic cur)
+foldDocuments early optic =
+  forDocuments (nextDocument early) id (\cur _ -> runFold early optic cur)
 
 -- | Run a rewrite query over every top-level document in turn,
 -- threading the encoder state (empty at document boundaries).
@@ -137,11 +138,11 @@ rewriteDocuments ::
   RewriteContinuation ->
   Cursor ->
   EncoderState ->
-  ChunkStream IO (EncoderState, Cursor)
+  ChunkStream IO RewriteResult
 rewriteDocuments early action cur st =
-  forDocuments (nextDocument early) snd go (st, cur)
+  forDocuments (nextDocument early) rewriteCursor go (RewriteResult st cur)
   where
-    go cur' (st', _) = action cur' st'
+    go cur' (RewriteResult st' _) = action cur' st'
 
 decodeUtf8Stream :: Early HQError -> StreamIO ByteString () -> StreamIO Text ()
 decodeUtf8Stream early stream = case streamDecodeUtf8 mempty of

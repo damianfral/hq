@@ -16,6 +16,7 @@ module HQ.JSON.Decoder
     decodeTexts,
     pullEvent,
     Terminal (..),
+    TerminalEmitted (..),
     classifyTerminal,
   )
 where
@@ -193,7 +194,17 @@ isEmptyDecoder dec = getAll $ foldMap All predicates
 data Terminal
   = TerminalEnd
   | TerminalError DecodeError
-  | TerminalEmit JSONEvent DecoderState
+  | TerminalEmit TerminalEmitted
+  deriving (Eq, Show)
+
+-- | The payload of a 'TerminalEmit': one trailing event with the
+-- decoder positioned after it. A separate type (rather than record
+-- syntax on 'Terminal') keeps field access total. Same layout as the
+-- old positional fields.
+data TerminalEmitted = TerminalEmitted
+  { terminalEvent :: JSONEvent,
+    terminalDecoder :: DecoderState
+  }
   deriving (Eq, Show)
 
 classifyTerminal :: DecoderState -> Terminal
@@ -203,7 +214,7 @@ classifyTerminal dec = case finish dec of
   Left err -> TerminalError err
   Right (Done _) -> TerminalEnd
   Right (NeedInput _) -> TerminalError UnexpectedEnd
-  Right (Emit event dec') -> TerminalEmit event dec'
+  Right (Emit event dec') -> TerminalEmit (TerminalEmitted event dec')
 
 -- | Decode complete text chunks to events (single-shot list driver for
 -- embedded literals and tests). Steps 'step' directly and finalizes
@@ -236,13 +247,13 @@ decodeTexts = go initialDecoder
     atEnd dec' = case classifyTerminal dec' of
       TerminalEnd -> Right []
       TerminalError err -> Left err
-      TerminalEmit event dec'' -> (event :) <$> atEnd dec''
+      TerminalEmit (TerminalEmitted event dec'') -> (event :) <$> atEnd dec''
 
 -- | Pull a single event; bulk loops drive 'step' directly.
 pullEvent :: Early HQError -> DecoderState -> StreamIO Text () -> IO Next
 pullEvent early decoder txtStream = case step decoder of
   Left err -> leave early (HQDecodeError err)
-  Right (Emit event dec') -> pure $ NextEvent event dec' txtStream
+  Right (Emit event dec') -> pure $ NextEvent (NextEmitted event dec' txtStream)
   Right (NeedInput dec') -> pullMore dec' txtStream
   Right (Done dec') -> endCheck dec' txtStream
   where
@@ -252,7 +263,7 @@ pullEvent early decoder txtStream = case step decoder of
       -- precedence as 'drain'): only a truly drained decoder may end.
       | not (T.null (decoderInput dec)) = case step dec of
           Left err -> leave early (HQDecodeError err)
-          Right (Emit event dec') -> pure (NextEvent event dec' txt)
+          Right (Emit event dec') -> pure (NextEvent (NextEmitted event dec' txt))
           Right (NeedInput dec') -> pullMore dec' txt
           Right (Done dec') -> endCheck dec' txt
       | otherwise = do
@@ -263,7 +274,7 @@ pullEvent early decoder txtStream = case step decoder of
               | otherwise -> finishEnd dec
             Right (chunk, rest) -> case feed chunk dec of
               Left err -> leave early (HQDecodeError err)
-              Right (Emit event dec') -> pure (NextEvent event dec' rest)
+              Right (Emit event dec') -> pure (NextEvent (NextEmitted event dec' rest))
               Right (NeedInput dec') -> pullMore dec' rest
               Right (Done dec') -> endCheck dec' rest
     endCheck :: DecoderState -> StreamIO Text () -> IO Next
@@ -281,4 +292,4 @@ pullEvent early decoder txtStream = case step decoder of
     finishEnd dec = case classifyTerminal dec of
       TerminalEnd -> pure EndOfInput
       TerminalError err -> leave early (HQDecodeError err)
-      TerminalEmit event dec' -> pure $ NextEvent event dec' $ pure ()
+      TerminalEmit (TerminalEmitted event dec') -> pure $ NextEvent (NextEmitted event dec' (pure ()))

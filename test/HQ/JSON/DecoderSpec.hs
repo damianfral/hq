@@ -47,9 +47,9 @@ decodeIncremental input = go initialDecoder (toString input)
       Right result -> drainCollect result
     go decoder (c : cs) = case feed (one c) decoder of
       Left err -> Left err
-      Right (Emit event nextDecoder) -> fmap (event :) (go nextDecoder cs)
-      Right (NeedInput nextDecoder) -> go nextDecoder cs
-      Right (Done nextDecoder) -> go nextDecoder cs
+      Right (Emit event nextDec) -> fmap (event :) (go nextDec cs)
+      Right (NeedInput nextDec) -> go nextDec cs
+      Right (Done nextDec) -> go nextDec cs
 
 --------------------------------------------------------------------------------
 -- Scalar values
@@ -1041,7 +1041,7 @@ pullAllChunks chunks = do
       pulled <- pullEvent early decoder text
       case pulled of
         EndOfInput -> pure []
-        NextEvent event decoder' rest -> (event :) <$> collect early decoder' rest
+        NextEvent (NextEmitted event decoder' rest) -> (event :) <$> collect early decoder' rest
 
 pullEventSpec :: Spec
 pullEventSpec = describe "pullEvent" $ do

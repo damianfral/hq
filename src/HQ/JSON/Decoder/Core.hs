@@ -189,7 +189,7 @@ isStringChar c = c /= '"' && c /= '\\' && ord c >= 0x20
 
 -- | Simple (non-\u) escapes in the JSON string table.
 isSimpleEscape :: Char -> Bool
-isSimpleEscape c = c == '"' || c == '\\' || c == '/' || c == 'b' || c == 'f' || c == 'n' || c == 'r' || c == 't'
+isSimpleEscape c = c `elem` ['"', '\\', '/', 'b', 'f', 'n', 'r', 't']
 
 -- | Decode a simple escape to its character. Caller must have checked
 -- 'isSimpleEscape' (except 'u', handled separately).
@@ -216,7 +216,16 @@ accumulateHex value digits input =
       digits' = digits + T.length hex
    in (value', digits', rest)
 
-data Next = EndOfInput | NextEvent JSONEvent DecoderState (StreamIO Text ())
+data Next = EndOfInput | NextEvent NextEmitted
+
+-- | One decoded event with the decoder and text positioned after it.
+-- A separate type (rather than record syntax on 'Next') keeps field
+-- access total. Same layout as the old positional fields.
+data NextEmitted = NextEmitted
+  { nextEvent :: !JSONEvent,
+    nextDecoder :: !DecoderState,
+    nextText :: !(StreamIO Text ())
+  }
 
 -- | Stream over 'IO'. Failures abort via 'HQ.Early' exceptions.
 type StreamIO s = Stream (Of s) IO
