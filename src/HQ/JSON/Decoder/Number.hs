@@ -22,41 +22,51 @@ isValidNumberFinal NumberFraction = True
 isValidNumberFinal NumberExpDigit = True
 isValidNumberFinal _ = False
 
--- | Advance the number state machine for one character.
+-- | Advance the number state machine for one character. Digits are
+-- tested before delimiters: digits are the common case and never
+-- delimit, so leading with 'isDigit' skips two list scans per digit.
+-- (Order is behaviour-preserving: no character is both.)
 advanceNumber :: NumberPhase -> Char -> NumberStep
 advanceNumber phase c
-  | isJsonDelimiter c = NumberEnd
-  | otherwise = case phase of
+  | isDigit c = case phase of
       NumberSign
         | c == '0' -> NumberStep NumberZero
-        | isDigit c -> NumberStep NumberNonZero
-        | otherwise -> NumberError
+        | otherwise -> NumberStep NumberNonZero
+      NumberZero -> NumberError
+      NumberNonZero -> NumberStep NumberNonZero
+      NumberDot -> NumberStep NumberFraction
+      NumberFraction -> NumberStep NumberFraction
+      NumberExpSign -> NumberStep NumberExpDigit
+      NumberExpAfterSign -> NumberStep NumberExpDigit
+      NumberExpDigit -> NumberStep NumberExpDigit
+  | isJsonDelimiter c = NumberEnd
+  | otherwise = case phase of
+      NumberSign -> NumberError
       NumberZero
         | c == '.' -> NumberStep NumberDot
         | c == 'e' || c == 'E' -> NumberStep NumberExpSign
         | otherwise -> NumberError
       NumberNonZero
-        | isDigit c -> NumberStep NumberNonZero
         | c == '.' -> NumberStep NumberDot
         | c == 'e' || c == 'E' -> NumberStep NumberExpSign
         | otherwise -> NumberError
-      NumberDot
-        | isDigit c -> NumberStep NumberFraction
-        | otherwise -> NumberError
+      NumberDot -> NumberError
       NumberFraction
-        | isDigit c -> NumberStep NumberFraction
         | c == 'e' || c == 'E' -> NumberStep NumberExpSign
         | otherwise -> NumberError
       NumberExpSign
-        | isDigit c -> NumberStep NumberExpDigit
         | c == '+' || c == '-' -> NumberStep NumberExpAfterSign
         | otherwise -> NumberError
-      NumberExpAfterSign
-        | isDigit c -> NumberStep NumberExpDigit
-        | otherwise -> NumberError
-      NumberExpDigit
-        | isDigit c -> NumberStep NumberExpDigit
-        | otherwise -> NumberError
+      NumberExpAfterSign -> NumberError
+      NumberExpDigit -> NumberError
+
+-- | Phases where digits self-loop: a maximal digit run can be consumed
+-- without per-character dispatch, leaving the phase unchanged.
+acceptsDigitRun :: NumberPhase -> Bool
+acceptsDigitRun NumberNonZero = True
+acceptsDigitRun NumberFraction = True
+acceptsDigitRun NumberExpDigit = True
+acceptsDigitRun _ = False
 
 -- | Determine the starting number phase for the first character of a number.
 numberPhaseFromFirstChar :: Char -> Maybe NumberPhase
@@ -69,26 +79,67 @@ numberPhaseFromFirstChar c
 startNumberState :: Char -> NumberState
 startNumberState c =
   NumberState
-    (ReversedString $ one c)
-    (fromMaybe NumberSign (numberPhaseFromFirstChar c))
+    { numberNegative = c == '-',
+      numberCoeff = if isDigit c then fromIntegral (digitToInt c) else 0,
+      numberExp = 0,
+      numberFracDigits = 0,
+      numberExpNeg = False,
+      numberPhase = fromMaybe NumberSign (numberPhaseFromFirstChar c),
+      -- The first character belongs to the error payload, like every
+      -- consumed chunk below; one small 'Text' per number, freed on
+      -- completion.
+      numberFrags = [T.singleton c]
+    }
 
--- | Continue parsing a number: tight index loop, state written back
--- once at end, failure, or input exhaustion.
+-- | Text consumed for the current number: prior chunks (newest
+-- first) plus a slice of the current input. Forced on the error path
+-- only.
+numberText :: NumberState -> Text -> Int -> Text
+numberText ns cur pos = T.concat (reverse (numberFrags ns)) <> T.take pos cur
+
+-- | The error payload for a number rejected at end-of-input or at a
+-- delimiter: exactly the consumed text. The scan pushes each consumed
+-- slice (including the final one, see 'stepNumber') before
+-- finalizing, so prior chunks plus the current slice are all present.
+numberErrorText :: NumberState -> Text
+numberErrorText ns = T.concat (reverse (numberFrags ns))
+
+-- | Render the accumulated components as a 'Scientific', folding
+-- fraction digits into the coefficient and offsetting the exponent.
+finishNumber :: NumberState -> Scientific
+finishNumber ns =
+  (if numberNegative ns then negate else identity) (numberCoeff ns)
+    `scientific` fromInteger (expVal - fromIntegral (numberFracDigits ns))
+  where
+    expVal = (if numberExpNeg ns then negate else identity) (numberExp ns)
+
+-- | Continue parsing a number: tight index loop with the numeric
+-- components accumulated inline, so completion needs no intermediate
+-- buffer and no re-scan. State is written back once at end, failure,
+-- or input exhaustion.
 stepNumber :: DecoderState -> NumberState -> Either DecodeError DecoderResult
-stepNumber decoder numState = loop 0 rev0 phase0
+stepNumber decoder ns0 = scan 0 (numberCoeff ns0) (numberExp ns0) (numberFracDigits ns0) (numberExpNeg ns0) (numberPhase ns0)
   where
     input = decoderInput decoder
     len = T.length input
-    ReversedString rev0 = numberBuffer numState
-    phase0 = numberPhase numState
-    loop :: Int -> String -> NumberPhase -> Either DecodeError DecoderResult
-    loop !pos !rev !phase
+    scan :: Int -> Integer -> Integer -> Int -> Bool -> NumberPhase -> Either DecodeError DecoderResult
+    scan !pos !coeff !expP !nFrac !expNeg !phase
       | pos >= len =
           Right
             $ NeedInput
               decoder
                 { decoderInput = mempty,
-                  decoderPhase = DecoderPhaseNumber (NumberState (ReversedString rev) phase)
+                  decoderPhase =
+                    DecoderPhaseNumber
+                      NumberState
+                        { numberNegative = numberNegative ns0,
+                          numberCoeff = coeff,
+                          numberExp = expP,
+                          numberFracDigits = nFrac,
+                          numberExpNeg = expNeg,
+                          numberPhase = phase,
+                          numberFrags = if T.null input then numberFrags ns0 else input : numberFrags ns0
+                        }
                 }
       | otherwise =
           let c = T.index input pos
@@ -97,52 +148,53 @@ stepNumber decoder numState = loop 0 rev0 phase0
                   finalizeNumber
                     decoder
                       { decoderInput = T.drop pos input,
-                        decoderPhase = DecoderPhaseNumber (NumberState (ReversedString rev) phase)
+                        decoderPhase =
+                          DecoderPhaseNumber
+                            (pushSlice ns0 input pos)
+                              { numberCoeff = coeff,
+                                numberExp = expP,
+                                numberFracDigits = nFrac,
+                                numberExpNeg = expNeg,
+                                numberPhase = phase
+                              }
                       }
-                NumberError -> Left (InvalidNumber (reversedStringToText (ReversedString rev) <> one c))
-                NumberStep nextPhase -> loop (pos + 1) (c : rev) nextPhase
+                NumberError -> Left (InvalidNumber (numberText ns0 input pos <> T.singleton c))
+                NumberStep phase' -> scan (pos + 1) coeff' expP' nFrac' expNeg' phase'
+                  where
+                    (coeff', expP', nFrac', expNeg')
+                      | isDigit c =
+                          let d = fromIntegral (digitToInt c) :: Integer
+                           in if isExpPhase phase
+                                then (coeff, expP * 10 + d, nFrac, expNeg)
+                                else
+                                  if phase == NumberDot || phase == NumberFraction
+                                    then (coeff * 10 + d, expP, nFrac + 1, expNeg)
+                                    else (coeff * 10 + d, expP, nFrac, expNeg)
+                      | c == '-' = (coeff, expP, nFrac, True)
+                      | otherwise = (coeff, expP, nFrac, expNeg)
+
+-- | Record the consumed slice of the current chunk, so a later
+-- rejection ('finalizeNumber', 'finish') reports the full consumed
+-- text. One slice header per number; freed on completion.
+pushSlice :: NumberState -> Text -> Int -> NumberState
+pushSlice ns cur pos
+  | pos <= 0 = ns
+  | otherwise = ns {numberFrags = T.take pos cur : numberFrags ns}
+
+-- | Digit runs accumulate into the exponent once one started.
+isExpPhase :: NumberPhase -> Bool
+isExpPhase NumberExpSign = True
+isExpPhase NumberExpAfterSign = True
+isExpPhase NumberExpDigit = True
+isExpPhase _ = False
 
 finalizeNumber :: DecoderState -> Either DecodeError DecoderResult
 finalizeNumber decoder = case decoderPhase decoder of
   DecoderPhaseNumber numState
     | isValidNumberFinal (numberPhase numState) ->
-        let value = parseNumberBuffer (reversedStringToText $ numberBuffer numState)
-         in emitEvent
-              (JSONNumber value)
-              (decoderInput decoder)
-              decoder
-    | otherwise -> Left (InvalidNumber (reversedStringToText $ numberBuffer numState))
+        emitEvent
+          (JSONNumber (finishNumber numState))
+          (decoderInput decoder)
+          decoder
+    | otherwise -> Left (InvalidNumber (numberErrorText numState))
   _ -> Left (InvalidNumber mempty)
-
--- | Parse the number buffer in one scan, without @10 ^ n@ powers.
-parseNumberBuffer :: Text -> Scientific
-parseNumberBuffer buf = go (0 :: Integer) (0 :: Integer) (0 :: Int) pos0 False False False
-  where
-    len = T.length buf
-    (negative, pos0)
-      | not (T.null buf) && T.index buf 0 == '-' = (True, 1)
-      | otherwise = (False, 0)
-    go :: Integer -> Integer -> Int -> Int -> Bool -> Bool -> Bool -> Scientific
-    go !coeff !expP !nFrac !pos !hasDot !hasExp !expNeg
-      | pos >= len =
-          let expVal = (if expNeg then negate else identity) expP
-              finalExp = fromInteger (expVal - fromIntegral nFrac :: Integer) :: Int
-           in (if negative then negate else identity) coeff `scientific` finalExp
-      | otherwise =
-          let c = T.index buf pos
-           in case c of
-                '-' -> go coeff expP nFrac (pos + 1) hasDot hasExp True
-                '+' -> go coeff expP nFrac (pos + 1) hasDot hasExp False
-                '.' -> go coeff expP nFrac (pos + 1) True hasExp expNeg
-                'e' -> go coeff expP nFrac (pos + 1) hasDot True expNeg
-                'E' -> go coeff expP nFrac (pos + 1) hasDot True expNeg
-                _
-                  | isDigit c ->
-                      let d = fromIntegral (digitToInt c) :: Integer
-                       in if hasExp
-                            then go coeff (expP * 10 + d) nFrac (pos + 1) hasDot True expNeg
-                            else
-                              if hasDot
-                                then go (coeff * 10 + d) expP (nFrac + 1) (pos + 1) True False expNeg
-                                else go (coeff * 10 + d) expP nFrac (pos + 1) False False expNeg
-                  | otherwise -> go coeff expP nFrac (pos + 1) hasDot hasExp expNeg

@@ -31,7 +31,7 @@ import HQ.Early (Early, leave)
 import HQ.Error (HQError (..))
 import HQ.JSON.Decoder.Core
 import HQ.JSON.Decoder.Error (DecodeError (..))
-import HQ.JSON.Decoder.Number (advanceNumber, isValidNumberFinal, numberPhaseFromFirstChar)
+import HQ.JSON.Decoder.Number (acceptsDigitRun, advanceNumber, isValidNumberFinal, numberPhaseFromFirstChar)
 import HQ.JSON.Event (JSONEvent (..))
 import Relude hiding (Compose, id, many, some, state)
 import Streaming.Prelude qualified as S
@@ -440,7 +440,8 @@ skipLowDigits early !input !text !value !digits = do
 -- | Skip a number starting at its first character. Consumed fragments
 -- are threaded through (newest first) only for 'InvalidNumber'
 -- payloads, concatenated on error; on success nothing is retained and
--- no 'Scientific' is built.
+-- no 'Scientific' is built. Digit runs in self-looping phases are
+-- consumed with a single span instead of per-character dispatch.
 skipNumberBody ::
   Early HQError ->
   Char ->
@@ -464,16 +465,26 @@ skipNumberBody early c inp txt =
         len = T.length cur
         scan !ph !fs !pos
           | pos >= len = go ph (cur : fs) mempty stream
-          | otherwise =
-              let ch = T.index cur pos
-               in case advanceNumber ph ch of
-                    NumberEnd
-                      | isValidNumberFinal ph -> pure (T.drop pos cur, stream)
-                      | otherwise ->
-                          leave early $ HQDecodeError $ InvalidNumber (T.concat (reverse fs) <> T.take pos cur)
-                    NumberError ->
-                      leave early $ HQDecodeError $ InvalidNumber (T.concat (reverse fs) <> T.take pos cur <> T.singleton ch)
-                    NumberStep ph' -> scan ph' fs (pos + 1)
+          | acceptsDigitRun ph = runDigits ph fs pos
+          | otherwise = stepChar ph fs pos
+        -- Digits self-loop in these phases, so the phase is unchanged
+        -- after a maximal run; only the terminating character needs
+        -- the full dispatch.
+        runDigits !ph' !fs' !pos' =
+          let pos'' = pos' + T.length (T.takeWhile isDigit (T.drop pos' cur))
+           in if pos'' >= len
+                then go ph' (cur : fs') mempty stream
+                else stepChar ph' fs' pos''
+        stepChar !ph' !fs' !pos' =
+          let ch = T.index cur pos'
+           in case advanceNumber ph' ch of
+                NumberEnd
+                  | isValidNumberFinal ph' -> pure (T.drop pos' cur, stream)
+                  | otherwise ->
+                      leave early $ HQDecodeError $ InvalidNumber (T.concat (reverse fs') <> T.take pos' cur)
+                NumberError ->
+                  leave early $ HQDecodeError $ InvalidNumber (T.concat (reverse fs') <> T.take pos' cur <> T.singleton ch)
+                NumberStep ph'' -> scan ph'' fs' (pos' + 1)
 
 -- | Skip a keyword whose first character was consumed. A complete
 -- keyword at exhaustion succeeds, mirroring the decoder.
@@ -581,31 +592,40 @@ collectNumber early frags size phase inp txt
       result <- S.next txt
       case result of
         Left ()
-          | isValidNumberFinal phase -> pure (mempty, build frags, size, txt)
+          | isValidNumberFinal phase -> pure (mempty, build (reverse frags), size, txt)
           | otherwise ->
-              leave early $ HQDecodeError $ InvalidNumber (T.concat frags)
+              leave early $ HQDecodeError $ InvalidNumber (T.concat (reverse frags))
         Right (chunk, rest) -> collectNumber early frags size phase chunk rest
   | otherwise = loop frags size phase 0
   where
     len = T.length inp
     loop f s p pos
-      | pos >= len = collectNumber early (f <> [inp]) (s + len) p mempty txt
-      | otherwise =
-          let c = T.index inp pos
-           in case advanceNumber p c of
-                NumberEnd
-                  | isValidNumberFinal p ->
-                      let frags' = f <> [T.take pos inp]
-                       in pure (T.drop pos inp, build frags', s + pos, txt)
-                  | otherwise ->
-                      leave early
-                        $ HQDecodeError
-                        $ InvalidNumber (T.concat (f <> [T.take pos inp]))
-                NumberError ->
+      | pos >= len = collectNumber early (inp : f) (s + len) p mempty txt
+      | acceptsDigitRun p = runDigits f s p pos
+      | otherwise = stepChar f s p pos
+    -- Digits self-loop in these phases: consume the maximal run with
+    -- one span, then dispatch once on the terminating character.
+    runDigits f' s' p' pos' =
+      let pos'' = pos' + T.length (T.takeWhile isDigit (T.drop pos' inp))
+       in if pos'' >= len
+            then collectNumber early (inp : f') (s' + len) p' mempty txt
+            else stepChar f' s' p' pos''
+    stepChar f' s' p' pos' =
+      let c = T.index inp pos'
+       in case advanceNumber p' c of
+            NumberEnd
+              | isValidNumberFinal p' ->
+                  let frags' = T.take pos' inp : f'
+                   in pure (T.drop pos' inp, build (reverse frags'), s' + pos', txt)
+              | otherwise ->
                   leave early
                     $ HQDecodeError
-                    $ InvalidNumber (T.concat (f <> [T.take pos inp]) <> T.singleton c)
-                NumberStep p' -> loop f s p' (pos + 1)
+                    $ InvalidNumber (T.concat (reverse f' <> [T.take pos' inp]))
+            NumberError ->
+              leave early
+                $ HQDecodeError
+                $ InvalidNumber (T.concat (reverse f' <> [T.take pos' inp]) <> T.singleton c)
+            NumberStep p'' -> loop f' s' p'' (pos' + 1)
     build = foldMap encodeUtf8Builder
 
 -- | Skip a string, capturing its raw bytes (quotes excluded).

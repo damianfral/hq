@@ -53,8 +53,7 @@ finish decoder = case decoderPhase decoder of
   DecoderPhaseString _ -> Left UnexpectedEnd
   DecoderPhaseNumber numState
     | isValidNumberFinal (numberPhase numState) -> finalizeNumber decoder
-    | otherwise ->
-        Left $ InvalidNumber (reversedStringToText $ numberBuffer numState)
+    | otherwise -> Left $ InvalidNumber (numberErrorText numState)
   DecoderPhaseKeyword _ -> finalizeKeyword decoder
   DecoderPhaseFinished -> case decoderStack decoder of
     [] ->

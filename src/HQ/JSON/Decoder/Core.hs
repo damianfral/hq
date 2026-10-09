@@ -67,16 +67,21 @@ data DecoderPhase
 data DecodeContext = DecodeArray | DecodeObject
   deriving (Eq, Show)
 
-newtype ReversedString = ReversedString {unReversedString :: String}
-  deriving (Eq, Show)
-
-reversedStringToText :: ReversedString -> Text
-reversedStringToText (ReversedString str) = T.reverse $ T.pack str
-
--- | JSON number state machine.
 data NumberState = NumberState
-  { numberBuffer :: ReversedString,
-    numberPhase :: NumberPhase
+  { -- | Leading '-' seen.
+    numberNegative :: Bool,
+    -- | Integer digits accumulated so far (integral and fraction parts).
+    numberCoeff :: Integer,
+    -- | Exponent digits accumulated so far.
+    numberExp :: Integer,
+    -- | Fraction digits folded into 'numberCoeff'.
+    numberFracDigits :: Int,
+    -- | '-' seen after 'e'/'E'.
+    numberExpNeg :: Bool,
+    numberPhase :: NumberPhase,
+    -- | Fully consumed prior chunks, newest first. Error payloads
+    -- only: retained, never decoded, on the success path.
+    numberFrags :: [Text]
   }
   deriving (Eq, Show)
 
