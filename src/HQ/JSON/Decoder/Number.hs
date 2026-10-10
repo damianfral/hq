@@ -76,6 +76,13 @@ numberPhaseFromFirstChar c
   | isDigit c = Just NumberNonZero
   | otherwise = Nothing
 
+-- | Single source for "can this char start a JSON number?".
+-- Canonical home next to 'numberPhaseFromFirstChar' (same char set);
+-- 'Decoder.startValue' and 'Take.peekRawScalar' share it.
+{-# INLINE isNumberStart #-}
+isNumberStart :: Char -> Bool
+isNumberStart c = isJust (numberPhaseFromFirstChar c)
+
 startNumberState :: Char -> NumberState
 startNumberState c =
   NumberState

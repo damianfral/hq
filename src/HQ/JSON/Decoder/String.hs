@@ -8,7 +8,6 @@
 module HQ.JSON.Decoder.String where
 
 import Data.Bits (Bits (..), shiftL)
-import Data.Char (digitToInt, isHexDigit)
 import Data.Text qualified as T
 import HQ.JSON.Decoder.Core
 import HQ.JSON.Decoder.Error (DecodeError (..))
@@ -161,13 +160,7 @@ consumeLowSurrogateDigits target input buffer high value digits decoder
            in consumeString target input newBuffer decoder
         else Left InvalidSurrogatePair
   | otherwise =
-      let remaining = 4 - digits
-          limitedInput = T.take remaining input
-          (hexDigits, _) = T.span isHexDigit limitedInput
-          consumed = T.length hexDigits
-          newValue = T.foldl' (\ac c -> ac * 16 + digitToInt c) value hexDigits
-          newDigits = digits + consumed
-          rest = T.drop consumed input
+      let (newValue, newDigits, rest) = accumulateHex value digits input
        in if newDigits == 4
             then
               if isLowSurrogate newValue

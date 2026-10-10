@@ -6,12 +6,12 @@
 module HQ.Runner.Take where
 
 import Control.Exception (try)
-import Data.Char (isDigit)
 import Data.Text qualified as T
 import Data.Text.Encoding (encodeUtf8Builder)
 import HQ.Early (Early, leave)
 import HQ.JSON.Decoder
 import HQ.JSON.Decoder qualified as Decoder
+import HQ.JSON.Decoder.Number (isNumberStart)
 import HQ.JSON.Decoder.Skip
 import HQ.JSON.Encoder
 import HQ.JSON.Event (JSONEvent (..), matchingClose)
@@ -303,8 +303,7 @@ peekRawScalar cursor
     Just start <- peekValue phase input,
     Just (c, rest) <- T.uncons start = case c of
       '"' -> Just (RawString rest, decoder, txt)
-      '-' -> Just (RawNumber start, decoder, txt)
-      _ | isDigit c -> Just (RawNumber start, decoder, txt)
+      _ | isNumberStart c -> Just (RawNumber start, decoder, txt)
       _ -> Nothing
   | otherwise = Nothing
   where

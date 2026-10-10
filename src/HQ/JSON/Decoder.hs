@@ -21,7 +21,6 @@ module HQ.JSON.Decoder
   )
 where
 
-import Data.Char (isDigit)
 import Data.Text qualified as T
 import HQ.Early (Early, leave)
 import HQ.Error
@@ -162,9 +161,6 @@ startValue !c !rest !decoder = case c of
               numState
     | otherwise -> Left (UnexpectedChar c)
 
-isNumberStart :: Char -> Bool
-isNumberStart c = c == '-' || isDigit c
-
 -- | The root value is complete: empty stack + finished state.
 isRootDone :: DecoderState -> Bool
 isRootDone decoder =
@@ -174,14 +170,13 @@ isRootDone decoder =
 -- depth and phase. Cheaper and more precise than '(== initialDecoder)',
 -- which compares the whole state (including the input text).
 isEmptyDecoder :: DecoderState -> Bool
-isEmptyDecoder dec = getAll $ foldMap All predicates
-  where
-    predicates =
-      [ T.null (decoderInput dec),
-        null (decoderStack dec),
-        decoderNestDepth dec == initialDepth,
-        decoderPhase dec == DecoderPhaseValue
-      ]
+isEmptyDecoder dec =
+  T.null (decoderInput dec)
+    && null (decoderStack dec)
+    && decoderNestDepth dec
+    == initialDepth
+    && decoderPhase dec
+    == DecoderPhaseValue
 
 -- | Terminal reading of a finished decoder: the single policy behind
 -- 'decodeTexts' (@atEnd@), 'pullEvent' (@finishEnd@) and Take's
