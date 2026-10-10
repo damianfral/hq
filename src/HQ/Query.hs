@@ -47,20 +47,11 @@ renderTypeError (InvalidTransformationType (InvalidCompose t out inn)) =
     <> " but the next step expects "
     <> valueTypeName inn
 renderTypeError (InvalidTransformationType (InvalidOr t out)) =
-  "transformation mismatch in "
-    <> show t
-    <> ": both sides of or must produce booleans, but a branch produces "
-    <> valueTypeName out
+  renderBoolOp "or" t out
 renderTypeError (InvalidTransformationType (InvalidAnd t out)) =
-  "transformation mismatch in "
-    <> show t
-    <> ": both sides of and must produce booleans, but a branch produces "
-    <> valueTypeName out
+  renderBoolOp "and" t out
 renderTypeError (InvalidTransformationType (InvalidXor t out)) =
-  "transformation mismatch in "
-    <> show t
-    <> ": both sides of xor must produce booleans, but a branch produces "
-    <> valueTypeName out
+  renderBoolOp "xor" t out
 renderTypeError (InvalidFocusType optic t focus expected) =
   "type mismatch: transformation "
     <> show t
@@ -74,6 +65,17 @@ renderTypeError (InvalidTransformationType (InvalidFilter t out)) =
   "filter transformation "
     <> show t
     <> " must produce a boolean, but produces "
+    <> valueTypeName out
+
+-- | Render a boolean-connective mismatch: @or@/@and@/@xor@ share
+-- everything but the connective's name.
+renderBoolOp :: Text -> Transformation -> ValueType -> Text
+renderBoolOp op t out =
+  "transformation mismatch in "
+    <> show t
+    <> ": both sides of "
+    <> op
+    <> " must produce booleans, but a branch produces "
     <> valueTypeName out
 
 valueTypeName :: ValueType -> Text

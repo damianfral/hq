@@ -52,12 +52,13 @@ stepKeyword decoder state =
         Right $ NeedInput decoder {decoderPhase = DecoderPhaseKeyword state}
       Just (c, rest)
         | c == T.index keyword index ->
-            stepKeyword
-              decoder
-                { decoderInput = rest,
-                  decoderPhase = DecoderPhaseKeyword (advanceKeyword state)
-                }
-              (advanceKeyword state)
+            let state' = advanceKeyword state
+             in stepKeyword
+                  decoder
+                    { decoderInput = rest,
+                      decoderPhase = DecoderPhaseKeyword state'
+                    }
+                  state'
       _ -> Left (InvalidKeyword keyword)
   where
     (keyword, index, _) = keywordInfo state
