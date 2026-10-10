@@ -13,8 +13,7 @@
 -- 'skipNumberCollect') feeding the chunk fast path in Take.
 -- Used by 'HQ.Runner.Cursor' for container bodies
 -- ('skipContainerText') and member values ('skipMemberValueText')
--- when no replayed events are buffered; anything else drains event
--- by event.
+-- when no replayed events are buffered; anything else drains event by event.
 module HQ.JSON.Decoder.Skip
   ( skipContainerText,
     skipMemberValueText,
@@ -75,7 +74,6 @@ instance Monoid RawBody where mempty = RawBody [] 0
 rawChar :: Char -> RawBody
 rawChar c = RawBody [T.singleton c] 1
 
--- | Structural positions while skipping.
 data SkipExpect
   = ExpectValue
   | ExpectKey
@@ -498,98 +496,35 @@ skipLowDigits early !input !text !value !digits = do
         then skipLowDigits early mempty rest0 value' digits'
         else leave early $ HQDecodeError InvalidUnicodeEscape
 
--- | Skip a number starting at its first character. Consumed fragments
--- are threaded through (newest first) only for 'InvalidNumber'
--- payloads, concatenated on error; on success nothing is retained and
--- no 'Scientific' is built. Digit runs in self-looping phases are
--- consumed with a single span instead of per-character dispatch.
+-- | Skip a number starting at its first character. Shares
+-- 'collectNumber' and drops the body: one scanner for both modes.
 skipNumberBody ::
   Early HQError -> Char -> Text -> StreamIO Text () -> IO SkipRest
-skipNumberBody early c inp txt =
-  let phase = fromMaybe NumberSign (numberPhaseFromFirstChar c)
-   in go phase (rawChar c) inp txt
+skipNumberBody early c inp txt = do
+  collectedRest <$> collectNumber early (rawChar c) phase inp txt
   where
-    go !phase !body !cur !stream
-      | T.null cur = do
-          result <- S.next stream
-          case result of
-            Left ()
-              | isValidNumberFinal phase -> pure (SkipRest mempty stream)
-              | otherwise ->
-                  let err = InvalidNumber $ T.concat $ reverse $ rawFrags body
-                   in leave early $ HQDecodeError err
-            Right (chunk, rest) -> go phase body chunk rest
-      | otherwise = scan phase body 0
-      where
-        len = T.length cur
-        scan !ph !b !pos
-          | pos >= len =
-              go ph (RawBody (cur : rawFrags b) (rawSize b + len)) mempty stream
-          | acceptsDigitRun ph = runDigits ph b pos
-          | otherwise = stepChar ph b pos
-        -- Digits self-loop in these phases, so the phase is unchanged
-        -- after a maximal run; only the terminating character needs
-        -- the full dispatch.
-        runDigits !ph' !b' !pos' =
-          let pos'' = pos' + T.length (T.takeWhile isDigit (T.drop pos' cur))
-           in if pos'' >= len
-                then
-                  let rawBody = RawBody (cur : rawFrags b') (rawSize b' + len)
-                   in go ph' rawBody mempty stream
-                else stepChar ph' b' pos''
-        stepChar !ph' !b' !pos' =
-          let ch = T.index cur pos'
-              piece = T.take pos' cur
-           in case advanceNumber ph' ch of
-                NumberEnd
-                  | isValidNumberFinal ph' ->
-                      pure (SkipRest (T.drop pos' cur) stream)
-                  | otherwise ->
-                      let numberTxt = T.concat $ reverse (rawFrags b') <> [piece]
-                       in leave early $ HQDecodeError $ InvalidNumber numberTxt
-                NumberError ->
-                  let numberTxt =
-                        T.concat (reverse (rawFrags b'))
-                          <> T.take pos' cur
-                          <> T.singleton ch
-                   in leave early $ HQDecodeError $ InvalidNumber numberTxt
-                NumberStep ph'' -> scan ph'' b' (pos' + 1)
+    phase = fromMaybe NumberSign (numberPhaseFromFirstChar c)
 
 -- | Skip a keyword whose first character was consumed. A complete
--- keyword at exhaustion succeeds, mirroring the decoder.
+-- keyword at exhaustion succeeds, mirroring the decoder. Shares
+-- 'scanKeyword' and drops the body.
 skipKeywordBody ::
   Early HQError -> Text -> Int -> Text -> StreamIO Text () -> IO SkipRest
-skipKeywordBody early keyword = go
-  where
-    go !index !inp !txt
-      | index == T.length keyword = checkDelim inp txt
-      | T.null inp = do
-          result <- S.next txt
-          case result of
-            Left () -> leave early $ HQDecodeError $ InvalidKeyword keyword
-            Right (chunk, rest) -> go index chunk rest
-      | otherwise = case T.uncons inp of
-          Nothing -> go index mempty txt
-          Just (c, rest)
-            | c == T.index keyword index -> go (index + 1) rest txt
-            | otherwise -> leave early $ HQDecodeError $ InvalidKeyword keyword
-    checkDelim !inp !txt
-      | T.null inp = do
-          result <- S.next txt
-          case result of
-            Left () -> pure (SkipRest mempty txt)
-            Right (chunk, rest) -> checkDelim chunk rest
-      | otherwise = case T.uncons inp of
-          Nothing -> checkDelim mempty txt
-          Just (c, _)
-            | isJsonDelimiter c -> pure (SkipRest inp txt)
-            | otherwise -> leave early (HQDecodeError (InvalidKeyword keyword))
+skipKeywordBody early keyword index input text = do
+  collectedRest <$> scanKeyword early index input text keyword
 
 -- | Skip a keyword, capturing its raw bytes. Mirrors 'skipKeywordBody';
 -- the literal is fixed, so it is returned whole on success.
 skipKeywordCollect ::
   Early HQError -> Text -> StreamIO Text () -> Text -> IO Collected
-skipKeywordCollect early input text keyword = go 1 input text
+skipKeywordCollect early = scanKeyword early 1
+
+-- | The shared keyword scanner both modes use: match the literal from
+-- @index@, then require a JSON delimiter. The literal is fixed, so
+-- the body is returned whole on success.
+scanKeyword ::
+  Early HQError -> Int -> Text -> StreamIO Text () -> Text -> IO Collected
+scanKeyword early ix0 inp0 txt0 keyword = go ix0 inp0 txt0
   where
     go !ix !inp !txt
       | ix == T.length keyword = checkDelim inp txt
