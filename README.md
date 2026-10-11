@@ -11,7 +11,7 @@ hq [OPTIONS] COMMAND OPTIC [ARGS] < input.json
 ```
 
 ```text
-hq v0.0.0.1
+hq v0.1.0
 
 Usage: hq [-f|--file FILE] [-r|--raw] [-c|--compact] [-j|--join] COMMAND
 

@@ -37,7 +37,7 @@
       };
     filteredSrc = nix-filter.lib {
       root = ./.;
-      include = ["app/" "src/" "test/" "docs/" "package.yaml" "LICENSE"];
+      include = ["app/" "src/" "test/" "docs/" "bench" "package.yaml" "LICENSE" "README.md"];
     };
   in
     {
@@ -71,7 +71,6 @@
       in {
         hq = final.haskell.lib.justStaticExecutables (
           final.haskellPackages.hq.overrideAttrs (oldAttrs: {
-            configureFlags = oldAttrs.configureFlags ++ ["--ghc-options=-O2"];
             nativeBuildInputs = (oldAttrs.nativeBuildInputs or []) ++ [final.glow];
             preBuild = ''
               glow -s notty docs/LANG.md > docs/LANG.md.rendered
@@ -96,7 +95,7 @@
         # (-rtsopts -threaded already come from package.yaml.)
         hq-prof = final.haskell.lib.justStaticExecutables (
           profHaskellPackages.hq.overrideAttrs (oldAttrs: {
-            configureFlags = oldAttrs.configureFlags ++ ["--ghc-options=-O2" "--ghc-options=-fprof-auto"];
+            configureFlags = oldAttrs.configureFlags ++ ["--ghc-options=-fprof-auto"];
           })
         );
       };
@@ -143,7 +142,6 @@
               # be turned off the way Cabal sees it. A Core dump run only
               # needs the library compiled.
               "--disable-tests"
-              "--ghc-options=-O2"
               "--ghc-options=-ddump-to-file"
               "--ghc-options=-ddump-simpl"
               "--ghc-options=-ddump-simpl-stats"
@@ -161,7 +159,7 @@
         packages.hq-bench-profile = pkgs.stdenv.mkDerivation {
           name = "hq-bench-profile";
           pname = "hq-bench-profile";
-          version = "0.0.0.1";
+          version = "0.1.0";
           dontUnpack = true;
           buildInputs = [packages.hq-bench pkgs.hq-prof];
           # Run the hq benchmark commands (same list as hq-bench-data
@@ -185,7 +183,7 @@
         packages.hq-bench = pkgs.stdenv.mkDerivation {
           name = "hq-bench";
           pname = "hq-bench";
-          version = "0.0.0.1";
+          version = "0.1.0";
           src = ./bench/bench.sh;
           dontUnpack = true;
           nativeBuildInputs = [pkgs.makeWrapper];
@@ -203,7 +201,7 @@
           name = "hq-bench-data";
           pname = "hq-bench-data";
           src = json-data;
-          version = "0.0.0.1";
+          version = "0.1.0";
           dontUnpack = true;
           buildInputs = [packages.hq-bench];
           buildPhase = ''
@@ -215,7 +213,7 @@
         packages.hq-bench-charts = pkgs.stdenv.mkDerivation {
           name = "hq-bench-charts";
           pname = "hq-bench-charts";
-          version = "0.0.0.1";
+          version = "0.1.0";
           dontUnpack = true;
           nativeBuildInputs = [pkgs.vega-lite pkgs.svgo pkgs.hq];
           buildPhase = ''

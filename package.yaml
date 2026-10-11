@@ -1,38 +1,49 @@
 ---
 name: hq
+version: 0.1.0
 synopsis: A streaming JSON processor inspired by jq, with a lens-based query language.
-version: 0.0.0.1
-author: damianfral
-github: damianfral/hq
-category: JSON, CLI, lenses, optics, streaming
+description: |
+  hq is a JSON processor inspired by jq. It queries JSON with optics
+  and rewrites values with transformations, streaming input so large
+  documents never load fully into memory.
+category:
+  - json
+  - cli
+  - optics
+  - streaming
+  - data-processing
+  - tools
 
+stability: experimental
+author: damianfral <huevofritopamojarpan@gmail.com>
+maintainer: damianfral <huevofritopamojarpan@gmail.com>
+copyright: Damian Franco Alvarez, 2026
 license: MIT
+github: damianfral/hq
+tested-with:
+  - 'GHC == 9.10.3'
 
 extra-source-files:
   - docs/LANG.md
 
-library:
-  source-dirs: ./src/
-  dependencies:
-    - aeson
-    - base
-    - bytestring
-    - file-embed
-    - megaparsec
-    - optparse-applicative
-    - parser-combinators
-    - relude
-    - scientific
-    - streaming
-    - text
-    - vector
+extra-doc-files:
+  - README.md
+  - docs/LANG.md
+  - bench/*.svg
 
+flags:
+  dev:
+    description: Treat warnings as errors during development
+    manual: true
+    default: false
+
+# Unconditional for every component, including Hackage builds: warnings
+# stay warnings (no -Werror), so future GHCs keep building this package.
+# Only -Werror itself is opt-in under flag(dev).
 ghc-options:
   - -O2
   - -fshow-warning-groups
-  - -Werror
   - -Weverything
-  - -Wno-error=unused-packages
   - -Wno-all-missed-specialisations
   - -Wno-missed-specialisations
   - -Wno-missing-deriving-strategies
@@ -55,6 +66,28 @@ ghc-options:
   - -fexpose-all-unfoldings
   - -fspecialise-aggressively
   - -fdo-clever-arg-eta-expansion
+  - -Wno-unused-packages # sydtest-discover gets marked as unused
+
+when:
+  - condition: flag(dev)
+    ghc-options:
+      - -Werror
+
+library:
+  source-dirs: ./src/
+  dependencies:
+    - base >= 4.20.2 && < 4.21
+    - aeson >= 2.2.4 && < 2.3
+    - bytestring >= 0.12.2 && < 0.13
+    - file-embed >= 0.0.16 && < 0.1
+    - megaparsec >= 9.7 && < 9.8
+    - optparse-applicative >= 0.18.1 && < 0.19
+    - parser-combinators >= 1.3.1 && < 1.4
+    - relude >= 1.2.2 && < 1.3
+    - scientific >= 0.3.8 && < 0.4
+    - streaming >= 0.2.4 && < 0.3
+    - text >= 2.1.3 && < 2.2
+    - vector >= 0.13.2 && < 0.14
 
 executables:
   hq:
@@ -65,9 +98,9 @@ executables:
       - -threaded
       - -with-rtsopts=-qg
     dependencies:
-      - base
+      - base >= 4.20.2 && < 4.21
       - hq
-      - relude
+      - relude >= 1.2.2 && < 1.3
 
 tests:
   hq-test:
@@ -78,12 +111,12 @@ tests:
       - -threaded
       - -with-rtsopts=-N
     dependencies:
-      - aeson
-      - base
+      - aeson >= 2.2.4 && < 2.3
+      - base >= 4.20.2 && < 4.21
       - hq
-      - optparse-applicative
-      - relude
-      - scientific
-      - streaming
-      - sydtest
-      - sydtest-discover
+      - optparse-applicative >= 0.18.1 && < 0.19
+      - relude >= 1.2.2 && < 1.3
+      - scientific >= 0.3.8 && < 0.4
+      - streaming >= 0.2.4 && < 0.3
+      - sydtest >= 0.20 && < 0.21
+      - sydtest-discover >= 0.0.0.4 && < 0.1
