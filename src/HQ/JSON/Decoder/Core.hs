@@ -148,10 +148,8 @@ emitEvent event remaining decoder =
 finishValue :: DecoderState -> DecoderState
 finishValue decoder = case decoderStack decoder of
   [] -> decoder {decoderPhase = DecoderPhaseFinished}
-  DecodeArray : _ ->
-    decoder {decoderPhase = DecoderPhaseArrayComma}
-  DecodeObject : _ ->
-    decoder {decoderPhase = DecoderPhaseObjectComma}
+  DecodeArray : _ -> decoder {decoderPhase = DecoderPhaseArrayComma}
+  DecodeObject : _ -> decoder {decoderPhase = DecoderPhaseObjectComma}
 
 isWhitespace :: Char -> Bool
 isWhitespace c = c `elem` [' ', '\t', '\n', '\r']
@@ -165,7 +163,8 @@ isHighSurrogate x = x >= 0xD800 && x <= 0xDBFF
 isLowSurrogate :: Int -> Bool
 isLowSurrogate x = x >= 0xDC00 && x <= 0xDFFF
 
--- | Verbatim string bytes; shared so decoding, skipping and collection split identically.
+-- | Verbatim string bytes; shared so decoding, skipping and collection
+-- split identically.
 isStringChar :: Char -> Bool
 isStringChar c = c /= '"' && c /= '\\' && ord c >= 0x20
 
@@ -202,9 +201,9 @@ data Next = EndOfInput | NextEvent NextEmitted
 
 -- | One decoded event with the decoder and text positioned after it.
 data NextEmitted = NextEmitted
-  { nextEvent :: !JSONEvent,
-    nextDecoder :: !DecoderState,
-    nextText :: !(StreamIO Text ())
+  { nextEvent :: JSONEvent,
+    nextDecoder :: DecoderState,
+    nextText :: StreamIO Text ()
   }
 
 -- | Stream over 'IO'. Failures abort via 'HQ.Early' exceptions.

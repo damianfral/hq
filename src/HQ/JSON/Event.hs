@@ -44,11 +44,10 @@ matchingClose = \case
 
 -- | Parse exactly one value from events; trailing events are rejected.
 eventsToValue :: [JSONEvent] -> Either RunnerError Value
-eventsToValue events =
-  case parseValue events of
-    Left err -> Left err
-    Right (value, []) -> Right value
-    Right _ -> Left TrailingEventsAfterValue
+eventsToValue events = case parseValue events of
+  Left err -> Left err
+  Right (value, []) -> Right value
+  Right _ -> Left TrailingEventsAfterValue
   where
     parseValue :: [JSONEvent] -> Either RunnerError (Value, [JSONEvent])
     parseValue (JSONNull : rest) = Right (Null, rest)

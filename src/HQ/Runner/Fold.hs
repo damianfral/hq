@@ -55,10 +55,10 @@ gateValue o t v = first HQTransformationError $ evalFilterGate o t v
 --
 -- A strict record (same layout as the tuple it replaces).
 data GateResult = GateResult
-  { gateKeep :: !Bool,
-    gateFirstEvent :: !JSONEvent,
-    gateReplay :: !Cursor,
-    gateAfter :: !Cursor
+  { gateKeep :: Bool,
+    gateFirstEvent :: JSONEvent,
+    gateReplay :: Cursor,
+    gateAfter :: Cursor
   }
 
 gateTake :: Early HQError -> Optic -> Transformation -> Cursor -> IO GateResult
@@ -192,12 +192,11 @@ runFold early optic = run optic (takeValue early)
       where
         eventsWithCont =
           [ ( JSONBeginArray,
-              \rest ->
-                traverseArray early rest
-                  $ \(Step event rest') -> k (pushCursor event rest')
+              \rest -> traverseArray early rest
+                $ \(Step event rest') -> k (pushCursor event rest')
             ),
             ( JSONBeginObject,
-              \rest -> traverseObject early rest $ \(ObjectStep _ rest') -> k rest'
+              \rest -> traverseObject early rest $ k . objectStepCursor
             )
           ]
 
@@ -210,10 +209,9 @@ runFold early optic = run optic (takeValue early)
       where
         eventsWithCont =
           [ ( JSONBeginObject,
-              \rest ->
-                traverseObject early rest $ \(ObjectStep key rest') -> do
-                  _ <- k (Cursor [JSONString key] initialDecoder (pure ()))
-                  skipMemberValue early rest'
+              \rest -> traverseObject early rest $ \(ObjectStep key rest') -> do
+                _ <- k $ Cursor [JSONString key] initialDecoder $ pure ()
+                skipMemberValue early rest'
             )
           ]
 
@@ -226,7 +224,7 @@ runFold early optic = run optic (takeValue early)
       where
         eventsWithCont =
           [ ( JSONBeginObject,
-              \rest -> traverseObject early rest $ \(ObjectStep _ rest') -> k rest'
+              \rest -> traverseObject early rest $ k . objectStepCursor
             )
           ]
 
@@ -236,10 +234,10 @@ runFold early optic = run optic (takeValue early)
     ----------------------------------------------------------------
 
     runFilter :: Optic -> Transformation -> Continuation -> Continuation
-    runFilter o t k input =
-      onEventOrEnd early input $ \(Step event rest0) -> do
-        GateResult keep _ replay rest <- lift (gateTake early o t (pushCursor event rest0))
-        if keep then k replay else pure rest
+    runFilter o t k input = onEventOrEnd early input $ \(Step event rest0) -> do
+      GateResult keep _ replay rest <-
+        lift (gateTake early o t (pushCursor event rest0))
+      if keep then k replay else pure rest
 
     ----------------------------------------------------------------
     -- Scalar prisms
@@ -257,10 +255,9 @@ runFold early optic = run optic (takeValue early)
     ----------------------------------------------------------------
 
     runJust :: Continuation -> Continuation
-    runJust k input =
-      onEventOrEnd early input $ \case
-        (Step JSONNull rest) -> pure rest
-        (Step event rest) -> k (pushCursor event rest)
+    runJust k input = onEventOrEnd early input $ \case
+      Step JSONNull rest -> pure rest
+      Step event rest -> k (pushCursor event rest)
 
     ----------------------------------------------------------------
     -- Array index
@@ -272,9 +269,8 @@ runFold early optic = run optic (takeValue early)
       where
         findIndex n stream
           | n < 0 = skipRestOfArray early stream
-          | otherwise = do
-              step <- lift (expectArrayStep early stream)
-              case step of
+          | otherwise =
+              lift (expectArrayStep early stream) >>= \case
                 Left rest -> pure rest
                 Right (Step event rest) -> case n of
                   0 -> k (pushCursor event rest) >>= skipRestOfArray early
@@ -311,7 +307,8 @@ focusMany o v = case o of
 
 -- | Evaluate a @filter@ gate on an in-memory value: true when the
 -- transformation maps some focused sub-value to true.
-evalFilterGate :: Optic -> Transformation -> Value -> Either TransformationError Bool
+evalFilterGate ::
+  Optic -> Transformation -> Value -> Either TransformationError Bool
 evalFilterGate o t v = focusMany o v >>= go
   where
     go :: [Value] -> Either TransformationError Bool
@@ -380,6 +377,5 @@ matchIndex i v = case v of
 -- first-match semantics over any optic; the @preview@ CLI command
 -- exposes it directly (any optic accepted, first focus wins).
 runPreview :: Early HQError -> Optic -> Continuation
-runPreview early optic input = do
-  takeFirstValue (runFold early optic input)
-  pure input -- the after-cursor is meaningless for preview; nobody reads it
+runPreview early optic input =
+  takeFirstValue (runFold early optic input) $> input

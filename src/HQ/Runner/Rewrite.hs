@@ -91,14 +91,11 @@ stripFilterGate _ = Nothing
 rewriteValue ::
   Early HQError -> Rewriter -> EncoderConfig -> RewriteContinuation
 rewriteValue early rewriter config input st = case rewriter of
-  RewriteDelete -> do
-    after <- lift (skipValueE early input)
-    pure (RewriteResult st after)
+  RewriteDelete -> RewriteResult st <$> lift (skipValueE early input)
   -- A constant replacement never reads the focused value: skip it
   -- at the text level instead of decoding it.
   RewriteTransform (Const value) -> do
-    after <- lift (skipValueE early input)
-    emitValueChunks config value st after
+    emitValueChunks config value st =<< lift (skipValueE early input)
   RewriteTransform t -> do
     Materialized v _ rest <- lift (materializeValue early input)
     value <- lift (orLeave early (applyTransformation t v))
@@ -155,9 +152,7 @@ rewriteIndex early rewriter config index suffix input st =
   where
     eventsWithCont =
       [ ( JSONBeginArray,
-          \rest s -> do
-            s' <- emitChunk config JSONBeginArray s
-            go index rest s'
+          \rest s -> go index rest =<< emitChunk config JSONBeginArray s
         )
       ]
 
@@ -193,10 +188,11 @@ rewriteField early rewriter config name suffix input st =
       [ ( JSONBeginObject,
           \rest s -> do
             st' <- emitChunk config JSONBeginObject s
-            traverseObjectChunks early config rest st' $ \(ObjectStep key rest') s' ->
-              if key == name
-                then rewriteOneMember early rewriter config suffix key rest' s'
-                else emitKeyAndTake early config key rest' s'
+            traverseObjectChunks early config rest st'
+              $ \(ObjectStep key rest') s' ->
+                if key == name
+                  then rewriteOneMember early rewriter config suffix key rest' s'
+                  else emitKeyAndTake early config key rest' s'
         )
       ]
 

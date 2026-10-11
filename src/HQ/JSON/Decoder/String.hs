@@ -14,11 +14,16 @@ import HQ.JSON.Decoder.Error (DecodeError (..))
 import HQ.JSON.Event (JSONEvent (..))
 import Relude hiding (Compose, id, many, some, state)
 
-startString :: StringTarget -> Text -> DecoderState -> Either DecodeError DecoderResult
+startString ::
+  StringTarget -> Text -> DecoderState -> Either DecodeError DecoderResult
 startString target input = consumeString target input emptyStringBuffer
 
 consumeString ::
-  StringTarget -> Text -> StringBuffer -> DecoderState -> Either DecodeError DecoderResult
+  StringTarget ->
+  Text ->
+  StringBuffer ->
+  DecoderState ->
+  Either DecodeError DecoderResult
 consumeString target input buffer decoder = case T.uncons rest of
   Nothing ->
     let bufferedTarget = BufferedStringTarget target newBuffer
@@ -39,20 +44,32 @@ consumeString target input buffer decoder = case T.uncons rest of
     newBuffer = appendStringBuffer chunk buffer
 
 consumeStringEscape ::
-  StringTarget -> Text -> StringBuffer -> DecoderState -> Either DecodeError DecoderResult
+  StringTarget ->
+  Text ->
+  StringBuffer ->
+  DecoderState ->
+  Either DecodeError DecoderResult
 consumeStringEscape target input buffer decoder = case T.uncons input of
   Nothing ->
     let parserString =
-          DecoderPhaseString $ AfterEscape $ BufferedStringTarget target buffer
-     in Right $ NeedInput decoder {decoderInput = mempty, decoderPhase = parserString}
+          DecoderPhaseString
+            $ AfterEscape
+            $ BufferedStringTarget target buffer
+     in Right
+          $ NeedInput decoder {decoderInput = mempty, decoderPhase = parserString}
   Just (c, rest)
     | c == 'u' -> consumeUnicode target rest buffer decoder
     | isSimpleEscape c ->
-        consumeString target rest (appendCharStringBuffer (decodeSimpleEscape c) buffer) decoder
+        let buf = appendCharStringBuffer (decodeSimpleEscape c) buffer
+         in consumeString target rest buf decoder
     | otherwise -> Left (InvalidEscape c)
 
 consumeUnicode ::
-  StringTarget -> Text -> StringBuffer -> DecoderState -> Either DecodeError DecoderResult
+  StringTarget ->
+  Text ->
+  StringBuffer ->
+  DecoderState ->
+  Either DecodeError DecoderResult
 consumeUnicode target input buffer = consumeUnicode' target input buffer 0 0
 
 consumeUnicode' ::
@@ -95,20 +112,19 @@ finishUnicode target input buffer value decoder
       consumeString target input (appendCharStringBuffer (chr value) buffer) decoder
 
 stepString :: DecoderState -> StringState -> Either DecodeError DecoderResult
-stepString decoder state =
-  case state of
-    InString (BufferedStringTarget target buffer) ->
-      consumeString target (decoderInput decoder) buffer decoder
-    AfterEscape (BufferedStringTarget target buffer) ->
-      consumeStringEscape target (decoderInput decoder) buffer decoder
-    InUnicodeEscape (BufferedStringTarget target buffer) (Unicode value digits) ->
-      consumeUnicode' target (decoderInput decoder) buffer value digits decoder
-    AfterHighSurrogate (BufferedStringTarget target buffer) high ->
-      consumeLowSurrogate target (decoderInput decoder) buffer high decoder
-    AfterLowBackslash (BufferedStringTarget target buffer) high ->
-      consumeLowBackslash target (decoderInput decoder) buffer high decoder
-    InLowSurrogateEscape (BufferedStringTarget target buffer) high (Unicode value digits) ->
-      consumeLowSurrogateDigits target (decoderInput decoder) buffer high value digits decoder
+stepString decoder state = case state of
+  InString (BufferedStringTarget target buffer) ->
+    consumeString target (decoderInput decoder) buffer decoder
+  AfterEscape (BufferedStringTarget target buffer) ->
+    consumeStringEscape target (decoderInput decoder) buffer decoder
+  InUnicodeEscape (BufferedStringTarget target buffer) (Unicode value digits) ->
+    consumeUnicode' target (decoderInput decoder) buffer value digits decoder
+  AfterHighSurrogate (BufferedStringTarget target buffer) high ->
+    consumeLowSurrogate target (decoderInput decoder) buffer high decoder
+  AfterLowBackslash (BufferedStringTarget target buffer) high ->
+    consumeLowBackslash target (decoderInput decoder) buffer high decoder
+  InLowSurrogateEscape (BufferedStringTarget target buffer) high (Unicode value digits) ->
+    consumeLowSurrogateDigits target (decoderInput decoder) buffer high value digits decoder
 
 consumeLowSurrogate ::
   StringTarget ->
@@ -156,7 +172,8 @@ consumeLowSurrogateDigits target input buffer high value digits decoder
   | digits == 4 =
       if isLowSurrogate value
         then
-          let newBuffer = appendCharStringBuffer (chr (combineSurrogates high value)) buffer
+          let ch = chr (combineSurrogates high value)
+              newBuffer = appendCharStringBuffer ch buffer
            in consumeString target input newBuffer decoder
         else Left InvalidSurrogatePair
   | otherwise =
@@ -165,7 +182,8 @@ consumeLowSurrogateDigits target input buffer high value digits decoder
             then
               if isLowSurrogate newValue
                 then
-                  let newBuffer = appendCharStringBuffer (chr (combineSurrogates high newValue)) buffer
+                  let ch = chr (combineSurrogates high newValue)
+                      newBuffer = appendCharStringBuffer ch buffer
                    in consumeString target rest newBuffer decoder
                 else Left InvalidSurrogatePair
             else
@@ -188,7 +206,8 @@ consumeLowSurrogateDigits target input buffer high value digits decoder
 -- | Combine a surrogate pair into its codepoint.
 {-# INLINE combineSurrogates #-}
 combineSurrogates :: Int -> Int -> Int
-combineSurrogates high low = 0x10000 + ((high - 0xD800) `shiftL` 10) + (low - 0xDC00)
+combineSurrogates high low =
+  0x10000 + ((high - 0xD800) `shiftL` 10) + (low - 0xDC00)
 
 finishString ::
   StringTarget ->
@@ -209,8 +228,7 @@ finishStringText ::
   DecoderState ->
   Either DecodeError DecoderResult
 finishStringText target text remaining decoder = case target of
-  StringValue ->
-    emitEvent (JSONString text) remaining decoder
+  StringValue -> emitEvent (JSONString text) remaining decoder
   StringKey -> do
     let key = JSONObjectKey text
     let newDecoder =

@@ -6,9 +6,8 @@
 module HQ.Runner.Cursor where
 
 import HQ.Early (Early, leave)
-import HQ.Error (HQError (..))
-import HQ.JSON.Decoder (DecoderState (..), Next (..), NextEmitted (..), StreamIO, finishValue, initialDecoder, pullEvent)
-import HQ.JSON.Decoder.Skip (SkipRest (..), skipContainerText, skipMemberValueText)
+import HQ.JSON.Decoder
+import HQ.JSON.Decoder.Skip
 import HQ.JSON.Event (JSONEvent (..), matchingClose)
 import HQ.Runner.Error (RunnerError (..))
 import Relude hiding (Compose, id, many, some, state)
@@ -98,7 +97,7 @@ expectArrayStep early input = do
   case result of
     Nothing -> leave early $ HQRunnerError UnexpectedEndReadingArray
     Just (Step JSONEndArray rest) -> pure (Left rest)
-    Just step -> pure (Right step)
+    Just step' -> pure (Right step')
 
 -- | Consume one complete value without yielding its events.
 skipValue :: Early HQError -> Cursor -> EventStream Cursor
