@@ -52,6 +52,9 @@ ghc-options:
   - -fregs-graph
   - -fspec-constr-recursive=32
   - -fmax-worker-args=32
+  - -fexpose-all-unfoldings
+  - -fspecialise-aggressively
+  - -fdo-clever-arg-eta-expansion
 
 executables:
   hq:
