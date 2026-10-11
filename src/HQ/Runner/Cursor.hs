@@ -95,6 +95,8 @@ nextDocument early cur@(Cursor buffered decoder text)
 -- 'Right' key and cursor after it on 'JSONObjectKey'. Throws
 -- 'UnexpectedEndReadingObject' on end of input and 'InvalidObject' on
 -- anything else. Shared by every object walk in folding and rewriting.
+-- Inlined: runs once per member on every hot walk.
+{-# INLINE expectObjectStep #-}
 expectObjectStep :: Early HQError -> Cursor -> IO (Either Cursor ObjectStep)
 expectObjectStep early input = do
   result <- pullCursor early input
@@ -108,6 +110,8 @@ expectObjectStep early input = do
 -- 'Right' event and cursor after it otherwise. Throws
 -- 'UnexpectedEndReadingArray' on end of input. Shared by every array
 -- walk in folding and rewriting.
+-- Inlined: runs once per element on every hot walk.
+{-# INLINE expectArrayStep #-}
 expectArrayStep :: Early HQError -> Cursor -> IO (Either Cursor Step)
 expectArrayStep early input = do
   result <- pullCursor early input
@@ -223,7 +227,9 @@ onOpenOrSkip early input arms =
 -- | Loop pulling member steps until the container ends; @body@ handles
 -- each step, returning the cursor to continue from. Shared by
 -- 'traverseObject' and 'traverseArray'. Inlined so @next@/@body@
--- specialize per walk.
+-- specialize per walk; the 'INLINE's on the traverse wrappers and
+-- step pullers dissolve the whole walk into each caller, leaving a
+-- concrete single-type loop.
 {-# INLINE walkMembers #-}
 walkMembers ::
   (Cursor -> IO (Either Cursor s)) ->
@@ -241,11 +247,15 @@ walkMembers next body = go
 -- | Walk an object body step by step; @body@ handles each member key,
 -- returning the cursor to continue from. Emits nothing, returns the
 -- cursor after @JSONEndObject@.
+-- Inlined so the step puller dissolves into the caller's walk loop.
+{-# INLINE traverseObject #-}
 traverseObject :: Early HQError -> Cursor -> (ObjectStep -> EventStream Cursor) -> EventStream Cursor
 traverseObject early input body = walkMembers (expectObjectStep early) body input
 
 -- | Walk an array body step by step; @body@ handles each element event,
 -- returning the cursor to continue from.
+-- Inlined so the step puller dissolves into the caller's walk loop.
+{-# INLINE traverseArray #-}
 traverseArray :: Early HQError -> Cursor -> (Step -> EventStream Cursor) -> EventStream Cursor
 traverseArray early input body = walkMembers (expectArrayStep early) body input
 

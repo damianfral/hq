@@ -161,7 +161,10 @@ onOpenOrSkipChunks early config input st arms =
 -- @close@; @body@ handles each step, threading the encoder state.
 -- Shared by 'traverseObjectChunks' and 'traverseArrayChunks': the
 -- close emission is the only difference. Inlined so @close@/@next@/
--- @body@ specialize per walk.
+-- @body@ specialize per walk; the 'INLINE's on the traverse wrappers
+-- and step pullers below dissolve the whole walk into each caller,
+-- leaving a concrete single-type loop (no per-element dictionary or
+-- higher-order call).
 {-# INLINE walkMembersChunks #-}
 walkMembersChunks ::
   JSONEvent ->
@@ -185,6 +188,9 @@ walkMembersChunks close config next body = go
 
 -- | Walk an object body, emitting @JSONEndObject@ at the end.
 -- Caller must have emitted @JSONBeginObject@ already.
+-- Inlined so the close tag and step puller dissolve into the
+-- caller's 'walkMembersChunks' loop.
+{-# INLINE traverseObjectChunks #-}
 traverseObjectChunks ::
   Early HQError ->
   EncoderConfig ->
@@ -196,6 +202,7 @@ traverseObjectChunks early config input st body =
   walkMembersChunks JSONEndObject config (expectObjectStep early) body input st
 
 -- | Walk an array body, emitting @JSONEndArray@ at the end.
+{-# INLINE traverseArrayChunks #-}
 traverseArrayChunks ::
   Early HQError ->
   EncoderConfig ->
@@ -274,6 +281,9 @@ data RawScalar = RawString Text | RawNumber Text
 
 -- | Peek a string/number value; decline anything else (including
 -- buffered replay cursors) so existing paths report errors.
+-- Inlined: runs once per value on the chunk take path, and dissolving
+-- it exposes the cursor/decoder deconstruction to the caller.
+{-# INLINE peekRawScalar #-}
 peekRawScalar :: Cursor -> Maybe (RawScalar, DecoderState, StreamIO Text ())
 peekRawScalar cursor
   | null buf,
@@ -299,6 +309,9 @@ peekRawScalar cursor
 -- fold: 'toLazyByteString' then streams in constant space, where
 -- left-nested @acc <> piece@ accumulation retained ~150x the
 -- collected size (measured on a 1.3 MB untouched array).
+-- Inlined: runs once per verbatim body, fusing the fragment fold
+-- with the consuming buffer append.
+{-# INLINE buildFrags #-}
 buildFrags :: RawBody -> Builder
 buildFrags = foldl' (\acc t -> encodeUtf8Builder t <> acc) mempty . rawFrags
 

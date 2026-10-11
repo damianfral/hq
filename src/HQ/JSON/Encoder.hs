@@ -131,6 +131,8 @@ emitChunk config event (EmitState pend pendSize st) =
 
 -- | Transcribe a pre-encoded scalar body exactly as 'formatEvent'
 -- would for the equivalent scalar event, buffering the bytes.
+-- Inlined: runs once per verbatim scalar on the raw take path.
+{-# INLINE emitRawBytes #-}
 emitRawBytes :: EncoderConfig -> Builder -> Int -> EmitState -> BSStream IO EmitState
 emitRawBytes (EncoderConfig style valueOpts) bodyB bodyS (EmitState pend pendSize st) =
   appendEmit (sepB <> bodyB <> finB) (sepS + bodyS + finS) pend pendSize st2
@@ -144,6 +146,8 @@ emitRawBytes (EncoderConfig style valueOpts) bodyB bodyS (EmitState pend pendSiz
 -- bracket, exactly the head of 'emitRawBytes'. Split out so a
 -- container collected in bounded segments emits separators once around
 -- the whole body instead of once per segment.
+-- Inlined: runs once per verbatim container on the raw take path.
+{-# INLINE emitRawOpen #-}
 emitRawOpen :: EncoderConfig -> JSONEvent -> EmitState -> BSStream IO EmitState
 emitRawOpen (EncoderConfig style _) open (EmitState pend pendSize st) =
   case beforeValue style st of
@@ -158,6 +162,8 @@ emitRawOpen (EncoderConfig style _) open (EmitState pend pendSize st) =
 -- emit the top-level separator, exactly the tail of 'emitRawBytes'.
 -- Split out so a container collected in bounded segments composes
 -- byte-identically to one uninterrupted collect.
+-- Inlined: runs once per verbatim container on the raw take path.
+{-# INLINE emitRawTail #-}
 emitRawTail :: EncoderConfig -> EmitState -> BSStream IO EmitState
 emitRawTail (EncoderConfig _ (ValueOptions _ joinOpt)) (EmitState pend pendSize st) =
   let st' = afterValue st
@@ -234,6 +240,11 @@ integerDigits x = go x (0 :: Int)
 -- | Events to 'ByteString' chunks, flushing roughly every @cSize@ bytes.
 -- Formats and buffers in one loop: there is no intermediate chunk
 -- stream (one fewer 'S.next'/'S.yield' pair and no per-event box).
+-- Specialized for IO (the only production monad): the generic loop
+-- threads a 'Monad' dictionary through every event, and the lib/test
+-- drivers all run at IO.
+{-# INLINEABLE encode #-}
+{-# SPECIALIZE encode :: EncoderConfig -> Int -> JSONStream IO r -> BSStream IO r #-}
 encode :: (Monad m) => EncoderConfig -> Int -> JSONStream m r -> BSStream m r
 encode config size = go initialEncoderState mempty 0
   where
