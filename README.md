@@ -220,10 +220,10 @@ nix build .#devShells.x86_64-linux.default --json -j1 \
 ## Performance
 
 On the 100 MB hq-bench-data benchmark (bench/bench.sh), fold runs about
-2x faster than jq, while over/set/delete perform on par with jq.
+3x faster than jq, while over/set/delete perform around 1.2x faster.
 
 hq streams the input without materializing the document, keeping peak
-RSS at \~12MB versus \~600 MB for jq.
+RSS at \~14MB versus \~600 MB for jq.
 
 ![runtime](bench/bench_runtime.svg)
 
