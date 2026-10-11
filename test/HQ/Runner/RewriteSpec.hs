@@ -136,8 +136,7 @@ runRewriteChunks mkRun chunks = do
   result <-
     runEarly
       ( \early -> do
-          (outChunks :> _) <- S.toList (mkRun early cursor initialEncoderState)
-          (byteChunks :> _) <- S.toList (encodeChunks 65536 (S.each outChunks))
+          (byteChunks :> _) <- S.toList (mkRun early cursor initialEmitState)
           pure (decodeUtf8 (mconcat byteChunks))
       )
   case first renderHQError result of
@@ -995,8 +994,7 @@ runRewriteDocumentsTest mkRun chunks = do
   result <-
     runEarly
       ( \early -> do
-          (outChunks :> _) <- S.toList (rewriteDocuments early (mkRun early) cursor initialEncoderState)
-          (byteChunks :> _) <- S.toList (encodeChunks 65536 (S.each outChunks))
+          (byteChunks :> _) <- S.toList (rewriteDocuments early (mkRun early) cursor initialEmitState)
           pure (decodeUtf8 (mconcat byteChunks))
       )
   pure (first renderHQError result)

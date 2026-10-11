@@ -7,7 +7,7 @@ module HQ.Runner.Rewrite where
 import Data.Aeson (Value (..))
 import HQ.Early (Early, leave, orLeave)
 import HQ.Error (HQError (..))
-import HQ.JSON.Encoder (ChunkStream, EncoderConfig, EncoderState)
+import HQ.JSON.Encoder (BSStream, EmitState, EncoderConfig, emitChunk, flushEmit)
 import HQ.JSON.Event
 import HQ.Optic (Optic (..), focusesWhole, prismPredicate)
 import HQ.Runner.Cursor
@@ -50,7 +50,7 @@ runRewrite ::
   Early HQError -> Rewriter -> Optic -> EncoderConfig -> RewriteContinuation
 runRewrite early rewriter optic config cur0 st0 = do
   RewriteResult st' after <- rewriteRun early rewriter config optic cur0 st0
-  st'' <- flushEncoderChunks st'
+  st'' <- flushEmit st'
   pure (RewriteResult st'' after)
 
 rewriteRun ::
@@ -108,9 +108,9 @@ rewriteValue early rewriter config input st = case rewriter of
 emitValueChunks ::
   EncoderConfig ->
   Value ->
-  EncoderState ->
+  EmitState ->
   Cursor ->
-  ChunkStream IO RewriteResult
+  BSStream IO RewriteResult
 emitValueChunks config value st cursor = go st (valueToEvents value)
   where
     go s [] = pure (RewriteResult s cursor)
@@ -286,8 +286,8 @@ applyKeyAction ::
   KeyAction ->
   Text ->
   Cursor ->
-  EncoderState ->
-  ChunkStream IO RewriteResult
+  EmitState ->
+  BSStream IO RewriteResult
 applyKeyAction early config action key rest s = case action of
   DropKey -> do
     after <- lift (skipValueE early rest)
@@ -329,8 +329,8 @@ rewriteOneMember ::
   Optic ->
   Text ->
   Cursor ->
-  EncoderState ->
-  ChunkStream IO RewriteResult
+  EmitState ->
+  BSStream IO RewriteResult
 rewriteOneMember early rewriter config suffix key stream st = do
   result <- lift $ pullCursor early stream
   case result of
@@ -351,8 +351,8 @@ rewriteFilteredMember ::
   Text ->
   JSONEvent ->
   Cursor ->
-  EncoderState ->
-  ChunkStream IO RewriteResult
+  EmitState ->
+  BSStream IO RewriteResult
 rewriteFilteredMember early rewriter config o t rest' key event rest st = do
   GateResult keep firstEv valCursor afterValue <-
     lift (gateTake early o t (pushCursor event rest))
@@ -372,8 +372,8 @@ rewritePlainMember ::
   Text ->
   JSONEvent ->
   Cursor ->
-  EncoderState ->
-  ChunkStream IO RewriteResult
+  EmitState ->
+  BSStream IO RewriteResult
 rewritePlainMember early rewriter config suffix key event rest st =
   case rewriter of
     RewriteDelete

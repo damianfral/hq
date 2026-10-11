@@ -22,7 +22,7 @@ import Data.Text.IO (hPutStrLn)
 import HQ.Early (Early, leave, runEarly)
 import HQ.Error (HQError (..), renderHQError)
 import HQ.JSON.Decoder (StreamIO, initialDecoder)
-import HQ.JSON.Encoder (BSStream, ChunkStream, EncoderConfig (..), EncoderState, encode, encodeChunks, initialEncoderState)
+import HQ.JSON.Encoder (BSStream, EmitState, EncoderConfig (..), encode, initialEmitState)
 import HQ.Optic (Optic)
 import HQ.Query (Query (..))
 import HQ.Runner.Cursor
@@ -97,12 +97,11 @@ jsonRunner = do
       foldWith docs = void $ encode runnerEnvConfig 65536 docs
       rewriteWith rewriter optic =
         void
-          $ encodeChunks 65536
           $ rewriteDocuments
             runnerEnvEarly
             (runRewrite runnerEnvEarly rewriter optic runnerEnvConfig)
             cursor
-            initialEncoderState
+            initialEmitState
   pure $ case runnerEnvQuery of
     Preview optic -> foldWith (takeFirstValue (runFold runnerEnvEarly optic cursor))
     Fold optic -> foldWith (foldDocuments runnerEnvEarly optic cursor)
@@ -112,7 +111,7 @@ jsonRunner = do
 -- | Run @act@ over every top-level document in turn, threading loop
 -- state @s@ through; @project@ recovers the cursor to advance from.
 -- Both 'foldDocuments' (state is the cursor) and 'rewriteDocuments'
--- (state is @(EncoderState, Cursor)@) are instances.
+-- (state is @(EmitState, Cursor)@) are instances.
 forDocuments ::
   (Cursor -> IO (Maybe Cursor)) ->
   (s -> Cursor) ->
@@ -137,8 +136,8 @@ rewriteDocuments ::
   Early HQError ->
   RewriteContinuation ->
   Cursor ->
-  EncoderState ->
-  ChunkStream IO RewriteResult
+  EmitState ->
+  BSStream IO RewriteResult
 rewriteDocuments early action cur st =
   forDocuments (nextDocument early) rewriteCursor go (RewriteResult st cur)
   where

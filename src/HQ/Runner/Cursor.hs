@@ -8,7 +8,7 @@ import HQ.Early (Early, leave)
 import HQ.Error (HQError (..))
 import HQ.JSON.Decoder (DecoderState (..), Next (..), NextEmitted (..), StreamIO, finishValue, initialDecoder, pullEvent)
 import HQ.JSON.Decoder.Skip (SkipRest (..), skipContainerText, skipMemberValueText)
-import HQ.JSON.Encoder (ChunkStream, EncoderState)
+import HQ.JSON.Encoder (BSStream, EmitState)
 import HQ.JSON.Event (JSONEvent (..), matchingClose)
 import HQ.Runner.Error (RunnerError (..))
 import Relude hiding (Compose, id, many, some, state)
@@ -34,15 +34,15 @@ data Cursor = Cursor
 -- yielding the taken events and returning the advanced cursor.
 type Continuation = Cursor -> EventStream Cursor
 
--- | Rewrite output: chunk stream returning advanced encoder contexts
+-- | Rewrite output: byte stream returning advanced emit state
 -- and cursor.
-type RewriteContinuation = Cursor -> EncoderState -> ChunkStream IO RewriteResult
+type RewriteContinuation = Cursor -> EmitState -> BSStream IO RewriteResult
 
--- | The rewrite pipeline's accumulator: encoder state threaded through
--- chunk emission alongside the cursor. A strict record (same layout as
+-- | The rewrite pipeline's accumulator: emit state threaded through
+-- byte emission alongside the cursor. A strict record (same layout as
 -- the tuple it replaces), so the pair is unpacked and always in WHNF.
 data RewriteResult = RewriteResult
-  { rewriteEncoder :: EncoderState,
+  { rewriteEncoder :: EmitState,
     rewriteCursor :: Cursor
   }
 

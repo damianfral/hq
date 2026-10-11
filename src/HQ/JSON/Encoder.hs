@@ -10,20 +10,22 @@ module HQ.JSON.Encoder
   ( EncodeStyle (..),
     ValueOptions (..),
     encode,
-    encodeChunks,
     formatEvent,
-    transcribeRawBytes,
-    transcribeRawString,
-    transcribeRawOpen,
-    transcribeRawTail,
+    emitChunk,
+    emitBuilder,
+    emitRawBytes,
+    emitRawOpen,
+    emitRawTail,
+    flushEmit,
+    outputBatchSize,
     Builder,
     Chunk (..),
-    ChunkStream,
     BSStream,
     EncodeContext (..),
     EncoderState (..),
+    EmitState (..),
     initialEncoderState,
-    flushEncoderState,
+    initialEmitState,
     Raw (..),
     Join (..),
     EncoderConfig (..),
@@ -84,21 +86,89 @@ data EncodeContext
 
 -- | Encoder state threaded through transcription: container contexts
 -- plus their depth, kept in sync by construction (only 'formatEvent'
--- and 'closeContainer' reshape it). Also carries pending output
--- builder and size for chunk batching.
-data EncoderState = EncoderState ![EncodeContext] !NestDepth !Builder !Int
-  deriving (Show)
-
-instance Eq EncoderState where
-  EncoderState c1 d1 _ _ == EncoderState c2 d2 _ _ = c1 == c2 && d1 == d2
+-- and 'closeContainer' reshape it). Output buffering lives in
+-- 'EmitState', not here, so formatting stays pure.
+data EncoderState = EncoderState ![EncodeContext] !NestDepth
+  deriving (Eq, Show)
 
 initialEncoderState :: EncoderState
-initialEncoderState = EncoderState [] initialDepth mempty 0
+initialEncoderState = EncoderState [] initialDepth
 
-flushEncoderState :: EncoderState -> (Maybe Chunk, EncoderState)
-flushEncoderState (EncoderState ctxs depth pend pendSize)
-  | pendSize > 0 = (Just (Chunk pend pendSize), EncoderState ctxs depth mempty 0)
-  | otherwise = (Nothing, EncoderState ctxs depth mempty 0)
+-- | Output batching threshold; chunk boundaries never change bytes.
+outputBatchSize :: Int
+outputBatchSize = 65536
+
+-- | Rewrite output accumulator: pending builder bytes plus the encoder
+-- context. Single batching stage for the rewrite path: events format
+-- straight into the pending builder and flush as 'LByteString' once
+-- full, instead of boxing one 'Chunk' per event and re-batching downstream.
+data EmitState = EmitState !Builder !Int !EncoderState
+  deriving (Show)
+
+initialEmitState :: EmitState
+initialEmitState = EmitState mempty 0 initialEncoderState
+
+-- | Append bytes to the pending builder, flushing once full.
+{-# INLINE appendEmit #-}
+appendEmit :: Builder -> Int -> Builder -> Int -> EncoderState -> BSStream IO EmitState
+appendEmit b s pend pendSize st =
+  let !pend' = pend <> b
+      !pendSize' = pendSize + s
+   in if pendSize' >= outputBatchSize
+        then S.yield (toLazyByteString pend') >> pure (EmitState mempty 0 st)
+        else pure (EmitState pend' pendSize' st)
+
+-- | Buffer pre-encoded bytes without any separator bookkeeping.
+emitBuilder :: Builder -> Int -> EmitState -> BSStream IO EmitState
+emitBuilder b s (EmitState pend pendSize st) = appendEmit b s pend pendSize st
+
+-- | Format one event and buffer it. Single name for the format-then-buffer
+-- pair at every rewrite call site.
+emitChunk :: EncoderConfig -> JSONEvent -> EmitState -> BSStream IO EmitState
+emitChunk config event (EmitState pend pendSize st) =
+  case formatEvent config st event of
+    (Chunk b s, st') -> appendEmit b s pend pendSize st'
+
+-- | Transcribe a pre-encoded scalar body exactly as 'formatEvent'
+-- would for the equivalent scalar event, buffering the bytes.
+emitRawBytes :: EncoderConfig -> Builder -> Int -> EmitState -> BSStream IO EmitState
+emitRawBytes (EncoderConfig style valueOpts) bodyB bodyS (EmitState pend pendSize st) =
+  appendEmit (sepB <> bodyB <> finB) (sepS + bodyS + finS) pend pendSize st2
+  where
+    (Chunk sepB sepS, st1) = beforeValue style st
+    st2 = afterValue st1
+    Chunk finB finS = finishTopValue joinOpt st2
+    (ValueOptions _ joinOpt) = valueOpts
+
+-- | Open a verbatim container body: the separator plus the opening
+-- bracket, exactly the head of 'emitRawBytes'. Split out so a
+-- container collected in bounded segments emits separators once around
+-- the whole body instead of once per segment.
+emitRawOpen :: EncoderConfig -> JSONEvent -> EmitState -> BSStream IO EmitState
+emitRawOpen (EncoderConfig style _) open (EmitState pend pendSize st) =
+  case beforeValue style st of
+    (Chunk sepB sepS, st') ->
+      let (brackB, brackS) = case open of
+            JSONBeginArray -> (openBracket, 1)
+            JSONBeginObject -> (openBrace, 1)
+            _ -> (mempty, 0)
+       in appendEmit (sepB <> brackB) (sepS + brackS) pend pendSize st'
+
+-- | Close a verbatim container body: mark the parent non-empty and
+-- emit the top-level separator, exactly the tail of 'emitRawBytes'.
+-- Split out so a container collected in bounded segments composes
+-- byte-identically to one uninterrupted collect.
+emitRawTail :: EncoderConfig -> EmitState -> BSStream IO EmitState
+emitRawTail (EncoderConfig _ (ValueOptions _ joinOpt)) (EmitState pend pendSize st) =
+  let st' = afterValue st
+      Chunk finB finS = finishTopValue joinOpt st'
+   in appendEmit finB finS pend pendSize st'
+
+-- | Flush pending bytes at end of document.
+flushEmit :: EmitState -> BSStream IO EmitState
+flushEmit es@(EmitState pend pendSize st)
+  | pendSize > 0 = S.yield (toLazyByteString pend) >> pure (EmitState mempty 0 st)
+  | otherwise = pure es
 
 -- | Encode a 'Scientific' in compact JSON-compatible form, directly to
 -- a 'Chunk'.
@@ -162,10 +232,8 @@ integerDigits x = go x (0 :: Int)
       | otherwise = go (v `quot` 10) (acc + 1)
 
 -- | Events to 'ByteString' chunks, flushing roughly every @cSize@ bytes.
--- Formats and buffers in one loop: unlike @encodeChunks . encodeToChunks@
--- there is no intermediate chunk stream (one fewer 'S.next'/'S.yield'
--- pair and no 'Chunk' box per event). The buffering policy mirrors
--- 'encodeChunks', which stays for pre-chunked streams.
+-- Formats and buffers in one loop: there is no intermediate chunk
+-- stream (one fewer 'S.next'/'S.yield' pair and no per-event box).
 encode :: (Monad m) => EncoderConfig -> Int -> JSONStream m r -> BSStream m r
 encode config size = go initialEncoderState mempty 0
   where
@@ -199,7 +267,7 @@ formatEvent config@(EncoderConfig style (ValueOptions rawOpt joinOpt)) st event 
       (Chunk sepB sepS, st') -> case encodeEvent event of
         Chunk evB evS -> (Chunk (sepB <> evB) (sepS + evS), st')
     _ -> case valueChunk event st of
-      Chunk evB evS -> transcribeRawBytes config st evB evS
+      Chunk evB evS -> emitChunkBytes config st evB evS
   where
     closeContainerAndFinish = case closeContainer style st of
       (Chunk sepB sepS, st') -> case finishTopValue joinOpt st' of
@@ -214,26 +282,26 @@ formatEvent config@(EncoderConfig style (ValueOptions rawOpt joinOpt)) st event 
 
     -- Push one container context, tracking depth alongside.
     pushCtx :: EncodeContext -> EncoderState -> EncoderState
-    pushCtx ctx (EncoderState ctxs depth pend pendSize) =
-      EncoderState (ctx : ctxs) (deeper depth) pend pendSize
+    pushCtx ctx (EncoderState ctxs depth) =
+      EncoderState (ctx : ctxs) (deeper depth)
 
     -- Render one value event, honoring raw top-level string output.
     valueChunk :: JSONEvent -> EncoderState -> Chunk
-    valueChunk (JSONString text) (EncoderState valueCtxs _ _ _)
+    valueChunk (JSONString text) (EncoderState valueCtxs _)
       | rawOpt == Raw && null valueCtxs = encodeRawString text
     valueChunk ev _ = encodeEvent ev
 
 -- | Separator after a complete top-level value: newline unless 'Join'.
 finishTopValue :: Join -> EncoderState -> Chunk
-finishTopValue joinOpt (EncoderState ctxs' _ _ _)
+finishTopValue joinOpt (EncoderState ctxs' _)
   | joinOpt == NoJoin && null ctxs' = Chunk newline 1
   | otherwise = Chunk mempty 0
 
--- | Transcribe a pre-encoded scalar body in one 'Chunk', exactly as
--- 'formatEvent' would for the equivalent scalar event.
-transcribeRawBytes ::
+-- | Pure core shared by 'formatEvent' and 'emitRawBytes': wrap a
+-- pre-encoded scalar body with its separator and top-level finish.
+emitChunkBytes ::
   EncoderConfig -> EncoderState -> Builder -> Int -> (Chunk, EncoderState)
-transcribeRawBytes (EncoderConfig style valueOpts) st bodyB bodyS =
+emitChunkBytes (EncoderConfig style valueOpts) st bodyB bodyS =
   (Chunk (sepB <> bodyB <> finB) (sepS + bodyS + finS), st2)
   where
     (Chunk sepB sepS, st1) = beforeValue style st
@@ -241,42 +309,11 @@ transcribeRawBytes (EncoderConfig style valueOpts) st bodyB bodyS =
     Chunk finB finS = finishTopValue joinOpt st2
     (ValueOptions _ joinOpt) = valueOpts
 
--- | Transcribe a raw string body; escapes stay verbatim.
-transcribeRawString ::
-  EncoderConfig -> EncoderState -> Builder -> Int -> (Chunk, EncoderState)
-transcribeRawString config st rawB rawS =
-  transcribeRawBytes config st (char7 '"' <> rawB <> char7 '"') (rawS + 2)
-
--- | Open a verbatim container body: the separator plus the opening
--- bracket, exactly the head of 'transcribeRawBytes'. Split out so a
--- container collected in bounded segments emits separators once around
--- the whole body instead of once per segment.
-transcribeRawOpen ::
-  EncoderConfig -> JSONEvent -> EncoderState -> (Chunk, EncoderState)
-transcribeRawOpen (EncoderConfig style _) open st =
-  case beforeValue style st of
-    (Chunk sepB sepS, st') ->
-      let (brackB, brackS) = case open of
-            JSONBeginArray -> (openBracket, 1)
-            JSONBeginObject -> (openBrace, 1)
-            _ -> (mempty, 0)
-       in (Chunk (sepB <> brackB) (sepS + brackS), st')
-
--- | Close a verbatim container body: mark the parent non-empty and
--- emit the top-level separator, exactly the tail of
--- 'transcribeRawBytes'. Split out so a container collected in bounded
--- segments composes byte-identically to one uninterrupted collect.
-transcribeRawTail :: EncoderConfig -> EncoderState -> (Chunk, EncoderState)
-transcribeRawTail (EncoderConfig _ (ValueOptions _ joinOpt)) st =
-  let st' = afterValue st
-      Chunk finB finS = finishTopValue joinOpt st'
-   in (Chunk finB finS, st')
-
 beforeKey :: EncodeStyle -> EncoderState -> (Chunk, EncoderState)
-beforeKey style st@(EncoderState ctxs depth pend pendSize) = case ctxs of
+beforeKey style st@(EncoderState ctxs depth) = case ctxs of
   EncodeObject seen : rest ->
     ( elementSeparator style seen depth,
-      EncoderState (EncodeObjectAfterKey : rest) depth pend pendSize
+      EncoderState (EncodeObjectAfterKey : rest) depth
     )
   -- A key outside a container; emit it bare.
   _ -> (Chunk mempty 0, st)
@@ -286,7 +323,7 @@ beforeKey style st@(EncoderState ctxs depth pend pendSize) = case ctxs of
 -- marks the parent non-empty once the value has arrived, or when a
 -- nested container closes.
 beforeValue :: EncodeStyle -> EncoderState -> (Chunk, EncoderState)
-beforeValue style st@(EncoderState ctxs depth _ _) = case ctxs of
+beforeValue style st@(EncoderState ctxs depth) = case ctxs of
   EncodeObjectAfterKey : _ -> (colonSeparator style, st)
   EncodeArray seen : _ -> member seen
   -- A value where a key was expected (malformed input); recover by
@@ -299,7 +336,7 @@ beforeValue style st@(EncoderState ctxs depth _ _) = case ctxs of
 
 -- | After a value was emitted, mark the innermost container non-empty.
 afterValue :: EncoderState -> EncoderState
-afterValue (EncoderState ctxs depth pend pendSize) = EncoderState (mark ctxs) depth pend pendSize
+afterValue (EncoderState ctxs depth) = EncoderState (mark ctxs) depth
   where
     mark = \case
       [] -> []
@@ -310,10 +347,10 @@ afterValue (EncoderState ctxs depth pend pendSize) = EncoderState (mark ctxs) de
 -- | Emit the closing delimiter for a container, then pop it and mark
 -- the parent container as having received a value.
 closeContainer :: EncodeStyle -> EncoderState -> (Chunk, EncoderState)
-closeContainer _ st@(EncoderState [] _ _ _) = (Chunk mempty 0, st)
-closeContainer style (EncoderState (ctx : rest) depth pend pendSize) =
+closeContainer _ st@(EncoderState [] _) = (Chunk mempty 0, st)
+closeContainer style (EncoderState (ctx : rest) depth) =
   let depth' = shallower depth
-   in (closingDelimiter style depth' ctx, afterValue (EncoderState rest depth' pend pendSize))
+   in (closingDelimiter style depth' ctx, afterValue (EncoderState rest depth'))
 
 -- | The closing delimiter of the innermost container.  An empty
 -- container stays on one line; a non-empty one is closed on its own
@@ -469,27 +506,3 @@ utf8CharSize c
 type JSONStream m r = Stream (Of JSONEvent) m r
 
 type BSStream m r = Stream (Of LByteString) m r
-
-type ChunkStream m r = Stream (Of Chunk) m r
-
--- | Buffer 'Chunk's into 'ByteString' output, flushing roughly every
--- @cSize@ bytes.
-encodeChunks :: (Monad m) => Int -> ChunkStream m r -> BSStream m r
-encodeChunks size = go mempty 0
-  where
-    go :: (Monad m) => Builder -> Int -> ChunkStream m r -> BSStream m r
-    go !builder !size' stream = do
-      nextResult <- lift $ S.next stream
-      case nextResult of
-        Left r ->
-          if size' == 0 then Return r else S.yield (flush builder) >> Return r
-        Right (chunk, rest) ->
-          let eventChunk = chunk
-              newSize = size' + chunkSize eventChunk
-              newBuilder = builder <> chunkBuilder eventChunk
-           in if size' > 0 && newSize >= size
-                then S.yield (flush newBuilder) >> go mempty 0 rest
-                else go newBuilder newSize rest
-
-    flush :: Builder -> LByteString
-    flush = toLazyByteString
