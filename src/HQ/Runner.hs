@@ -166,7 +166,7 @@ decodeUtf8Stream early stream = case streamDecodeUtf8 mempty of
           | otherwise -> lift (leave early (HQRunnerError InvalidUtf8))
         Right (chunk, rest) -> do
           Some text leftover' cont' <- lift (decodeStep (cont chunk))
-          when (not $ T.null text) $ S.yield text
+          unless (T.null text) $ S.yield text
           go leftover' cont' rest
 
     -- Step the incremental decoder strictly: it throws

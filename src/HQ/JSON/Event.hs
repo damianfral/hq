@@ -64,9 +64,10 @@ eventsToValue events =
     parseElements :: [JSONEvent] -> Either RunnerError ([Value], [JSONEvent])
     parseElements = parseDelimited JSONEndArray parseValue
 
+    withKey k v = (Key.fromText k, v)
     parseMembers :: [JSONEvent] -> Either RunnerError ([(Key.Key, Value)], [JSONEvent])
     parseMembers = parseDelimited JSONEndObject $ \case
-      (JSONObjectKey key : rest) -> first (\v -> (Key.fromText key, v)) <$> parseValue rest
+      (JSONObjectKey key : rest) -> first (withKey key) <$> parseValue rest
       _ -> Left ExpectedObjectKeyEvent
 
 -- | Parse a delimited list ending in @end@; @parseOne@ parses a
