@@ -29,6 +29,7 @@ import HQ.Runner.Cursor
 import HQ.Runner.Error (RunnerError (..))
 import HQ.Runner.Fold
 import HQ.Runner.Rewrite
+import HQ.Runner.Rewrite.Emit (RewriteContinuation, RewriteResult (..))
 import HQ.Runner.Take
 import Relude hiding (Compose, Const)
 import Streaming (Of, Stream)

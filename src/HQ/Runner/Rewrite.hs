@@ -13,7 +13,7 @@ import HQ.Optic (Optic (..), focusesWhole, prismPredicate)
 import HQ.Runner.Cursor
 import HQ.Runner.Error (RunnerError (..))
 import HQ.Runner.Fold
-import HQ.Runner.Take
+import HQ.Runner.Rewrite.Emit
 import HQ.Transformation (Transformation (Const), runTransformation)
 import HQ.Transformation.Error (TransformationError (..))
 import Relude hiding (Compose, Const)
@@ -106,11 +106,7 @@ rewriteValue early rewriter config input st = case rewriter of
 
 -- \| Emit a transformed value's events as chunks.
 emitValueChunks ::
-  EncoderConfig ->
-  Value ->
-  EmitState ->
-  Cursor ->
-  BSStream IO RewriteResult
+  EncoderConfig -> Value -> EmitState -> Cursor -> BSStream IO RewriteResult
 emitValueChunks config value st cursor = go st (valueToEvents value)
   where
     go s [] = pure (RewriteResult s cursor)
@@ -289,13 +285,9 @@ applyKeyAction ::
   EmitState ->
   BSStream IO RewriteResult
 applyKeyAction early config action key rest s = case action of
-  DropKey -> do
-    after <- lift (skipValueE early rest)
-    pure (RewriteResult s after)
-  KeepKey ->
-    emitKeyAndTake early config key rest s
-  RenameKey newKey ->
-    emitKeyAndTake early config newKey rest s
+  DropKey -> RewriteResult s <$> lift (skipValueE early rest)
+  KeepKey -> emitKeyAndTake early config key rest s
+  RenameKey newKey -> emitKeyAndTake early config newKey rest s
 
 -- \| Apply the remainder of a @keys@ optic plus the enclosing
 -- 'Rewriter' to one object key. Keys are scalar strings, so the

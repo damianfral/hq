@@ -47,8 +47,7 @@ materializeValue early cur = do
 -- | Test a @filter@ gate, mapping failures to 'HQError'.
 -- Shared by 'runFold' and 'runRewrite'.
 gateValue :: Optic -> Transformation -> Value -> Either HQError Bool
-gateValue o t v =
-  first HQTransformationError $ evalFilterGate o t v
+gateValue o t v = first HQTransformationError $ evalFilterGate o t v
 
 -- | Test a @filter@ gate on a streamed value, returning whether it is
 -- kept plus replay/after cursors. Shared by 'runFold' and 'runRewrite'
@@ -62,12 +61,7 @@ data GateResult = GateResult
     gateAfter :: !Cursor
   }
 
-gateTake ::
-  Early HQError ->
-  Optic ->
-  Transformation ->
-  Cursor ->
-  IO GateResult
+gateTake :: Early HQError -> Optic -> Transformation -> Cursor -> IO GateResult
 gateTake early o t cur = do
   Materialized v ne@(firstEv :| _) afterValue <- materializeValue early cur
   keep <- orLeave early (gateValue o t v)
@@ -79,6 +73,80 @@ gateTake early o t cur = do
 applyTransformation :: Transformation -> Value -> Either HQError Value
 applyTransformation t v =
   first HQTransformationError $ runTransformation t v
+
+onEventOrEnd ::
+  Early HQError -> Cursor -> (Step -> EventStream Cursor) -> EventStream Cursor
+onEventOrEnd early input f = do
+  result <- lift (pullCursor early input)
+  case result of
+    Nothing -> pure input
+    Just step -> f step
+
+-- | Match the next event against a table of opens; anything else is
+-- skipped as a whole value. Unifies the open-or-skip preamble in
+-- Fold (@runField@/@runEach@/@runKeys@/@runValues@/@runIndex@).
+-- Inlined so the table specializes per call site.
+{-# INLINE onOpenOrSkip #-}
+onOpenOrSkip ::
+  Early HQError ->
+  Cursor ->
+  [(JSONEvent, Cursor -> EventStream Cursor)] ->
+  EventStream Cursor
+onOpenOrSkip early input arms =
+  onEventOrEnd early input $ \(Step event rest) ->
+    case [handle | (open, handle) <- arms, open == event] of
+      (handle : _) -> handle rest
+      [] -> skipValue early (pushCursor event rest)
+
+-- | Loop pulling member steps until the container ends; @body@ handles
+-- each step, returning the cursor to continue from. Shared by
+-- 'traverseObject' and 'traverseArray'. Inlined so @next@/@body@
+-- specialize per walk; the 'INLINE's on the traverse wrappers and
+-- step pullers dissolve the whole walk into each caller, leaving a
+-- concrete single-type loop.
+{-# INLINE walkMembers #-}
+walkMembers ::
+  (Cursor -> IO (Either Cursor s)) ->
+  (s -> EventStream Cursor) ->
+  Cursor ->
+  EventStream Cursor
+walkMembers next body = go
+  where
+    go stream = do
+      step <- lift (next stream)
+      case step of
+        Left rest -> pure rest
+        Right pair -> body pair >>= go
+
+-- | Walk an object body step by step; @body@ handles each member key,
+-- returning the cursor to continue from. Emits nothing, returns the
+-- cursor after @JSONEndObject@.
+-- Inlined so the step puller dissolves into the caller's walk loop.
+{-# INLINE traverseObject #-}
+traverseObject ::
+  Early HQError ->
+  Cursor ->
+  (ObjectStep -> EventStream Cursor) ->
+  EventStream Cursor
+traverseObject early input body = walkMembers (expectObjectStep early) body input
+
+-- | Walk an array body step by step; @body@ handles each element event,
+-- returning the cursor to continue from.
+-- Inlined so the step puller dissolves into the caller's walk loop.
+{-# INLINE traverseArray #-}
+traverseArray ::
+  Early HQError -> Cursor -> (Step -> EventStream Cursor) -> EventStream Cursor
+traverseArray early input body = walkMembers (expectArrayStep early) body input
+
+-- | Consume the rest of an object body (all remaining members).
+skipRestOfObject :: Early HQError -> Cursor -> EventStream Cursor
+skipRestOfObject early input = traverseObject early input
+  $ \(ObjectStep _ rest) -> skipMemberValue early rest
+
+-- | Consume the rest of an array body (all remaining elements).
+skipRestOfArray :: Early HQError -> Cursor -> EventStream Cursor
+skipRestOfArray early input = traverseArray early input
+  $ \(Step event rest) -> skipValue early (pushCursor event rest)
 
 -- | Interpret an optic against the JSON value at the cursor.
 --
@@ -171,9 +239,7 @@ runFold early optic = run optic (takeValue early)
     runFilter o t k input =
       onEventOrEnd early input $ \(Step event rest0) -> do
         GateResult keep _ replay rest <- lift (gateTake early o t (pushCursor event rest0))
-        if keep
-          then k replay
-          else pure rest
+        if keep then k replay else pure rest
 
     ----------------------------------------------------------------
     -- Scalar prisms

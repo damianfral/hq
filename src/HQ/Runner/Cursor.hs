@@ -1,4 +1,5 @@
 {-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE StrictData #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 
@@ -8,7 +9,6 @@ import HQ.Early (Early, leave)
 import HQ.Error (HQError (..))
 import HQ.JSON.Decoder (DecoderState (..), Next (..), NextEmitted (..), StreamIO, finishValue, initialDecoder, pullEvent)
 import HQ.JSON.Decoder.Skip (SkipRest (..), skipContainerText, skipMemberValueText)
-import HQ.JSON.Encoder (BSStream, EmitState)
 import HQ.JSON.Event (JSONEvent (..), matchingClose)
 import HQ.Runner.Error (RunnerError (..))
 import Relude hiding (Compose, id, many, some, state)
@@ -29,17 +29,6 @@ data Cursor = Cursor
 -- | Interpret an optic against the JSON value at the cursor,
 -- yielding the taken events and returning the advanced cursor.
 type Continuation = Cursor -> EventStream Cursor
-
--- | Rewrite output: byte stream returning advanced emit state
--- and cursor.
-type RewriteContinuation = Cursor -> EmitState -> BSStream IO RewriteResult
-
--- | The rewrite pipeline's accumulator: emit state threaded through
--- byte emission alongside the cursor.
-data RewriteResult = RewriteResult
-  { rewriteEncoder :: EmitState,
-    rewriteCursor :: Cursor
-  }
 
 -- | One navigation step: the pulled event with the cursor positioned
 -- after it.
@@ -174,79 +163,9 @@ skipMemberValue :: Early HQError -> Cursor -> EventStream Cursor
 skipMemberValue early = lift . skipMemberValueE early
 
 skipMemberValueE :: Early HQError -> Cursor -> IO Cursor
-skipMemberValueE early (Cursor buffered decoder text)
+skipMemberValueE early (Cursor buffered decoder@DecoderState {..} text)
   | null buffered = do
       (SkipRest remainder rest) <-
-        skipMemberValueText early (decoderNestDepth decoder) (decoderStack decoder) (decoderInput decoder) text
+        skipMemberValueText early decoderNestDepth decoderStack decoderInput text
       pure $ Cursor [] (finishValue decoder {decoderInput = remainder}) rest
   | otherwise = skipValueE early (Cursor buffered decoder text)
-
-onEventOrEnd ::
-  Early HQError ->
-  Cursor ->
-  (Step -> EventStream Cursor) ->
-  EventStream Cursor
-onEventOrEnd early input f = do
-  result <- lift (pullCursor early input)
-  case result of
-    Nothing -> pure input
-    Just step -> f step
-
--- | Match the next event against a table of opens; anything else is
--- skipped as a whole value. Unifies the open-or-skip preamble in
--- Fold (@runField@/@runEach@/@runKeys@/@runValues@/@runIndex@).
--- Inlined so the table specializes per call site.
-{-# INLINE onOpenOrSkip #-}
-onOpenOrSkip ::
-  Early HQError ->
-  Cursor ->
-  [(JSONEvent, Cursor -> EventStream Cursor)] ->
-  EventStream Cursor
-onOpenOrSkip early input arms =
-  onEventOrEnd early input $ \(Step event rest) ->
-    case [handle | (open, handle) <- arms, open == event] of
-      (handle : _) -> handle rest
-      [] -> skipValue early (pushCursor event rest)
-
--- | Loop pulling member steps until the container ends; @body@ handles
--- each step, returning the cursor to continue from. Shared by
--- 'traverseObject' and 'traverseArray'. Inlined so @next@/@body@
--- specialize per walk; the 'INLINE's on the traverse wrappers and
--- step pullers dissolve the whole walk into each caller, leaving a
--- concrete single-type loop.
-{-# INLINE walkMembers #-}
-walkMembers ::
-  (Cursor -> IO (Either Cursor s)) ->
-  (s -> EventStream Cursor) ->
-  Cursor ->
-  EventStream Cursor
-walkMembers next body = go
-  where
-    go stream = do
-      step <- lift (next stream)
-      case step of
-        Left rest -> pure rest
-        Right pair -> body pair >>= go
-
--- | Walk an object body step by step; @body@ handles each member key,
--- returning the cursor to continue from. Emits nothing, returns the
--- cursor after @JSONEndObject@.
--- Inlined so the step puller dissolves into the caller's walk loop.
-{-# INLINE traverseObject #-}
-traverseObject :: Early HQError -> Cursor -> (ObjectStep -> EventStream Cursor) -> EventStream Cursor
-traverseObject early input body = walkMembers (expectObjectStep early) body input
-
--- | Walk an array body step by step; @body@ handles each element event,
--- returning the cursor to continue from.
--- Inlined so the step puller dissolves into the caller's walk loop.
-{-# INLINE traverseArray #-}
-traverseArray :: Early HQError -> Cursor -> (Step -> EventStream Cursor) -> EventStream Cursor
-traverseArray early input body = walkMembers (expectArrayStep early) body input
-
--- | Consume the rest of an object body (all remaining members).
-skipRestOfObject :: Early HQError -> Cursor -> EventStream Cursor
-skipRestOfObject early input = traverseObject early input $ \(ObjectStep _ rest) -> skipMemberValue early rest
-
--- | Consume the rest of an array body (all remaining elements).
-skipRestOfArray :: Early HQError -> Cursor -> EventStream Cursor
-skipRestOfArray early input = traverseArray early input $ \(Step event rest) -> skipValue early (pushCursor event rest)
