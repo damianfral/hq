@@ -125,6 +125,39 @@
         packages.hq = pkgs.hq;
         packages.default = packages.hq;
         packages.hq-prof = pkgs.hq-prof;
+        # No -ddump-file-prefix: with -ddump-to-file alone GHC writes one
+        # dump per module next to its object file (a prefix would merge
+        # every unit into a single anonymous file). The summary covers
+        # the vanilla library dumps only; the profiling (.p.) and TH
+        # (.thr.) ways duplicate the same modules.
+        packages.hq-core = pkgs.haskellPackages.hq.overrideAttrs (old: {
+          # Skips running the test suite; the --disable-tests flag below
+          # stops it being compiled in the first place.
+          doCheck = false;
+          doHaddock = false;
+          configureFlags =
+            (old.configureFlags or [])
+            ++ [
+              # doCheck/doHaddock are baked into the builder's flags and
+              # outputs before overrideAttrs runs, so the test suite has to
+              # be turned off the way Cabal sees it. A Core dump run only
+              # needs the library compiled.
+              "--disable-tests"
+              "--ghc-options=-O2"
+              "--ghc-options=-ddump-to-file"
+              "--ghc-options=-ddump-simpl"
+              "--ghc-options=-ddump-simpl-stats"
+              "--ghc-options=-ddump-rule-firings"
+              "--ghc-options=-dsuppress-uniques"
+              "--ghc-options=-dppr-cols=100"
+            ];
+          # Keep the GHC dumps for inspection, preserving their relative
+          # tree; the archives/objects stay out to keep the output small
+          # (~20 MB of dumps vs ~265 MB for the whole dist).
+          postInstall = ''
+            (cd dist && find build -name '*.dump-*' -exec cp --parents -t "$out/" {} +)
+          '';
+        });
         packages.hq-bench-profile = pkgs.stdenv.mkDerivation {
           name = "hq-bench-profile";
           pname = "hq-bench-profile";
