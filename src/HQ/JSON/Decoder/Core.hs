@@ -3,9 +3,6 @@
 {-# LANGUAGE NoImplicitPrelude #-}
 
 -- | Shared vocabulary of the streaming JSON decoder.
---
--- Canonical home for 'StringBuffer', 'NestDepth' plus the shared
--- string/escape tables.
 module HQ.JSON.Decoder.Core where
 
 import Data.Char (digitToInt, isHexDigit)
@@ -68,9 +65,7 @@ data DecodeContext = DecodeArray | DecodeObject
   deriving (Eq, Show)
 
 data NumberState = NumberState
-  { -- | Leading '-' seen.
-    numberNegative :: Bool,
-    -- | Integer digits accumulated so far (integral and fraction parts).
+  { numberNegative :: Bool,
     numberCoeff :: Integer,
     -- | Exponent digits accumulated so far.
     numberExp :: Integer,
@@ -79,14 +74,12 @@ data NumberState = NumberState
     -- | '-' seen after 'e'/'E'.
     numberExpNeg :: Bool,
     numberPhase :: NumberPhase,
-    -- | Fully consumed prior chunks, newest first. Error payloads
-    -- only: retained, never decoded, on the success path.
+    -- Error payloads only: retained, never decoded, on the success path.
     numberFrags :: [Text]
   }
   deriving (Eq, Show)
 
 -- | Tracks how much of a JSON number has been consumed.
--- -? (0 | [1-9][0-9]*) (\.[0-9]+)? ([eE][+-]?[0-9]+)?
 data NumberPhase
   = -- | Saw leading '-'
     NumberSign
@@ -107,12 +100,9 @@ data NumberPhase
   deriving (Eq, Show)
 
 data NumberStep
-  = -- | Valid continuation, advance to this phase
-    NumberStep NumberPhase
-  | -- | Delimiter, number is complete
-    NumberEnd
-  | -- | Invalid character in this context
-    NumberError
+  = NumberStep NumberPhase
+  | NumberEnd
+  | NumberError
 
 data StringTarget = StringKey | StringValue
   deriving (Eq, Show)
@@ -128,13 +118,9 @@ data StringState
   | AfterEscape BufferedStringTarget
   | InUnicodeEscape BufferedStringTarget Unicode
   | AfterHighSurrogate BufferedStringTarget Int
-  | -- | Mid low-surrogate digits: high half plus partial value and
-    -- digit count. Separate from 'InUnicodeEscape' so split escapes
-    -- resume in the low half instead of restarting as a fresh codepoint.
+  | -- Mid low-surrogate digits; separate so split escapes resume in the low half.
     InLowSurrogateEscape BufferedStringTarget Int Unicode
-  | -- | Low escape's backslash arrived at a chunk end; the next chunk
-    -- must start with @u@. Separate from 'AfterHighSurrogate' (which
-    -- requires the backslash too) so split @\\u@ resumes correctly.
+  | -- Low escape's backslash at a chunk end; next chunk must start with @u@.
     AfterLowBackslash BufferedStringTarget Int
   deriving (Eq, Show)
 
@@ -179,10 +165,6 @@ isHighSurrogate x = x >= 0xD800 && x <= 0xDBFF
 isLowSurrogate :: Int -> Bool
 isLowSurrogate x = x >= 0xDC00 && x <= 0xDFFF
 
---------------------------------------------------------------------------------
--- Shared string tables (single source for decoder + skip/collect)
---------------------------------------------------------------------------------
-
 -- | Verbatim string bytes; shared so decoding, skipping and collection split identically.
 isStringChar :: Char -> Bool
 isStringChar c = c /= '"' && c /= '\\' && ord c >= 0x20
@@ -219,8 +201,6 @@ accumulateHex value digits input =
 data Next = EndOfInput | NextEvent NextEmitted
 
 -- | One decoded event with the decoder and text positioned after it.
--- A separate type (rather than record syntax on 'Next') keeps field
--- access total. Same layout as the old positional fields.
 data NextEmitted = NextEmitted
   { nextEvent :: !JSONEvent,
     nextDecoder :: !DecoderState,

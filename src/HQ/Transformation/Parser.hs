@@ -15,25 +15,7 @@ import Text.Megaparsec
 parseTransformation :: Text -> Either (ParseErrorBundle Text Void) Transformation
 parseTransformation = parseTop "transformation" transformationParser
 
--- | Grammar of the DSL, loosest to tightest:
---
--- > or     := xor (('or' | '||') xor)*
--- > xor    := and (('xor' | '^^') and)*
--- > and    := compose (('and' | '&&') compose)*
--- > compose  := atom ('.' atom)*
--- > atom   := '+' number | '*' number | '-' number | '/' number
--- >        |  '<' number | '<=' number | '>' number | '>=' number
--- >        |  '++' string | 'concat' array | 'trim' | 'not'
--- >        |  'replace' string string | 'stripPrefix' string | 'stripSuffix' string
--- >        |  'isPrefixOf' string | 'isSuffixOf' string | 'isInfixOf' string
--- >        |  'isEmpty' | 'length' | 'reverse' | 'unique' | 'sort'
--- >        |  'merge' object | 'deepMerge' object
--- >        |  ('==' | '=') value
--- >        |  'const' value | '(' or ')'
---
--- JSON literals (numbers, strings and arrays) are parsed with the aeson
--- value parser from "HQ.JSON.Parser", so numbers are 'Scientific'.
--- Precedence, tightest to loosest: atoms, @.@, @and@, @xor@, @or@.
+-- | Grammar, loosest to tightest: @or@, @xor@, @and@, @.@, atoms.
 transformationParser :: Parser Transformation
 transformationParser = makeExprParser atomParser table
   where
@@ -106,8 +88,7 @@ ltParser = prefixOp "<" jsonNumber Lt
 lteParser :: Parser Transformation
 lteParser = prefixOp "<=" jsonNumber Lte
 
--- | @> v@ is sugar for @not . <= v@: strictness comes from the
--- primitive, negation from composition. No new constructor needed.
+-- | @> v@ is sugar for @not . <= v@.
 gtParser :: Parser Transformation
 gtParser = prefixOp ">" jsonNumber (Compose Not . Lte)
 

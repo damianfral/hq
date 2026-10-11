@@ -19,11 +19,7 @@ import Streaming (Of, Stream)
 type EventStream r = Stream (Of JSONEvent) IO r
 
 -- | Input cursor: pushed-back events with the decoder and text
--- positioned after them. Navigation peeks at events through
--- 'pullCursor'; bulk take loops decode forward.
---
--- A strict record: same layout and strictness as the old positional
--- constructor, so existing positional patterns keep working.
+-- positioned after them.
 data Cursor = Cursor
   { cursorBuffered :: [JSONEvent],
     cursorDecoder :: DecoderState,
@@ -39,20 +35,18 @@ type Continuation = Cursor -> EventStream Cursor
 type RewriteContinuation = Cursor -> EmitState -> BSStream IO RewriteResult
 
 -- | The rewrite pipeline's accumulator: emit state threaded through
--- byte emission alongside the cursor. A strict record (same layout as
--- the tuple it replaces), so the pair is unpacked and always in WHNF.
+-- byte emission alongside the cursor.
 data RewriteResult = RewriteResult
   { rewriteEncoder :: EmitState,
     rewriteCursor :: Cursor
   }
 
 -- | One navigation step: the pulled event with the cursor positioned
--- after it. A strict record (same layout as the tuple it replaces),
--- so the pair is unpacked and always in WHNF.
+-- after it.
 data Step = Step {stepEvent :: JSONEvent, stepCursor :: Cursor}
 
 -- | One object member step: the member key with the cursor positioned
--- after it. A strict record (same layout as the tuple it replaces).
+-- after it.
 data ObjectStep = ObjectStep {objectStepKey :: Text, objectStepCursor :: Cursor}
 
 -- | Pull one event for navigation. Buffered events come first;
@@ -74,12 +68,9 @@ pushCursor event (Cursor buffered decoder text) =
   Cursor (event : buffered) decoder text
 
 -- | Poll for the next top-level document at the cursor. Resets a
--- finished decoder over the remaining input, pulls one event and
--- pushes it back for the query to consume; 'Nothing' at clean end of
--- input (trailing whitespace included). Call between top-level values
--- only, where the event buffer is empty and the decoder stack is
--- balanced; anything else passes through for the query to handle
--- exactly as a single-shot run would.
+-- finished decoder over the remaining input and pushes the first event
+-- back for the query to consume; 'Nothing' at clean end of input.
+-- Call between top-level values only (empty buffer, balanced stack).
 nextDocument :: Early HQError -> Cursor -> IO (Maybe Cursor)
 nextDocument early cur@(Cursor buffered decoder text)
   | not (null buffered) || not (null (decoderStack decoder)) = pure (Just cur)
@@ -148,7 +139,7 @@ skipValueE early input = do
     skipOpened event decoder text buffered = do
       (decoder', rest) <- skipContainerText early event decoder text
       pure (Cursor buffered decoder' rest)
-    -- \| Consume one value event by event, without touching the text.
+    -- Event-by-event drain, without touching the text.
     drainValue :: Cursor -> IO Cursor
     drainValue stream = do
       result <- pullCursor early stream
@@ -161,7 +152,6 @@ skipValueE early input = do
             JSONEndObject -> leave early $ HQRunnerError UnexpectedEndOfObject
             JSONObjectKey _ -> leave early $ HQRunnerError UnexpectedObjectKey
             _ -> pure rest
-    -- \| Consume a container body event by event up to its closing event.
     drainNested :: JSONEvent -> Cursor -> IO Cursor
     drainNested closing stream = do
       result <- pullCursor early stream
@@ -191,12 +181,6 @@ skipMemberValueE early (Cursor buffered decoder text)
       pure $ Cursor [] (finishValue decoder {decoderInput = remainder}) rest
   | otherwise = skipValueE early (Cursor buffered decoder text)
 
---------------------------------------------------------------------------------
--- Shared walk combinators (single implementation for Fold/Rewrite)
---------------------------------------------------------------------------------
-
--- | Pull one event; on end return the input unchanged, otherwise run the handler.
--- Unifies the 7x preamble in Fold (@runField/runEach/...@).
 onEventOrEnd ::
   Early HQError ->
   Cursor ->

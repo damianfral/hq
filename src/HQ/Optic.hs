@@ -89,10 +89,7 @@ instance Show Optic where
       . showsArgs o t
     where
       filterPrec = appPrec
-      -- Single atoms stay bare (@filter @age == 30@); anything longer
-      -- takes its own paren group per side
-      -- (@filter (each . @age) (== 30)@), which reparses
-      -- deterministically.
+      -- Non-atoms take their own paren group per side, which reparses deterministically.
       showsArgs oo tt
         | isAtomOptic oo && isAtomTrans tt =
             showsPrec (filterPrec + 1) oo
@@ -106,9 +103,7 @@ instance Show Optic where
               . showString ")"
       isAtomOptic (Compose _ _) = False
       isAtomOptic _ = True
-      -- NOTE: 'Trans.Compose' is the transformation sequencing node;
-      -- bare 'Compose' here would be 'Optic.Compose' (the local
-      -- definition shadows the import), so the qualifier is load-bearing.
+      -- 'Trans.Compose' must stay qualified: bare 'Compose' is 'Optic.Compose' here.
       isAtomTrans (Trans.Compose _ _) = False
       isAtomTrans (Trans.Or _ _) = False
       isAtomTrans (Trans.And _ _) = False
@@ -125,10 +120,7 @@ prismPredicate PArray JSONBeginArray = True
 prismPredicate PObject JSONBeginObject = True
 prismPredicate _ _ = False
 
--- | Compose with 'Id' elimination on either side: @( '<>' )@ with
--- 'Id' as identity. Reassociation preserves focusing semantics (both
--- runners induct through the continuation), though structural 'Eq'
--- still distinguishes nestings.
+-- | Compose with 'Id' elimination on either side ('Id' is the identity).
 appendOptic :: Optic -> Optic -> Optic
 appendOptic Id rest = rest
 appendOptic step Id = step

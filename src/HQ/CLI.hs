@@ -91,8 +91,6 @@ optParserInfo = info (optParser <**> helper) infoMod
     headerMsg = "Query JSON using optics"
     description = "hq v" <> showVersion version
 
---------------------------------------------------------------------------------
-
 withInput :: Maybe FilePath -> (Handle -> IO a) -> IO a
 withInput Nothing useHandle = useHandle stdin
 withInput (Just "-") useHandle = useHandle stdin
@@ -100,8 +98,6 @@ withInput (Just path) useHandle = withFile path ReadMode $ \h -> do
   hSetBuffering h $ BlockBuffering Nothing
   hSetBinaryMode h True
   useHandle h
-
---------------------------------------------------------------------------------
 
 runCLI :: IO ()
 runCLI = do

@@ -12,8 +12,6 @@ import HQ.Transformation.AST
 import HQ.Transformation.TransformationType (ValueType (..))
 import Relude hiding (Compose, many, not, or, some, subtract)
 
---------------------------------------------------------------------------------
-
 data Query
   = Fold Optic
   | Preview Optic

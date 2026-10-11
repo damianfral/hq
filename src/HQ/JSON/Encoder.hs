@@ -5,7 +5,6 @@
 {-# LANGUAGE StrictData #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 
---
 module HQ.JSON.Encoder
   ( EncodeStyle (..),
     ValueOptions (..),
@@ -99,9 +98,7 @@ outputBatchSize :: Int
 outputBatchSize = 65536
 
 -- | Rewrite output accumulator: pending builder bytes plus the encoder
--- context. Single batching stage for the rewrite path: events format
--- straight into the pending builder and flush as 'LByteString' once
--- full, instead of boxing one 'Chunk' per event and re-batching downstream.
+-- context. Events buffer here and flush as 'LByteString' once full.
 data EmitState = EmitState !Builder !Int !EncoderState
   deriving (Show)
 
@@ -122,8 +119,7 @@ appendEmit b s pend pendSize st =
 emitBuilder :: Builder -> Int -> EmitState -> BSStream IO EmitState
 emitBuilder b s (EmitState pend pendSize st) = appendEmit b s pend pendSize st
 
--- | Format one event and buffer it. Single name for the format-then-buffer
--- pair at every rewrite call site.
+-- | Format one event and buffer it.
 emitChunk :: EncoderConfig -> JSONEvent -> EmitState -> BSStream IO EmitState
 emitChunk config event (EmitState pend pendSize st) =
   case formatEvent config st event of
@@ -143,9 +139,8 @@ emitRawBytes (EncoderConfig style valueOpts) bodyB bodyS (EmitState pend pendSiz
     (ValueOptions _ joinOpt) = valueOpts
 
 -- | Open a verbatim container body: the separator plus the opening
--- bracket, exactly the head of 'emitRawBytes'. Split out so a
--- container collected in bounded segments emits separators once around
--- the whole body instead of once per segment.
+-- bracket. Split out so bounded-segment collection emits separators
+-- once around the whole body instead of once per segment.
 -- Inlined: runs once per verbatim container on the raw take path.
 {-# INLINE emitRawOpen #-}
 emitRawOpen :: EncoderConfig -> JSONEvent -> EmitState -> BSStream IO EmitState
@@ -159,9 +154,8 @@ emitRawOpen (EncoderConfig style _) open (EmitState pend pendSize st) =
        in appendEmit (sepB <> brackB) (sepS + brackS) pend pendSize st'
 
 -- | Close a verbatim container body: mark the parent non-empty and
--- emit the top-level separator, exactly the tail of 'emitRawBytes'.
--- Split out so a container collected in bounded segments composes
--- byte-identically to one uninterrupted collect.
+-- emit the top-level separator. Split out so bounded-segment
+-- collection composes byte-identically to one uninterrupted collect.
 -- Inlined: runs once per verbatim container on the raw take path.
 {-# INLINE emitRawTail #-}
 emitRawTail :: EncoderConfig -> EmitState -> BSStream IO EmitState

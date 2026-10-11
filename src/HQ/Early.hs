@@ -32,8 +32,7 @@ instance (Typeable e) => Show (ReturningEarly e) where
 instance (Typeable e) => Exception (ReturningEarly e) where
   displayException (ReturningEarly _) = "Early return exception"
 
--- | Abort with @e@. Needs 'Early' in scope, so only code explicitly
--- given the capability can fail this way.
+-- | Abort with @e@; only code holding the 'Early' token can fail this way.
 leave :: (Typeable e) => Early e -> e -> IO a
 leave _ e = throwIO (ReturningEarly e)
 

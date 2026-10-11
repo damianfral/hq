@@ -32,10 +32,7 @@ parseValueEvents input = case decodeValueEvents input of
 decodeValueEvents :: Text -> Either Decoder.DecodeError [JSONEvent]
 decodeValueEvents input = Decoder.decodeTexts [input]
 
--- | Parse one JSON literal embedded in the DSL (e.g. after @const@,
--- @==@, @+ N@, @++ "s"@, @concat [...]@) directly with aeson.
--- 'textToTokens' lexes the prefix and 'toEitherValue' returns the
--- remainder, so no custom string/bracket scanner is needed.
+-- | Parse one JSON literal embedded in the DSL directly with aeson.
 jsonValueParser :: Parser Value
 jsonValueParser = lexeme $ do
   input <- getInput

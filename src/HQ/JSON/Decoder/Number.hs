@@ -1,5 +1,6 @@
 {-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE ImportQualifiedPost #-}
+{-# LANGUAGE RecordWildCards #-}
 {-# LANGUAGE StrictData #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 
@@ -92,9 +93,7 @@ startNumberState c =
       numberFracDigits = 0,
       numberExpNeg = False,
       numberPhase = fromMaybe NumberSign (numberPhaseFromFirstChar c),
-      -- The first character belongs to the error payload, like every
-      -- consumed chunk below; one small 'Text' per number, freed on
-      -- completion.
+      -- First char belongs to the error payload; freed on completion.
       numberFrags = [T.singleton c]
     }
 
@@ -104,10 +103,7 @@ startNumberState c =
 numberText :: NumberState -> Text -> Int -> Text
 numberText ns cur pos = T.concat (reverse (numberFrags ns)) <> T.take pos cur
 
--- | The error payload for a number rejected at end-of-input or at a
--- delimiter: exactly the consumed text. The scan pushes each consumed
--- slice (including the final one, see 'stepNumber') before
--- finalizing, so prior chunks plus the current slice are all present.
+-- | Error payload: exactly the consumed text.
 numberErrorText :: NumberState -> Text
 numberErrorText ns = T.concat (reverse (numberFrags ns))
 
@@ -125,11 +121,19 @@ finishNumber ns =
 -- buffer and no re-scan. State is written back once at end, failure,
 -- or input exhaustion.
 stepNumber :: DecoderState -> NumberState -> Either DecodeError DecoderResult
-stepNumber decoder ns0 = scan 0 (numberCoeff ns0) (numberExp ns0) (numberFracDigits ns0) (numberExpNeg ns0) (numberPhase ns0)
+stepNumber decoder ns0@(NumberState {..}) =
+  scan 0 numberCoeff numberExp numberFracDigits numberExpNeg numberPhase
   where
     input = decoderInput decoder
     len = T.length input
-    scan :: Int -> Integer -> Integer -> Int -> Bool -> NumberPhase -> Either DecodeError DecoderResult
+    scan ::
+      Int ->
+      Integer ->
+      Integer ->
+      Int ->
+      Bool ->
+      NumberPhase ->
+      Either DecodeError DecoderResult
     scan !pos !coeff !expP !nFrac !expNeg !phase
       | pos >= len =
           Right
@@ -139,13 +143,13 @@ stepNumber decoder ns0 = scan 0 (numberCoeff ns0) (numberExp ns0) (numberFracDig
                   decoderPhase =
                     DecoderPhaseNumber
                       NumberState
-                        { numberNegative = numberNegative ns0,
+                        { numberNegative = numberNegative,
                           numberCoeff = coeff,
                           numberExp = expP,
                           numberFracDigits = nFrac,
                           numberExpNeg = expNeg,
                           numberPhase = phase,
-                          numberFrags = if T.null input then numberFrags ns0 else input : numberFrags ns0
+                          numberFrags = if T.null input then numberFrags else input : numberFrags
                         }
                 }
       | otherwise =
@@ -165,8 +169,10 @@ stepNumber decoder ns0 = scan 0 (numberCoeff ns0) (numberExp ns0) (numberFracDig
                                 numberPhase = phase
                               }
                       }
-                NumberError -> Left (InvalidNumber (numberText ns0 input pos <> T.singleton c))
-                NumberStep phase' -> scan (pos + 1) coeff' expP' nFrac' expNeg' phase'
+                NumberError ->
+                  Left (InvalidNumber (numberText ns0 input pos <> T.singleton c))
+                NumberStep phase' ->
+                  scan (pos + 1) coeff' expP' nFrac' expNeg' phase'
                   where
                     (coeff', expP', nFrac', expNeg')
                       | isDigit c =

@@ -5,15 +5,7 @@
 {-# LANGUAGE StrictData #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 
--- | Text-level value skipping: validate like the decoder but
--- materialize nothing (no events, no 'Text's, no 'Scientific').
--- Two modes share the scan: discard-only ('skipContainerText',
--- 'skipMemberValueText') for bodies and member values with no
--- buffered replay, and verbatim raw-capture ('skipStringCollect',
--- 'skipNumberCollect') feeding the chunk fast path in Take.
--- Used by 'HQ.Runner.Cursor' for container bodies
--- ('skipContainerText') and member values ('skipMemberValueText')
--- when no replayed events are buffered; anything else drains event by event.
+-- | Text-level value skipping: validate like the decoder but materialize nothing.
 module HQ.JSON.Decoder.Skip
   ( skipContainerText,
     skipMemberValueText,
@@ -43,23 +35,16 @@ import HQ.JSON.Event (JSONEvent (..))
 import Relude hiding (Compose, id, many, some, state)
 import Streaming.Prelude qualified as S
 
--- | Raw collected bytes: fragments newest-first with their total
--- character count. A strict record travelling with its size (rather
--- than a tuple) so neither component builds thunks; same layout.
--- 'Semigroup' prepends newer fragments ahead of older ones, so
--- splices never touch the accumulated tail.
+-- | Raw collected bytes: fragments newest-first with their total character count.
 data RawBody = RawBody {rawFrags :: [Text], rawSize :: Int}
 
--- | Where decoding stands: the pending input text and the live text
--- stream after it. A strict record (same layout as the tuple it
--- replaces), so the pair is unpacked and always in WHNF.
+-- | Where decoding stands: pending input text and the live text stream after it.
 data SkipRest = SkipRest
   { skipRestInput :: Text,
     skipRestStream :: StreamIO Text ()
   }
 
--- | The result of collecting one value: where decoding stands and the
--- collected body. Same layout as the tuple it replaces.
+-- | Result of collecting one value: where decoding stands and the collected body.
 data Collected = Collected
   { collectedRest :: SkipRest,
     collectedBody :: RawBody
@@ -407,13 +392,7 @@ afterValue early base depth stack rest text'
         skipExpect early base depth stack ExpectObjComma rest text'
       [] -> pure $ SkipRest rest text'
 
---------------------------------------------------------------------------------
--- Discard-only scalar skipping (no materialization)
---------------------------------------------------------------------------------
-
--- | Skip a string starting after its opening quote. Validates escapes,
--- unicode and surrogate pairs exactly like the decoder; bytes are
--- discarded, never captured.
+-- Validates escapes exactly like the decoder; bytes discarded, never captured.
 skipStringBody :: Early HQError -> Text -> StreamIO Text () -> IO SkipRest
 skipStringBody early = go
   where
@@ -553,15 +532,6 @@ scanKeyword early ix0 inp0 txt0 keyword = go ix0 inp0 txt0
                 let rawBody = RawBody [keyword] (T.length keyword)
                  in pure $ Collected (SkipRest inp txt) rawBody
             | otherwise -> leave early (HQDecodeError (InvalidKeyword keyword))
-
---------------------------------------------------------------------------------
--- Raw capture (verbatim bytes for rewrite passthrough)
---------------------------------------------------------------------------------
---
--- Like skipping, but accumulating the consumed bytes so rewrite
--- passthrough can re-emit strings/numbers without decoding them.
--- Escapes stay verbatim, so bytes may differ from canonical re-encoding
--- while decoding to identical events.
 
 -- | Skip a number, capturing its raw bytes.
 skipNumberCollect :: Early HQError -> Text -> StreamIO Text () -> IO Collected

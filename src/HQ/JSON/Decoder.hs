@@ -161,41 +161,28 @@ startValue !c !rest !decoder = case c of
               numState
     | otherwise -> Left (UnexpectedChar c)
 
--- | The root value is complete: empty stack + finished state.
+-- Root value complete: empty stack + finished state.
 isRootDone :: DecoderState -> Bool
 isRootDone decoder =
   decoderPhase decoder == DecoderPhaseFinished && null (decoderStack decoder)
 
--- | The decoder consumed nothing yet: empty input with initial stack,
--- depth and phase. Cheaper and more precise than '(== initialDecoder)',
--- which compares the whole state (including the input text).
 isEmptyDecoder :: DecoderState -> Bool
-isEmptyDecoder dec =
-  T.null (decoderInput dec)
-    && null (decoderStack dec)
-    && decoderNestDepth dec
-    == initialDepth
-    && decoderPhase dec
-    == DecoderPhaseValue
+isEmptyDecoder dec = nullInputPred && nullStackPred && depthPred && phasePred
+  where
+    nullInputPred = T.null (decoderInput dec)
+    nullStackPred = null (decoderStack dec)
+    depthPred = decoderNestDepth dec == initialDepth
+    phasePred = decoderPhase dec == DecoderPhaseValue
 
--- | Terminal reading of a finished decoder: the single policy behind
--- 'decodeTexts' (@atEnd@), 'pullEvent' (@finishEnd@) and Take's
--- @finishTakeEvent@. All three must agree on which 'finish' outcomes
--- end cleanly, fail, or yield one more event — that table lives here,
--- each driver only embeds it in its own monad (top-level exhaustion
--- means clean end for the first two, truncated take for the third).
--- NOTE: lives here rather than in Core because it runs 'finish',
--- which Core cannot see without an import cycle (via Number/Keyword).
+-- | Terminal reading of a finished decoder; keep 'decodeTexts',
+-- 'pullEvent' and Take's finisher in sync.
 data Terminal
   = TerminalEnd
   | TerminalError DecodeError
   | TerminalEmit TerminalEmitted
   deriving (Eq, Show)
 
--- | The payload of a 'TerminalEmit': one trailing event with the
--- decoder positioned after it. A separate type (rather than record
--- syntax on 'Terminal') keeps field access total. Same layout as the
--- old positional fields.
+-- | Payload of a 'TerminalEmit': one trailing event with the decoder after it.
 data TerminalEmitted = TerminalEmitted
   { terminalEvent :: JSONEvent,
     terminalDecoder :: DecoderState
@@ -211,11 +198,7 @@ classifyTerminal dec = case finish dec of
   Right (NeedInput _) -> TerminalError UnexpectedEnd
   Right (Emit event dec') -> TerminalEmit (TerminalEmitted event dec')
 
--- | Decode complete text chunks to events (single-shot list driver for
--- embedded literals and tests). Steps 'step' directly and finalizes
--- with 'finish'; terminal outcomes go through 'classifyTerminal', the
--- policy shared with 'pullEvent': pending input always takes
--- precedence over pulling more chunks.
+-- | Decode complete text chunks to events (single-shot driver for literals and tests).
 decodeTexts :: [Text] -> Either DecodeError [JSONEvent]
 decodeTexts = go initialDecoder
   where
@@ -254,8 +237,7 @@ pullEvent early decoder txtStream = case step decoder of
   where
     pullMore :: DecoderState -> StreamIO Text () -> IO Next
     pullMore dec txt
-      -- Pending input takes precedence over pulling more text (same
-      -- precedence as 'drain'): only a truly drained decoder may end.
+      -- Pending input takes precedence over pulling more text; only a drained decoder may end.
       | not (T.null (decoderInput dec)) = case step dec of
           Left err -> leave early (HQDecodeError err)
           Right (Emit event dec') -> pure (NextEvent (NextEmitted event dec' txt))
