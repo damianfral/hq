@@ -44,13 +44,12 @@ Optics are used with different queries:
 | `over OPTIC TRANSFORMATION` | Rewrite each focused value in place. |
 | `delete OPTIC` | Remove each focused value. |
 
-`preview` needs an optic focusing on at most one value (a field, `ix`,
-prism, `filter`, `id`, or compositions of those); `each`, `keys` and
-`values` are rejected before running. `set` takes a JSON literal and
-is `over` with a constant transformation. `over` fails the whole query
-when a focused value rejects the transformation (adding to a string,
-for example). Deleting a missing field, or an empty focus, leaves the
-input unchanged.
+`preview` accepts any optic and prints at most the first value it
+focuses, so a traversal optic like `each` prints just its first focus.
+`set` takes a JSON literal and is `over` with a constant
+transformation. `over` fails the whole query when a focused value
+rejects the transformation (adding to a string, for example). Deleting
+a missing field, or an empty focus, leaves the input unchanged.
 
 ## Optic language
 

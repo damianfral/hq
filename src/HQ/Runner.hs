@@ -54,9 +54,10 @@ newtype RunnerF a = Runner (ReaderT RunnerEnv IO a)
 
 type RunnerAction = RunnerF (BSStream IO ())
 
--- | Evaluate a runner action into its output stream, without
--- draining it. Contrast 'executeRunnerAction', which runs the stream
--- to stdout.
+-- | Evaluate a runner action into an output byte‑stream without consuming it.
+-- Useful for testing or when the caller wants to further process the
+-- stream (e.g., piping to another command). It returns a lazy 'BSStream' that
+-- can be consumed later. Errors are propagated via the 'Early' exceptions.
 evalRunnerAction ::
   Early HQError ->
   RunnerAction ->
@@ -82,8 +83,10 @@ executeRunnerAction runner query encConfig handle = do
   where
     write = liftIO . LBS.hPut stdout
 
--- | Read 'ByteString' chunks lazily from a handle. 1024 bytes is the
--- measured sweet spot on a 100 MB input,
+-- | Read 'ByteString' chunks lazily from a handle.
+-- The chunk size defaults to 1024 bytes, which is a reasonable trade‑off for
+-- typical inputs (around 100 MiB). The function yields a stream of ByteString
+-- chunks until EOF.
 streamHandle :: Int -> Handle -> StreamIO ByteString ()
 streamHandle size handle = do
   chunk <- liftIO $ BS.hGetSome handle size
@@ -91,6 +94,7 @@ streamHandle size handle = do
     then pure ()
     else S.yield chunk >> streamHandle size handle
 
+-- | Run the JSON runner, producing a stream of encoded JSON documents.
 jsonRunner :: RunnerAction
 jsonRunner = do
   RunnerEnv {..} <- ask
@@ -109,10 +113,10 @@ jsonRunner = do
     Over optic transformation -> rewriteWith (RewriteTransform transformation) optic
     Delete optic -> rewriteWith RewriteDelete optic
 
--- | Run @act@ over every top-level document in turn, threading loop
--- state @s@ through; @project@ recovers the cursor to advance from.
--- Both 'foldDocuments' (state is the cursor) and 'rewriteDocuments'
--- (state is @(EmitState, Cursor)@) are instances.
+-- | Iterate over each top‑level document in the input stream.
+-- The function abstracts the common pattern of fetching the next document,
+-- projecting a cursor, and applying an action that may produce a new state.
+-- It is used by both 'foldDocuments' and 'rewriteDocuments'.
 forDocuments ::
   (Cursor -> IO (Maybe Cursor)) ->
   (s -> Cursor) ->
@@ -125,14 +129,16 @@ forDocuments next project act st = do
     Nothing -> pure st
     Just cur' -> act cur' st >>= forDocuments next project act
 
--- | Run a fold query over every top-level document in turn, yielding
--- each document's focused values downstream.
+-- | Perform a fold over each top‑level JSON document.
+-- The fold consumes the input cursor and yields the focused values as a
+-- stream of events. It is used for queries like `fold` and `preview`.
 foldDocuments :: Early HQError -> Optic -> Cursor -> EventStream Cursor
 foldDocuments early optic =
   forDocuments (nextDocument early) id (\cur _ -> runFold early optic cur)
 
--- | Run a rewrite query over every top-level document in turn,
--- threading the encoder state (empty at document boundaries).
+-- | Perform a rewrite over each top‑level JSON document.
+-- The rewrite uses a continuation that can emit transformed JSON.
+-- It threads an 'EmitState' (initially empty) across documents, resetting at each document boundary.
 rewriteDocuments ::
   Early HQError ->
   RewriteContinuation ->
@@ -144,6 +150,8 @@ rewriteDocuments early action cur st =
   where
     go cur' (RewriteResult st' _) = action cur' st'
 
+-- | Decode a lazy ByteString stream to Text, handling UTF-8 errors.
+-- Returns an empty stream on success, or aborts with a runner error on invalid UTF-8.
 decodeUtf8Stream :: Early HQError -> StreamIO ByteString () -> StreamIO Text ()
 decodeUtf8Stream early stream = case streamDecodeUtf8 mempty of
   Some _ _ cont -> go mempty cont stream
