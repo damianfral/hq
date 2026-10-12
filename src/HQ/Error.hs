@@ -4,9 +4,9 @@
 -- | Every error hq can report, with per-domain precise types.
 module HQ.Error where
 
-import HQ.JSON.Decoder.Error (DecodeError)
-import HQ.Runner.Error (RunnerError, renderRunnerError)
-import HQ.Transformation.Error (TransformationError, renderTransformationError)
+import HQ.JSON.Decoder.Error (DecodeError (..), renderDecodeError)
+import HQ.Runner.Error (RunnerError (..), renderRunnerError)
+import HQ.Transformation.Error (TransformationError (..), renderTransformationError)
 import Relude hiding (Compose, id, many, some, state)
 
 data HQError
@@ -18,6 +18,6 @@ data HQError
 -- | Render an error for the CLI boundary; nothing else renders errors.
 renderHQError :: HQError -> Text
 renderHQError err = case err of
-  HQDecodeError e -> show e
+  HQDecodeError e -> renderDecodeError e
   HQTransformationError e -> renderTransformationError e
   HQRunnerError e -> renderRunnerError e

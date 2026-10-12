@@ -16,6 +16,7 @@ module Test.HQ
 where
 
 import Data.Text qualified as T
+import HQ.Error (HQError (..), renderHQError)
 import HQ.JSON.Decoder (DecodeError (..), DecoderResult (..), DecoderState (..), decodeTexts, finish, step)
 import HQ.JSON.Event (JSONEvent)
 import Relude hiding (Compose, id)
@@ -64,9 +65,11 @@ splits input
           ++ [[T.singleton c | c <- toString input] | T.length input <= 24]
 
 -- | Streaming decode with errors shown, for differential testing.
+-- Errors are rendered for the CLI boundary ('renderHQError') so both
+-- drives compare the messages users actually see.
 decodeShown :: [Text] -> Either Text [JSONEvent]
 decodeShown chunks = case decodeChunks chunks of
-  Left err -> Left (show err)
+  Left err -> Left (renderHQError (HQDecodeError err))
   Right events -> Right events
 
 -- | Chunkings: whole input, every two-way split, and one-character

@@ -1024,4 +1024,4 @@ multiDocumentRewriteSpec = describe "multiple documents" $ do
   it "fails on trailing garbage" $ do
     Right optic <- pure (parseOptic "@a")
     runRewriteDocumentsTest (\early -> runOver early optic (Add 1) testConfig) ["{\"a\":0} garbage"]
-      `shouldReturn` Left "UnexpectedChar 'g'"
+      `shouldReturn` Left "unexpected character 'g' in JSON input"

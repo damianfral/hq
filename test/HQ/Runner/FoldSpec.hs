@@ -586,7 +586,7 @@ multiDocumentSpec = describe "multiple documents" $ do
 
   it "fails on trailing garbage" $ do
     runQueryDocumentsTest "@a" ["{\"a\":1} garbage"]
-      `shouldReturn` Left "UnexpectedChar 'g'"
+      `shouldReturn` Left "unexpected character 'g' in JSON input"
 
   it "yields nothing for empty and whitespace-only input" $ do
     runQueryDocumentsTest "@a" [] `shouldReturn` Right []
