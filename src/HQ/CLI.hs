@@ -6,8 +6,9 @@
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 
-module HQ.CLI (CLIOptions (..), optParserInfo, runCLI) where
+module HQ.CLI (CLIOptions (..), optParserInfo, runCLI, renderIOError, withInput) where
 
+import Control.Exception (IOException, catch)
 import Data.Aeson (Value)
 import Data.FileEmbed (embedStringFile, makeRelativeToProject)
 import Data.Text.IO (hPutStrLn)
@@ -91,13 +92,26 @@ optParserInfo = info (optParser <**> helper) infoMod
     headerMsg = "Query JSON using optics"
     description = "hq v" <> showVersion version
 
+-- | Open the input and run the query over it: stdin for 'Nothing' and
+-- @-@, a file otherwise. An unopenable file is a CLI-level failure,
+-- reported on stderr,.
 withInput :: Maybe FilePath -> (Handle -> IO a) -> IO a
 withInput Nothing useHandle = useHandle stdin
 withInput (Just "-") useHandle = useHandle stdin
-withInput (Just path) useHandle = withFile path ReadMode $ \h -> do
-  hSetBuffering h $ BlockBuffering Nothing
-  hSetBinaryMode h True
-  useHandle h
+withInput (Just path) useHandle =
+  catch open $ \err -> do
+    hPutStrLn stderr (renderIOError err)
+    exitFailure
+  where
+    open = withFile path ReadMode $ \h -> do
+      hSetBuffering h $ BlockBuffering Nothing
+      hSetBinaryMode h True
+      useHandle h
+
+-- | Render an I/O failure for the CLI boundary, prefixed like every
+-- other hq error.
+renderIOError :: IOException -> Text
+renderIOError err = "hq: " <> toText (displayException err)
 
 runCLI :: IO ()
 runCLI = do

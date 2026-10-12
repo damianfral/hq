@@ -1,9 +1,12 @@
+{-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 
 module HQ.CLISpec (spec) where
 
+import Control.Exception (try)
 import Data.Aeson (Value (..))
+import Data.Text qualified as T
 import HQ.CLI
 import HQ.JSON.Encoder (EncodeStyle (..), Join (..), Raw (..))
 import HQ.Optic (Optic (..))
@@ -11,6 +14,8 @@ import HQ.Query (Query (Delete, Fold, Over, Preview))
 import HQ.Transformation hiding (Compose)
 import Options.Applicative (ParserResult (..), defaultPrefs, execParserPure)
 import Relude hiding (Compose, Const, id)
+import System.Exit (ExitCode (..))
+import System.IO.Error (doesNotExistErrorType, mkIOError)
 import Test.Syd
 
 spec :: Spec
@@ -84,3 +89,13 @@ spec = do
         Right opts -> do
           optQuery opts `shouldBe` Over (Field "name") (Const (String "bob"))
           optCompact opts `shouldBe` Compact
+
+  describe "withInput" $ do
+    it "fails to process a non existent file" $ do
+      -- 'withInput' reports the error itself and exits with failure;
+      -- the handle body must never run.
+      result <- try $ do
+        withInput (Just "/nonexistent/hq-missing.json") $ const $ pure ()
+      case result :: Either ExitCode () of
+        Left code -> code `shouldNotBe` ExitSuccess
+        Right () -> expectationFailure "expected the query to fail on an unopenable file"
