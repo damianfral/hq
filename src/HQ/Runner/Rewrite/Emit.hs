@@ -1,4 +1,3 @@
-{-# LANGUAGE BangPatterns #-}
 {-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE StrictData #-}
 {-# LANGUAGE NoImplicitPrelude #-}
@@ -14,16 +13,14 @@ import Data.Text qualified as T
 import Data.Text.Encoding (encodeUtf8Builder)
 import HQ.Early (Early, leave)
 import HQ.JSON.Decoder
-import HQ.JSON.Decoder qualified as Decoder
 import HQ.JSON.Decoder.Number (isNumberStart)
 import HQ.JSON.Decoder.Skip
 import HQ.JSON.Encoder
 import HQ.JSON.Event (JSONEvent (..), matchingClose)
 import HQ.Runner.Cursor
 import HQ.Runner.Error (RunnerError (..))
-import HQ.Runner.Take (finishTakeEvent, hasPending, pullOne)
+import HQ.Runner.Take (pullOne, takeContainerGeneric)
 import Relude hiding (Compose, id, many, some, state)
-import Streaming.Prelude qualified as S
 
 -- | Rewrite output: byte stream returning advanced emit state
 -- and cursor.
@@ -299,7 +296,8 @@ takeRawContainerChunks early config closing open dec txt st = case closing of
           collectLoop st' exp1 base1 dep1 stk1 inp1 stream1
 
 -- | Take a container body, fusing decode and format per event with no
--- intermediate event stream.
+-- intermediate event stream. Specialization of 'takeContainerGeneric'
+-- with 'emitChunk' as the output action.
 takeContainerChunks ::
   Early HQError ->
   EncoderConfig ->
@@ -307,49 +305,7 @@ takeContainerChunks ::
   Cursor ->
   EmitState ->
   BSStream IO RewriteResult
-takeContainerChunks early config closing = go
-  where
-    go :: Cursor -> EmitState -> BSStream IO RewriteResult
-    go cur st = case cur of
-      Cursor (event : buffered) dec txt ->
-        emit event (Cursor buffered dec txt) st
-      Cursor [] _ _ ->
-        stepMore cur st
-    stepMore :: Cursor -> EmitState -> BSStream IO RewriteResult
-    stepMore (Cursor _ dec txt) st = case Decoder.step dec of
-      Left err -> lift (leave early (HQDecodeError err))
-      Right (Emit event dec') ->
-        emit event (Cursor [] dec' txt) st
-      Right (NeedInput dec')
-        | hasPending dec' -> stepMore (Cursor [] dec' txt) st
-        | otherwise -> pullMore (Cursor [] dec' txt) st
-      Right (Done _) -> lift (leave early $ HQRunnerError UnexpectedEndOfInput)
-    emit :: JSONEvent -> Cursor -> EmitState -> BSStream IO RewriteResult
-    emit !event cur st = do
-      st' <- emitChunk config event st
-      if event == closing
-        then pure (RewriteResult st' cur)
-        else case matchingClose event of
-          Just end -> nested end cur st'
-          Nothing -> go cur st'
-    nested :: JSONEvent -> Cursor -> EmitState -> BSStream IO RewriteResult
-    nested !end cur st = do
-      RewriteResult st' cursor' <- takeContainerChunks early config end cur st
-      go cursor' st'
-    pullMore :: Cursor -> EmitState -> BSStream IO RewriteResult
-    pullMore cur@(Cursor _ dec txt) st = do
-      result <- lift (S.next txt)
-      case result of
-        Left () -> finishTake cur st
-        Right (chunk, rest) -> case Decoder.feed chunk dec of
-          Left err -> lift (leave early (HQDecodeError err))
-          Right (Emit event dec') ->
-            emit event (Cursor [] dec' rest) st
-          Right (NeedInput dec') -> stepMore (Cursor [] dec' rest) st
-          Right (Done _) -> lift (leave early $ HQRunnerError UnexpectedEndOfInput)
-    -- Mirror terminal 'finish' policy, emitting the final event as a chunk.
-    finishTake :: Cursor -> EmitState -> BSStream IO RewriteResult
-    finishTake (Cursor _ dec _) st = do
-      (event, dec') <- lift (finishTakeEvent early dec)
-      let newCursor = Cursor [] dec' (pure ())
-       in emit event newCursor st
+takeContainerChunks early config closing cursor st = do
+  (cur, st') <- takeContainerGeneric early closing cursor st (emitChunk config)
+  pure (RewriteResult st' cur)
+{-# INLINE takeContainerChunks #-}
