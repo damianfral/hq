@@ -42,136 +42,29 @@ encodeEventsWith encConfig events = runIdentity $ do
 --------------------------------------------------------------------------------
 
 encodeSpec :: Spec
-encodeSpec = describe "encode" $ do
-  it "encodes null" $ encodeEvents [JSONNull] `shouldBe` "null"
+encodeSpec = describe "encode" $ forM_ encodeCases $ \(label, events, expected) ->
+  it label $ encodeEvents events `shouldBe` expected
 
-  it "encodes true" $ encodeEvents [JSONBool True] `shouldBe` "true"
-
-  it "encodes false" $ encodeEvents [JSONBool False] `shouldBe` "false"
-
-  it "encodes number" $ encodeEvents [JSONNumber 42] `shouldBe` "42"
-
-  it "encodes string" $ encodeEvents [JSONString "hello"] `shouldBe` "\"hello\""
-
-  it "encodes empty object" $ do
-    encodeEvents [JSONBeginObject, JSONEndObject] `shouldBe` "{}"
-
-  it "encodes object with one field"
-    $ encodeEvents
-      [ JSONBeginObject,
-        JSONObjectKey "name",
-        JSONString "alice",
-        JSONEndObject
-      ]
-    `shouldBe` "{\"name\":\"alice\"}"
-
-  it "encodes object with multiple fields"
-    $ encodeEvents
-      [ JSONBeginObject,
-        JSONObjectKey "a",
-        JSONNumber 1,
-        JSONObjectKey "b",
-        JSONNumber 2,
-        JSONEndObject
-      ]
-    `shouldBe` "{\"a\":1,\"b\":2}"
-
-  it "encodes empty array" $ do
-    encodeEvents [JSONBeginArray, JSONEndArray] `shouldBe` "[]"
-
-  it "encodes array with one element" $ do
-    encodeEvents [JSONBeginArray, JSONNumber 1, JSONEndArray] `shouldBe` "[1]"
-
-  it "encodes array with multiple elements"
-    $ encodeEvents
-      [ JSONBeginArray,
-        JSONNumber 1,
-        JSONNumber 2,
-        JSONNumber 3,
-        JSONEndArray
-      ]
-    `shouldBe` "[1,2,3]"
-
-  it "encodes array of strings" $ do
-    encodeEvents
-      [ JSONBeginArray,
-        JSONString "a",
-        JSONString "b",
-        JSONEndArray
-      ]
-    `shouldBe` "[\"a\",\"b\"]"
-
-  it "encodes nested objects" $ do
-    encodeEvents
-      [ JSONBeginObject,
-        JSONObjectKey "a",
-        JSONBeginObject,
-        JSONObjectKey "b",
-        JSONNumber 1,
-        JSONEndObject,
-        JSONEndObject
-      ]
-    `shouldBe` "{\"a\":{\"b\":1}}"
-
-  it "encodes nested arrays" $ do
-    encodeEvents
-      [ JSONBeginArray,
-        JSONBeginArray,
-        JSONNumber 1,
-        JSONEndArray,
-        JSONBeginArray,
-        JSONNumber 2,
-        JSONEndArray,
-        JSONEndArray
-      ]
-    `shouldBe` "[[1],[2]]"
-
-  it "encodes object containing array" $ do
-    encodeEvents
-      [ JSONBeginObject,
-        JSONObjectKey "items",
-        JSONBeginArray,
-        JSONNumber 1,
-        JSONNumber 2,
-        JSONEndArray,
-        JSONEndObject
-      ]
-    `shouldBe` "{\"items\":[1,2]}"
-
-  it "encodes array containing object" $ do
-    encodeEvents
-      [ JSONBeginArray,
-        JSONBeginObject,
-        JSONObjectKey "a",
-        JSONNumber 1,
-        JSONEndObject,
-        JSONEndArray
-      ]
-    `shouldBe` "[{\"a\":1}]"
-
-  it "encodes complex structure" $ do
-    encodeEvents
-      [ JSONBeginObject,
-        JSONObjectKey "users",
-        JSONBeginArray,
-        JSONBeginObject,
-        JSONObjectKey "name",
-        JSONString "alice",
-        JSONObjectKey "age",
-        JSONNumber 30,
-        JSONEndObject,
-        JSONBeginObject,
-        JSONObjectKey "name",
-        JSONString "bob",
-        JSONObjectKey "age",
-        JSONNumber 25,
-        JSONEndObject,
-        JSONEndArray,
-        JSONObjectKey "count",
-        JSONNumber 2,
-        JSONEndObject
-      ]
-    `shouldBe` "{\"users\":[{\"name\":\"alice\",\"age\":30},{\"name\":\"bob\",\"age\":25}],\"count\":2}"
+encodeCases :: [(String, [JSONEvent], Text)]
+encodeCases =
+  [ ("encodes null", [JSONNull], "null"),
+    ("encodes true", [JSONBool True], "true"),
+    ("encodes false", [JSONBool False], "false"),
+    ("encodes number", [JSONNumber 42], "42"),
+    ("encodes string", [JSONString "hello"], "\"hello\""),
+    ("encodes empty object", [JSONBeginObject, JSONEndObject], "{}"),
+    ("encodes object with one field", [JSONBeginObject, JSONObjectKey "name", JSONString "alice", JSONEndObject], "{\"name\":\"alice\"}"),
+    ("encodes object with multiple fields", [JSONBeginObject, JSONObjectKey "a", JSONNumber 1, JSONObjectKey "b", JSONNumber 2, JSONEndObject], "{\"a\":1,\"b\":2}"),
+    ("encodes empty array", [JSONBeginArray, JSONEndArray], "[]"),
+    ("encodes array with one element", [JSONBeginArray, JSONNumber 1, JSONEndArray], "[1]"),
+    ("encodes array with multiple elements", [JSONBeginArray, JSONNumber 1, JSONNumber 2, JSONNumber 3, JSONEndArray], "[1,2,3]"),
+    ("encodes array of strings", [JSONBeginArray, JSONString "a", JSONString "b", JSONEndArray], "[\"a\",\"b\"]"),
+    ("encodes nested objects", [JSONBeginObject, JSONObjectKey "a", JSONBeginObject, JSONObjectKey "b", JSONNumber 1, JSONEndObject, JSONEndObject], "{\"a\":{\"b\":1}}"),
+    ("encodes nested arrays", [JSONBeginArray, JSONBeginArray, JSONNumber 1, JSONEndArray, JSONBeginArray, JSONNumber 2, JSONEndArray, JSONEndArray], "[[1],[2]]"),
+    ("encodes object containing array", [JSONBeginObject, JSONObjectKey "items", JSONBeginArray, JSONNumber 1, JSONNumber 2, JSONEndArray, JSONEndObject], "{\"items\":[1,2]}"),
+    ("encodes array containing object", [JSONBeginArray, JSONBeginObject, JSONObjectKey "a", JSONNumber 1, JSONEndObject, JSONEndArray], "[{\"a\":1}]"),
+    ("encodes complex structure", [JSONBeginObject, JSONObjectKey "users", JSONBeginArray, JSONBeginObject, JSONObjectKey "name", JSONString "alice", JSONObjectKey "age", JSONNumber 30, JSONEndObject, JSONBeginObject, JSONObjectKey "name", JSONString "bob", JSONObjectKey "age", JSONNumber 25, JSONEndObject, JSONEndArray, JSONObjectKey "count", JSONNumber 2, JSONEndObject], "{\"users\":[{\"name\":\"alice\",\"age\":30},{\"name\":\"bob\",\"age\":25}],\"count\":2}")
+  ]
 
 --------------------------------------------------------------------------------
 -- pretty encode
@@ -197,154 +90,20 @@ encodePrettySpec = describe "pretty encode" $ do
         encodeEventsWith prettyConfig events `shouldBe` expected
 
   describe "empty containers stay compact" $ do
-    it "empty object" $ do
-      encodeEventsWith prettyConfig [JSONBeginObject, JSONEndObject]
-      `shouldBe` "{}"
-    it "empty array" $ do
-      encodeEventsWith prettyConfig [JSONBeginArray, JSONEndArray]
-      `shouldBe` "[]"
-    it "empty containers nested in non-empty containers" $ do
-      encodeEventsWith
-        prettyConfig
-        [ JSONBeginObject,
-          JSONObjectKey "a",
-          JSONBeginArray,
-          JSONEndArray,
-          JSONObjectKey "b",
-          JSONBeginObject,
-          JSONEndObject,
-          JSONEndObject
-        ]
-        `shouldBe` "{\n  \"a\": [],\n  \"b\": {}\n}"
-      encodeEventsWith
-        prettyConfig
-        [JSONBeginArray, JSONBeginArray, JSONEndArray, JSONBeginArray, JSONEndArray, JSONEndArray]
-        `shouldBe` "[\n  [],\n  []\n]"
+    forM_ emptyContainerCases $ \(label, events, expected) ->
+      it label $ encodeEventsWith prettyConfig events `shouldBe` expected
 
   describe "single-element containers" $ do
-    it "object" $ do
-      encodeEventsWith
-        prettyConfig
-        [JSONBeginObject, JSONObjectKey "name", JSONString "Alice", JSONEndObject]
-      `shouldBe` "{\n  \"name\": \"Alice\"\n}"
-    it "array" $ do
-      encodeEventsWith prettyConfig [JSONBeginArray, JSONNumber 42, JSONEndArray]
-      `shouldBe` "[\n  42\n]"
+    forM_ singleElementCases $ \(label, events, expected) ->
+      it label $ encodeEventsWith prettyConfig events `shouldBe` expected
 
   describe "multiple elements" $ do
-    it "object with multiple fields" $ do
-      encodeEventsWith
-        prettyConfig
-        [ JSONBeginObject,
-          JSONObjectKey "a",
-          JSONNumber 1,
-          JSONObjectKey "b",
-          JSONNumber 2,
-          JSONEndObject
-        ]
-      `shouldBe` "{\n  \"a\": 1,\n  \"b\": 2\n}"
-    it "array with multiple elements" $ do
-      encodeEventsWith
-        prettyConfig
-        [JSONBeginArray, JSONNumber 1, JSONNumber 2, JSONNumber 3, JSONEndArray]
-      `shouldBe` "[\n  1,\n  2,\n  3\n]"
+    forM_ multipleElementCases $ \(label, events, expected) ->
+      it label $ encodeEventsWith prettyConfig events `shouldBe` expected
 
   describe "nested structures" $ do
-    it "object in object" $ do
-      encodeEventsWith
-        prettyConfig
-        [ JSONBeginObject,
-          JSONObjectKey "a",
-          JSONBeginObject,
-          JSONObjectKey "b",
-          JSONNumber 1,
-          JSONEndObject,
-          JSONEndObject
-        ]
-      `shouldBe` "{\n  \"a\": {\n    \"b\": 1\n  }\n}"
-
-    it "array in array" $ do
-      encodeEventsWith
-        prettyConfig
-        [JSONBeginArray, JSONBeginArray, JSONNumber 1, JSONEndArray, JSONEndArray]
-      `shouldBe` "[\n  [\n    1\n  ]\n]"
-
-    it "array in object" $ do
-      encodeEventsWith
-        prettyConfig
-        [ JSONBeginObject,
-          JSONObjectKey "users",
-          JSONBeginArray,
-          JSONNumber 1,
-          JSONNumber 2,
-          JSONEndArray,
-          JSONEndObject
-        ]
-      `shouldBe` "{\n  \"users\": [\n    1,\n    2\n  ]\n}"
-
-    it "object in array" $ do
-      encodeEventsWith
-        prettyConfig
-        [ JSONBeginArray,
-          JSONBeginObject,
-          JSONObjectKey "a",
-          JSONNumber 1,
-          JSONEndObject,
-          JSONEndArray
-        ]
-      `shouldBe` "[\n  {\n    \"a\": 1\n  }\n]"
-    it "deeply nested" $ do
-      encodeEventsWith
-        prettyConfig
-        [ JSONBeginObject,
-          JSONObjectKey "a",
-          JSONBeginObject,
-          JSONObjectKey "b",
-          JSONBeginArray,
-          JSONBeginObject,
-          JSONObjectKey "c",
-          JSONNumber 1,
-          JSONEndObject,
-          JSONEndArray,
-          JSONEndObject,
-          JSONEndObject
-        ]
-      `shouldBe` "{\n  \"a\": {\n    \"b\": [\n      {\n        \"c\": 1\n      }\n    ]\n  }\n}"
-    it "complex structure" $ do
-      encodeEventsWith
-        prettyConfig
-        [ JSONBeginObject,
-          JSONObjectKey "users",
-          JSONBeginArray,
-          JSONBeginObject,
-          JSONObjectKey "name",
-          JSONString "alice",
-          JSONObjectKey "age",
-          JSONNumber 30,
-          JSONEndObject,
-          JSONBeginObject,
-          JSONObjectKey "name",
-          JSONString "bob",
-          JSONObjectKey "age",
-          JSONNumber 25,
-          JSONEndObject,
-          JSONEndArray,
-          JSONObjectKey "count",
-          JSONNumber 2,
-          JSONEndObject
-        ]
-      `shouldBe` "{\n  \"users\": [\n    {\n      \"name\": \"alice\",\n      \"age\": 30\n    },\n    {\n      \"name\": \"bob\",\n      \"age\": 25\n    }\n  ],\n  \"count\": 2\n}"
-    it "mixed types in array" $ do
-      encodeEventsWith
-        prettyConfig
-        [ JSONBeginArray,
-          JSONNumber 1,
-          JSONString "hello",
-          JSONBool True,
-          JSONNull,
-          JSONEndArray
-        ]
-      `shouldBe` "[\n  1,\n  \"hello\",\n  true,\n  null\n]"
+    forM_ nestedCases $ \(label, events, expected) ->
+      it label $ encodeEventsWith prettyConfig events `shouldBe` expected
 
   describe "string escaping is preserved" $ do
     it "special characters encode identically with surrounding formatting" $ do
@@ -407,7 +166,7 @@ encodePrettySpec = describe "pretty encode" $ do
           Right evts' -> evts' `shouldBe` events
 
   describe "roundtrip through pretty encoding" $ do
-    let roundtripCases =
+    let prettyRoundtripCases =
           [ ("empty object", "{}"),
             ("empty array", "[]"),
             ("object", "{\"name\":\"Alice\"}"),
@@ -419,8 +178,39 @@ encodePrettySpec = describe "pretty encode" $ do
             ("number with exponent", "1e10"),
             ("negative exponent", "1e-2")
           ]
-    forM_ roundtripCases $ \(label, input) ->
+    forM_ prettyRoundtripCases $ \(label, input) ->
       it ("pretty roundtrips " <> label) $ prettyRoundtrip input
+
+emptyContainerCases :: [(String, [JSONEvent], Text)]
+emptyContainerCases =
+  [ ("empty object", [JSONBeginObject, JSONEndObject], "{}"),
+    ("empty array", [JSONBeginArray, JSONEndArray], "[]"),
+    ("empty containers nested in non-empty containers", [JSONBeginObject, JSONObjectKey "a", JSONBeginArray, JSONEndArray, JSONObjectKey "b", JSONBeginObject, JSONEndObject, JSONEndObject], "{\n  \"a\": [],\n  \"b\": {}\n}"),
+    ("empty arrays nested in an array", [JSONBeginArray, JSONBeginArray, JSONEndArray, JSONBeginArray, JSONEndArray, JSONEndArray], "[\n  [],\n  []\n]")
+  ]
+
+singleElementCases :: [(String, [JSONEvent], Text)]
+singleElementCases =
+  [ ("object", [JSONBeginObject, JSONObjectKey "name", JSONString "Alice", JSONEndObject], "{\n  \"name\": \"Alice\"\n}"),
+    ("array", [JSONBeginArray, JSONNumber 42, JSONEndArray], "[\n  42\n]")
+  ]
+
+multipleElementCases :: [(String, [JSONEvent], Text)]
+multipleElementCases =
+  [ ("object with multiple fields", [JSONBeginObject, JSONObjectKey "a", JSONNumber 1, JSONObjectKey "b", JSONNumber 2, JSONEndObject], "{\n  \"a\": 1,\n  \"b\": 2\n}"),
+    ("array with multiple elements", [JSONBeginArray, JSONNumber 1, JSONNumber 2, JSONNumber 3, JSONEndArray], "[\n  1,\n  2,\n  3\n]")
+  ]
+
+nestedCases :: [(String, [JSONEvent], Text)]
+nestedCases =
+  [ ("object in object", [JSONBeginObject, JSONObjectKey "a", JSONBeginObject, JSONObjectKey "b", JSONNumber 1, JSONEndObject, JSONEndObject], "{\n  \"a\": {\n    \"b\": 1\n  }\n}"),
+    ("array in array", [JSONBeginArray, JSONBeginArray, JSONNumber 1, JSONEndArray, JSONEndArray], "[\n  [\n    1\n  ]\n]"),
+    ("array in object", [JSONBeginObject, JSONObjectKey "users", JSONBeginArray, JSONNumber 1, JSONNumber 2, JSONEndArray, JSONEndObject], "{\n  \"users\": [\n    1,\n    2\n  ]\n}"),
+    ("object in array", [JSONBeginArray, JSONBeginObject, JSONObjectKey "a", JSONNumber 1, JSONEndObject, JSONEndArray], "[\n  {\n    \"a\": 1\n  }\n]"),
+    ("deeply nested", [JSONBeginObject, JSONObjectKey "a", JSONBeginObject, JSONObjectKey "b", JSONBeginArray, JSONBeginObject, JSONObjectKey "c", JSONNumber 1, JSONEndObject, JSONEndArray, JSONEndObject, JSONEndObject], "{\n  \"a\": {\n    \"b\": [\n      {\n        \"c\": 1\n      }\n    ]\n  }\n}"),
+    ("complex structure", [JSONBeginObject, JSONObjectKey "users", JSONBeginArray, JSONBeginObject, JSONObjectKey "name", JSONString "alice", JSONObjectKey "age", JSONNumber 30, JSONEndObject, JSONBeginObject, JSONObjectKey "name", JSONString "bob", JSONObjectKey "age", JSONNumber 25, JSONEndObject, JSONEndArray, JSONObjectKey "count", JSONNumber 2, JSONEndObject], "{\n  \"users\": [\n    {\n      \"name\": \"alice\",\n      \"age\": 30\n    },\n    {\n      \"name\": \"bob\",\n      \"age\": 25\n    }\n  ],\n  \"count\": 2\n}"),
+    ("mixed types in array", [JSONBeginArray, JSONNumber 1, JSONString "hello", JSONBool True, JSONNull, JSONEndArray], "[\n  1,\n  \"hello\",\n  true,\n  null\n]")
+  ]
 
 --------------------------------------------------------------------------------
 -- value output options
@@ -430,46 +220,8 @@ valueOptionsSpec :: Spec
 valueOptionsSpec = describe "value output options" $ do
   describe "newline separation" $ do
     let encConfig = EncoderConfig Compact $ ValueOptions NoRaw NoJoin
-    it "produces nothing for an empty stream" $ do
-      encodeEventsWith encConfig [] `shouldBe` ""
-    it "terminates a single scalar with a newline" $ do
-      encodeEventsWith encConfig [JSONNumber 1] `shouldBe` "1\n"
-    it "places multiple scalars on separate lines" $ do
-      encodeEventsWith
-        encConfig
-        [JSONNumber 1, JSONString "a", JSONBool True, JSONNull]
-      `shouldBe` "1\n\"a\"\ntrue\nnull\n"
-
-    it "places container values on separate lines" $ do
-      encodeEventsWith
-        encConfig
-        [ JSONBeginObject,
-          JSONObjectKey "a",
-          JSONNumber 1,
-          JSONEndObject,
-          JSONBeginArray,
-          JSONNumber 2,
-          JSONEndArray
-        ]
-      `shouldBe` "{\"a\":1}\n[2]\n"
-    it "keeps a nested container inside one value" $ do
-      encodeEventsWith
-        encConfig
-        [ JSONBeginObject,
-          JSONObjectKey "a",
-          JSONBeginObject,
-          JSONObjectKey "b",
-          JSONNumber 1,
-          JSONEndObject,
-          JSONEndObject,
-          JSONNumber 2
-        ]
-      `shouldBe` "{\"a\":{\"b\":1}}\n2\n"
-    it "emits empty containers as single-line values" $ do
-      encodeEventsWith
-        encConfig
-        [JSONBeginObject, JSONEndObject, JSONBeginArray, JSONEndArray]
-      `shouldBe` "{}\n[]\n"
+    forM_ newlineCases $ \(label, events, expected) ->
+      it label $ encodeEventsWith encConfig events `shouldBe` expected
     it "applies pretty formatting inside each value" $ do
       encodeEventsWith
         (EncoderConfig (Pretty 2) $ ValueOptions NoRaw NoJoin)
@@ -490,6 +242,7 @@ valueOptionsSpec = describe "value output options" $ do
             ]
       encodeEventsWith (EncoderConfig Compact $ ValueOptions NoRaw Join) events
         `shouldBe` encodeEvents events
+
     it "output is independent of chunk size" $ do
       let events =
             [ JSONBeginObject,
@@ -524,64 +277,69 @@ valueOptionsSpec = describe "value output options" $ do
           decodedLines = map (fromRight [] . decodeChunks . pure) lines'
       mconcat decodedLines `shouldBe` events
 
-  describe "raw string output" $ do
-    let encConfig = EncoderConfig Compact $ ValueOptions Raw Join
-    it "renders a top-level string without quotes or escapes" $ do
-      encodeEventsWith encConfig [JSONString "a\"b\n雪"] `shouldBe` "a\"b\n雪"
-    it "keeps strings inside containers quoted" $ do
-      encodeEventsWith
-        encConfig
-        [JSONBeginArray, JSONString "x\\y", JSONEndArray]
-      `shouldBe` "[\"x\\\\y\"]"
-    it "keeps object keys quoted" $ do
-      encodeEventsWith
-        encConfig
-        [JSONBeginObject, JSONObjectKey "k\"", JSONString "v", JSONEndObject]
-      `shouldBe` "{\"k\\\"\":\"v\"}"
-    it "combines raw strings with newline separation" $ do
-      encodeEventsWith
-        (EncoderConfig Compact $ ValueOptions Raw NoJoin)
-        [JSONString "one", JSONString "two", JSONNumber 3]
-      `shouldBe` "one\ntwo\n3\n"
-    it "combines raw strings with joining" $ do
-      encodeEventsWith
-        encConfig
-        [JSONString "one", JSONString "two", JSONNumber 3]
-      `shouldBe` "onetwo3"
+  describe "raw string output"
+    $ forM_ rawCases
+    $ \(label, config, events, expected) ->
+      it label $ encodeEventsWith config events `shouldBe` expected
 
 --------------------------------------------------------------------------------
 -- Roundtrip: encode . decode produces the same text
 --------------------------------------------------------------------------------
 
+newlineCases :: [(String, [JSONEvent], Text)]
+newlineCases =
+  [ ("produces nothing for an empty stream", [], ""),
+    ("terminates a single scalar with a newline", [JSONNumber 1], "1\n"),
+    ("places multiple scalars on separate lines", [JSONNumber 1, JSONString "a", JSONBool True, JSONNull], "1\n\"a\"\ntrue\nnull\n"),
+    ("places container values on separate lines", [JSONBeginObject, JSONObjectKey "a", JSONNumber 1, JSONEndObject, JSONBeginArray, JSONNumber 2, JSONEndArray], "{\"a\":1}\n[2]\n"),
+    ("keeps a nested container inside one value", [JSONBeginObject, JSONObjectKey "a", JSONBeginObject, JSONObjectKey "b", JSONNumber 1, JSONEndObject, JSONEndObject, JSONNumber 2], "{\"a\":{\"b\":1}}\n2\n"),
+    ("emits empty containers as single-line values", [JSONBeginObject, JSONEndObject, JSONBeginArray, JSONEndArray], "{}\n[]\n")
+  ]
+
+rawCases :: [(String, EncoderConfig, [JSONEvent], Text)]
+rawCases =
+  [ ("renders a top-level string without quotes or escapes", EncoderConfig Compact $ ValueOptions Raw Join, [JSONString "a\"b\n雪"], "a\"b\n雪"),
+    ("keeps strings inside containers quoted", EncoderConfig Compact $ ValueOptions Raw Join, [JSONBeginArray, JSONString "x\\y", JSONEndArray], "[\"x\\\\y\"]"),
+    ("keeps object keys quoted", EncoderConfig Compact $ ValueOptions Raw Join, [JSONBeginObject, JSONObjectKey "k\"", JSONString "v", JSONEndObject], "{\"k\\\"\":\"v\"}"),
+    ("combines raw strings with newline separation", EncoderConfig Compact $ ValueOptions Raw NoJoin, [JSONString "one", JSONString "two", JSONNumber 3], "one\ntwo\n3\n"),
+    ("combines raw strings with joining", EncoderConfig Compact $ ValueOptions Raw Join, [JSONString "one", JSONString "two", JSONNumber 3], "onetwo3")
+  ]
+
 roundtripSpec :: Spec
 roundtripSpec = describe "roundtrip (encode . decode)" $ do
-  it "roundtrips null" $ roundtrip "null"
-  it "roundtrips true" $ roundtrip "true"
-  it "roundtrips false" $ roundtrip "false"
-  it "roundtrips number" $ roundtrip "42"
-  it "roundtrips negative number" $ roundtrip "-3.14"
-  it "roundtrips empty string" $ roundtrip "\"\""
-  it "roundtrips simple string" $ roundtrip "\"hello\""
-  it "roundtrips string with escapes" $ roundtrip "\"hello\\nworld\""
-  it "roundtrips empty object" $ roundtrip "{}"
-  it "roundtrips object with one field" $ roundtrip "{\"name\":\"alice\"}"
-  it "roundtrips object with multiple fields" $ roundtrip "{\"a\":1,\"b\":2}"
-  it "roundtrips empty array" $ roundtrip "[]"
-  it "roundtrips array with one element" $ roundtrip "[1]"
-  it "roundtrips array with multiple elements" $ roundtrip "[1,2,3]"
-  it "roundtrips array of strings" $ roundtrip "[\"a\",\"b\",\"c\"]"
-  it "roundtrips nested objects" $ roundtrip "{\"a\":{\"b\":42}}"
-  it "roundtrips nested arrays" $ roundtrip "[[1,2],[3,4]]"
-  it "roundtrips object containing array" $ roundtrip "{\"items\":[1,2,3]}"
-  it "roundtrips array containing object" $ roundtrip "[{\"a\":1}]"
-  it "roundtrips mixed types in array" $ roundtrip "[1,\"hello\",true,null]"
-  it "roundtrips deeply nested" $ roundtrip "{\"a\":{\"b\":{\"c\":\"deep\"}}}"
-  it "roundtrips complex structure" $ roundtrip "{\"users\":[{\"name\":\"alice\",\"age\":30},{\"name\":\"bob\",\"age\":25}],\"count\":2}"
-  it "roundtrips string with special escapes" $ roundtrip "\"tab\\there\\nnewline\\rret\""
-  it "roundtrips string with unicode escape" $ roundtrip "\"\\u0041\""
-  it "roundtrips number with exponent" $ roundtrip "1e10"
-  it "roundtrips number with negative exponent" $ roundtrip "1e-2"
-  it "roundtrips zero" $ roundtrip "0"
+  forM_ roundtripCases $ \(label, input) ->
+    it ("roundtrips " <> label) $ roundtrip input
+
+roundtripCases :: [(String, Text)]
+roundtripCases =
+  [ ("null", "null"),
+    ("true", "true"),
+    ("false", "false"),
+    ("number", "42"),
+    ("negative number", "-3.14"),
+    ("empty string", "\"\""),
+    ("simple string", "\"hello\""),
+    ("string with escapes", "\"hello\\nworld\""),
+    ("empty object", "{}"),
+    ("object with one field", "{\"name\":\"alice\"}"),
+    ("object with multiple fields", "{\"a\":1,\"b\":2}"),
+    ("empty array", "[]"),
+    ("array with one element", "[1]"),
+    ("array with multiple elements", "[1,2,3]"),
+    ("array of strings", "[\"a\",\"b\",\"c\"]"),
+    ("nested objects", "{\"a\":{\"b\":42}}"),
+    ("nested arrays", "[[1,2],[3,4]]"),
+    ("object containing array", "{\"items\":[1,2,3]}"),
+    ("array containing object", "[{\"a\":1}]"),
+    ("mixed types in array", "[1,\"hello\",true,null]"),
+    ("deeply nested", "{\"a\":{\"b\":{\"c\":\"deep\"}}}"),
+    ("complex structure", "{\"users\":[{\"name\":\"alice\",\"age\":30},{\"name\":\"bob\",\"age\":25}],\"count\":2}"),
+    ("string with special escapes", "\"tab\\there\\nnewline\\rret\""),
+    ("string with unicode escape", "\"\\u0041\""),
+    ("number with exponent", "1e10"),
+    ("number with negative exponent", "1e-2"),
+    ("zero", "0")
+  ]
 
 -- | Verify that encoding with 'Pretty 2' and decoding again yields the
 -- same events as decoding the compact input, i.e. that pretty-printing

@@ -4,20 +4,20 @@
 
 module HQ.Runner.FoldSpec (spec) where
 
-import HQ.Early (runEarly)
-import HQ.Error (renderHQError)
+import HQ.Early (Early, runEarly)
+import HQ.Error (HQError (..), renderHQError)
 import HQ.JSON.Decoder (StreamIO, initialDecoder)
 import HQ.JSON.Event (JSONEvent (..), valueToEvents)
 import HQ.JSON.Parser (parseValue)
 import HQ.Optic (Optic)
 import HQ.Optic.Parser (parseOptic)
 import HQ.Runner (foldDocuments)
-import HQ.Runner.Cursor (Cursor (..))
+import HQ.Runner.Cursor (Cursor (..), EventStream)
 import HQ.Runner.Fold (focusMany, runFold, runPreview)
 import HQ.Transformation.Error (renderTransformationError)
 import Relude hiding (Compose, id, many, not, or, some, subtract, toStrict)
 import Streaming.Prelude qualified as S
-import Test.HQ (chunkSplits)
+import Test.HQ (splits)
 import Test.Syd
 
 spec :: Spec
@@ -36,19 +36,22 @@ spec = describe "HQ.Runner.Fold" $ do
   chunkedFoldSpec
   multiDocumentSpec
 
--- | Run a fold optic against a JSON text input and collect output events.
---
--- This test harness builds a cursor from JSON text, runs the optic,
--- and collects all yielded events into a list. Runs in IO because the
--- streaming decoder and cursor use IO internally.
-runFoldTest :: Optic -> Text -> IO (Either Text [JSONEvent])
-runFoldTest optic input = do
-  result <- runEarly (\early -> S.toList_ $ runFold early optic cursor)
+-- | Run an optic runner against chunked JSON text and collect output
+-- events. Every fold/preview harness shares it; they differ only in
+-- the runner and the chunks. Runs in IO because the streaming decoder
+-- and cursor use IO internally.
+runOnChunks :: (Early HQError -> Cursor -> EventStream Cursor) -> [Text] -> IO (Either Text [JSONEvent])
+runOnChunks action chunks = do
+  result <- runEarly (\early -> S.toList_ $ action early cursor)
   pure (first renderHQError result)
   where
     textStream :: StreamIO Text ()
-    textStream = S.yield input
+    textStream = S.each chunks
     cursor = Cursor [] initialDecoder textStream
+
+-- | Run a fold optic against a JSON text input and collect output events.
+runFoldTest :: Optic -> Text -> IO (Either Text [JSONEvent])
+runFoldTest optic input = runOnChunks (`runFold` optic) [input]
 
 -- | Parse an optic string and run it against JSON input.
 runQueryTest :: Text -> Text -> IO (Either Text [JSONEvent])
@@ -59,13 +62,7 @@ runQueryTest opticStr jsonInput = case parseOptic opticStr of
 -- | Run a preview optic against a JSON text input and collect the
 -- (at most one) output value's events.
 runPreviewTest :: Optic -> Text -> IO (Either Text [JSONEvent])
-runPreviewTest optic input = do
-  result <- runEarly (\early -> S.toList_ $ runPreview early optic cursor)
-  pure (first renderHQError result)
-  where
-    textStream :: StreamIO Text ()
-    textStream = S.yield input
-    cursor = Cursor [] initialDecoder textStream
+runPreviewTest optic input = runOnChunks (`runPreview` optic) [input]
 
 -- | Parse an optic string and preview it against JSON input.
 runQueryPreviewTest :: Text -> Text -> IO (Either Text [JSONEvent])
@@ -75,103 +72,60 @@ runQueryPreviewTest opticStr jsonInput = case parseOptic opticStr of
 
 -- | Run a fold optic against chunked JSON text.
 runFoldChunks :: Optic -> [Text] -> IO (Either Text [JSONEvent])
-runFoldChunks optic chunks = do
-  result <- runEarly (\early -> S.toList_ $ runFold early optic cursor)
-  pure (first renderHQError result)
-  where
-    textStream :: StreamIO Text ()
-    textStream = S.each chunks
-    cursor = Cursor [] initialDecoder textStream
+runFoldChunks optic = runOnChunks (`runFold` optic)
 
 -- | Run a preview optic against chunked JSON text.
 runPreviewChunks :: Optic -> [Text] -> IO (Either Text [JSONEvent])
-runPreviewChunks optic chunks = do
-  result <- runEarly (\early -> S.toList_ $ runPreview early optic cursor)
-  pure (first renderHQError result)
-  where
-    textStream :: StreamIO Text ()
-    textStream = S.each chunks
-    cursor = Cursor [] initialDecoder textStream
+runPreviewChunks optic = runOnChunks (`runPreview` optic)
+
+-- | Parse an optic string and preview it against chunked JSON input.
+runQueryPreviewChunks :: Text -> [Text] -> IO (Either Text [JSONEvent])
+runQueryPreviewChunks opticStr chunks = case parseOptic opticStr of
+  Left err -> pure (Left (show err))
+  Right optic -> runPreviewChunks optic chunks
+
+-- | Run a fold optic over every top-level document across text chunks.
+runFoldDocumentsTest :: Optic -> [Text] -> IO (Either Text [JSONEvent])
+runFoldDocumentsTest optic = runOnChunks (`foldDocuments` optic)
+
+-- | Parse an optic string and run it over every top-level document.
+runQueryDocumentsTest :: Text -> [Text] -> IO (Either Text [JSONEvent])
+runQueryDocumentsTest opticStr chunks = case parseOptic opticStr of
+  Left err -> pure (Left (show err))
+  Right optic -> runFoldDocumentsTest optic chunks
 
 --------------------------------------------------------------------------------
 -- preview
 --------------------------------------------------------------------------------
 
 previewSpec :: Spec
-previewSpec = describe "preview" $ do
-  it "returns a field value" $ do
-    runQueryPreviewTest "@name" "{\"name\":\"alice\",\"age\":30}"
-    `shouldReturn` Right [JSONString "alice"]
+previewSpec = describe "preview" $ forM_ previewCases $ \(label, optic, doc, expected) ->
+  it label $ runQueryPreviewTest optic doc `shouldReturn` expected
 
-  it "returns nothing when the field is missing" $ do
-    runQueryPreviewTest "@name" "{\"age\":30}" `shouldReturn` Right []
-
-  it "returns nothing for non-object input" $ do
-    runQueryPreviewTest "@name" "42" `shouldReturn` Right []
-
-  it "returns the first element of an array" $ do
-    runQueryPreviewTest "each" "[1,2,3]" `shouldReturn` Right [JSONNumber 1]
-
-  it "returns the first object value" $ do
-    runQueryPreviewTest "each" "{\"a\":1,\"b\":2}"
-    `shouldReturn` Right [JSONNumber 1]
-
-  it "returns nothing for an empty array" $ do
-    runQueryPreviewTest "each" "[]" `shouldReturn` Right []
-
-  it "returns the first composed match" $ do
-    runQueryPreviewTest "each . @name" "[{\"name\":\"alice\"},{\"name\":\"bob\"}]"
-    `shouldReturn` Right [JSONString "alice"]
-
-  it "returns the first match through a filter" $ do
+previewCases :: [(String, Text, Text, Either Text [JSONEvent])]
+previewCases =
+  [ ("returns a field value", "@name", "{\"name\":\"alice\",\"age\":30}", Right [JSONString "alice"]),
+    ("returns nothing when the field is missing", "@name", "{\"age\":30}", Right []),
+    ("returns nothing for non-object input", "@name", "42", Right []),
+    ("returns the first element of an array", "each", "[1,2,3]", Right [JSONNumber 1]),
+    ("returns the first object value", "each", "{\"a\":1,\"b\":2}", Right [JSONNumber 1]),
+    ("returns nothing for an empty array", "each", "[]", Right []),
+    ("returns the first composed match", "each . @name", "[{\"name\":\"alice\"},{\"name\":\"bob\"}]", Right [JSONString "alice"]),
     -- NOTE: spaces around the outer '.' are load-bearing here;
     -- '== 30.@age' would lex '30.' as a number prefix.
-    runQueryPreviewTest "each.filter @age == 30 . @age" "[{\"age\":20},{\"age\":30}]"
-    `shouldReturn` Right [JSONNumber 30]
-
-  it "returns the first array element with ix 0" $ do
-    runQueryPreviewTest "ix 0" "[10,20]" `shouldReturn` Right [JSONNumber 10]
-
-  it "returns nothing when ix 0 finds no element" $ do
-    runQueryPreviewTest "ix 0" "[]" `shouldReturn` Right []
-
-  it "returns nothing for an empty array" $ do
-    runQueryPreviewTest "each" "[]" `shouldReturn` Right []
-
-  it "returns the first composed match"
-    $ runQueryPreviewTest "each . @name" "[{\"name\":\"alice\"},{\"name\":\"bob\"}]"
-    `shouldReturn` Right [JSONString "alice"]
-
-  it "returns the proper array element with ix" $ do
-    runQueryPreviewTest "ix 0" "[0,1,2,3]" `shouldReturn` Right [JSONNumber 0]
-    runQueryPreviewTest "ix 3" "[0,1,2,3]" `shouldReturn` Right [JSONNumber 3]
-
-  it "returns nothing when ix finds no element" $ do
-    runQueryPreviewTest "ix 0" "[]" `shouldReturn` Right []
-    runQueryPreviewTest "ix 4" "[0,1,2,3]" `shouldReturn` Right []
-
-  it "matches a string prism" $ do
-    runQueryPreviewTest "_String" "\"hello\""
-    `shouldReturn` Right [JSONString "hello"]
-
-  it "returns nothing when a prism does not match" $ do
-    runQueryPreviewTest "_String" "42" `shouldReturn` Right []
-
-  it "returns a whole container value" $ do
-    runQueryPreviewTest "@obj" "{\"obj\":{\"a\":1},\"next\":2}"
-    `shouldReturn` Right
-      [ JSONBeginObject,
-        JSONObjectKey "a",
-        JSONNumber 1,
-        JSONEndObject
-      ]
-
-  it "returns the whole input for id" $ do
-    runQueryPreviewTest "id" "[1,2]"
-    `shouldReturn` Right [JSONBeginArray, JSONNumber 1, JSONNumber 2, JSONEndArray]
-
-  it "stops reading input after the first match" $ do
-    runQueryPreviewTest "each" "[1, 2,,]" `shouldReturn` Right [JSONNumber 1]
+    ("returns the first match through a filter", "each.filter @age == 30 . @age", "[{\"age\":20},{\"age\":30}]", Right [JSONNumber 30]),
+    ("returns the first array element with ix 0", "ix 0", "[10,20]", Right [JSONNumber 10]),
+    ("returns nothing when ix 0 finds no element", "ix 0", "[]", Right []),
+    ("returns the proper array element with ix", "ix 0", "[0,1,2,3]", Right [JSONNumber 0]),
+    ("returns the last array element with ix", "ix 3", "[0,1,2,3]", Right [JSONNumber 3]),
+    ("returns nothing when ix finds no element", "ix 0", "[]", Right []),
+    ("returns nothing when ix is out of bounds", "ix 4", "[0,1,2,3]", Right []),
+    ("matches a string prism", "_String", "\"hello\"", Right [JSONString "hello"]),
+    ("returns nothing when a prism does not match", "_String", "42", Right []),
+    ("returns a whole container value", "@obj", "{\"obj\":{\"a\":1},\"next\":2}", Right [JSONBeginObject, JSONObjectKey "a", JSONNumber 1, JSONEndObject]),
+    ("returns the whole input for id", "id", "[1,2]", Right [JSONBeginArray, JSONNumber 1, JSONNumber 2, JSONEndArray]),
+    ("stops reading input after the first match", "each", "[1, 2,,]", Right [JSONNumber 1])
+  ]
 
 --------------------------------------------------------------------------------
 -- keys
@@ -179,35 +133,29 @@ previewSpec = describe "preview" $ do
 
 keysSpec :: Spec
 keysSpec = describe "keys" $ do
-  it "yields object keys as strings" $ do
-    runQueryTest "keys" "{\"a\":1,\"b\":2}"
-    `shouldReturn` Right [JSONString "a", JSONString "b"]
+  forM_ keysCases $ \(label, optic, doc, expected) ->
+    it label $ runQueryTest optic doc `shouldReturn` expected
+  forM_ keysPreviewCases $ \(label, optic, doc, expected) ->
+    it label $ runQueryPreviewTest optic doc `shouldReturn` expected
 
-  it "yields nothing for arrays" $ do
-    runQueryTest "keys" "[10,20,30]" `shouldReturn` Right []
+keysCases :: [(String, Text, Text, Either Text [JSONEvent])]
+keysCases =
+  [ ("yields object keys as strings", "keys", "{\"a\":1,\"b\":2}", Right [JSONString "a", JSONString "b"]),
+    ("yields nothing for arrays", "keys", "[10,20,30]", Right []),
+    ("yields nothing for empty containers", "keys", "{}", Right []),
+    ("yields nothing for empty arrays", "keys", "[]", Right []),
+    ("yields nothing for number scalars", "keys", "42", Right []),
+    ("yields nothing for string scalars", "keys", "\"x\"", Right []),
+    ("composes keys with a matching prism", "keys . _String", "{\"a\":1}", Right [JSONString "a"]),
+    ("composes keys with a mismatched prism", "keys . _Number", "{\"a\":1}", Right []),
+    ("composes keys after a field", "@obj . keys", "{\"obj\":{\"a\":1}}", Right [JSONString "a"])
+  ]
 
-  it "yields nothing for empty containers" $ do
-    runQueryTest "keys" "{}" `shouldReturn` Right []
-    runQueryTest "keys" "[]" `shouldReturn` Right []
-
-  it "yields nothing for scalars" $ do
-    runQueryTest "keys" "42" `shouldReturn` Right []
-    runQueryTest "keys" "\"x\"" `shouldReturn` Right []
-
-  it "composes with prisms" $ do
-    runQueryTest "keys . _String" "{\"a\":1}" `shouldReturn` Right [JSONString "a"]
-    runQueryTest "keys . _Number" "{\"a\":1}" `shouldReturn` Right []
-
-  it "composes after a field" $ do
-    runQueryTest "@obj . keys" "{\"obj\":{\"a\":1}}"
-    `shouldReturn` Right [JSONString "a"]
-
-  it "previews the first key" $ do
-    runQueryPreviewTest "keys" "{\"a\":1,\"b\":2}"
-    `shouldReturn` Right [JSONString "a"]
-
-  it "previews nothing for arrays" $ do
-    runQueryPreviewTest "keys" "[10,20]" `shouldReturn` Right []
+keysPreviewCases :: [(String, Text, Text, Either Text [JSONEvent])]
+keysPreviewCases =
+  [ ("previews the first key", "keys", "{\"a\":1,\"b\":2}", Right [JSONString "a"]),
+    ("previews nothing for arrays", "keys", "[10,20]", Right [])
+  ]
 
 --------------------------------------------------------------------------------
 -- values (objects only)
@@ -215,60 +163,44 @@ keysSpec = describe "keys" $ do
 
 valuesSpec :: Spec
 valuesSpec = describe "values" $ do
-  it "yields object values" $ do
-    runQueryTest "values" "{\"a\":1,\"b\":2}"
-    `shouldReturn` Right [JSONNumber 1, JSONNumber 2]
+  forM_ valuesCases $ \(label, optic, doc, expected) ->
+    it label $ runQueryTest optic doc `shouldReturn` expected
+  forM_ valuesPreviewCases $ \(label, optic, doc, expected) ->
+    it label $ runQueryPreviewTest optic doc `shouldReturn` expected
 
-  it "yields nothing for arrays" $ do
-    runQueryTest "values" "[1,2,3]" `shouldReturn` Right []
+valuesCases :: [(String, Text, Text, Either Text [JSONEvent])]
+valuesCases =
+  [ ("yields object values", "values", "{\"a\":1,\"b\":2}", Right [JSONNumber 1, JSONNumber 2]),
+    ("yields nothing for arrays", "values", "[1,2,3]", Right []),
+    ("yields nothing for empty objects", "values", "{}", Right []),
+    ("yields nothing for scalars", "values", "42", Right []),
+    ("yields nested containers whole", "values", "{\"a\":{\"b\":1}}", Right [JSONBeginObject, JSONObjectKey "b", JSONNumber 1, JSONEndObject]),
+    ("composes with a field", "values . @x", "{\"a\":{\"x\":1},\"b\":{\"x\":2}}", Right [JSONNumber 1, JSONNumber 2]),
+    ("returns empty when the field is missing in all values", "values . @x", "{\"a\":1}", Right [])
+  ]
 
-  it "yields nothing for empty objects" $ do
-    runQueryTest "values" "{}" `shouldReturn` Right []
-
-  it "yields nothing for scalars" $ do
-    runQueryTest "values" "42" `shouldReturn` Right []
-
-  it "yields nested containers whole" $ do
-    runQueryTest "values" "{\"a\":{\"b\":1}}"
-    `shouldReturn` Right
-      [ JSONBeginObject,
-        JSONObjectKey "b",
-        JSONNumber 1,
-        JSONEndObject
-      ]
-
-  it "composes with a field" $ do
-    runQueryTest "values . @x" "{\"a\":{\"x\":1},\"b\":{\"x\":2}}"
-    `shouldReturn` Right [JSONNumber 1, JSONNumber 2]
-
-  it "returns empty when the field is missing in all values" $ do
-    runQueryTest "values . @x" "{\"a\":1}" `shouldReturn` Right []
-
-  it "previews the first value" $ do
-    runQueryPreviewTest "values" "{\"a\":1,\"b\":2}"
-    `shouldReturn` Right [JSONNumber 1]
-
-  it "previews nothing for arrays" $ do
-    runQueryPreviewTest "values" "[1,2]" `shouldReturn` Right []
+valuesPreviewCases :: [(String, Text, Text, Either Text [JSONEvent])]
+valuesPreviewCases =
+  [ ("previews the first value", "values", "{\"a\":1,\"b\":2}", Right [JSONNumber 1]),
+    ("previews nothing for arrays", "values", "[1,2]", Right [])
+  ]
 
 --------------------------------------------------------------------------------
 -- ix
 --------------------------------------------------------------------------------
 
 ixSpec :: Spec
-ixSpec = describe "ix" $ do
-  it "yields the element at the index" $ do
-    runQueryTest "ix 0" "[7,8]" `shouldReturn` Right [JSONNumber 7]
-    runQueryTest "ix 1" "[7,8]" `shouldReturn` Right [JSONNumber 8]
+ixSpec = describe "ix" $ forM_ ixCases $ \(label, optic, doc, expected) ->
+  it label $ runQueryTest optic doc `shouldReturn` expected
 
-  it "yields nothing when out of bounds" $ do
-    runQueryTest "ix 5" "[1,2]" `shouldReturn` Right []
-
-  it "yields nothing for objects" $ do
-    runQueryTest "ix 0" "{\"a\":1}" `shouldReturn` Right []
-
-  it "yields nothing for scalars" $ do
-    runQueryTest "ix 0" "42" `shouldReturn` Right []
+ixCases :: [(String, Text, Text, Either Text [JSONEvent])]
+ixCases =
+  [ ("yields the first element", "ix 0", "[7,8]", Right [JSONNumber 7]),
+    ("yields the second element", "ix 1", "[7,8]", Right [JSONNumber 8]),
+    ("yields nothing when out of bounds", "ix 5", "[1,2]", Right []),
+    ("yields nothing for objects", "ix 0", "{\"a\":1}", Right []),
+    ("yields nothing for scalars", "ix 0", "42", Right [])
+  ]
 
 --------------------------------------------------------------------------------
 -- filter
@@ -276,44 +208,30 @@ ixSpec = describe "ix" $ do
 
 filterSpec :: Spec
 filterSpec = describe "filter" $ do
-  it "keeps array elements when the test holds" $ do
-    runQueryTest "each . filter @age == 30" "[{\"age\":30},{\"age\":20}]"
-    `shouldReturn` Right [JSONBeginObject, JSONObjectKey "age", JSONNumber 30, JSONEndObject]
+  forM_ filterCases $ \(label, optic, doc, expected) ->
+    it label $ runQueryTest optic doc `shouldReturn` expected
+  forM_ filterPreviewCases $ \(label, optic, doc, expected) ->
+    it label $ runQueryPreviewTest optic doc `shouldReturn` expected
 
-  it "keeps the whole value on any match" $ do
-    runQueryTest "filter each == 1" "[1,2,1]"
-    `shouldReturn` Right [JSONBeginArray, JSONNumber 1, JSONNumber 2, JSONNumber 1, JSONEndArray]
+filterCases :: [(String, Text, Text, Either Text [JSONEvent])]
+filterCases =
+  [ ("keeps array elements when the test holds", "each . filter @age == 30", "[{\"age\":30},{\"age\":20}]", Right [JSONBeginObject, JSONObjectKey "age", JSONNumber 30, JSONEndObject]),
+    ("keeps the whole value on any match", "filter each == 1", "[1,2,1]", Right [JSONBeginArray, JSONNumber 1, JSONNumber 2, JSONNumber 1, JSONEndArray]),
+    ("drops values when nothing matches", "each . filter @age == 30", "[{\"age\":20}]", Right []),
+    ("drops values with a missing focus", "filter @age == 30", "{\"b\":1}", Right []),
+    ("filters matching scalars", "filter id == 1", "1", Right [JSONNumber 1]),
+    ("filters mismatched scalars", "filter id == 1", "2", Right []),
+    ("composes after a filter", "each . filter @age == 30 . @name", "[{\"age\":30,\"name\":\"a\"},{\"age\":20,\"name\":\"b\"}]", Right [JSONString "a"]),
+    ("keeps nested filtered values", "filter (filter @a == 1) (== {\"a\":1})", "{\"a\":1}", Right [JSONBeginObject, JSONObjectKey "a", JSONNumber 1, JSONEndObject]),
+    ("fails when the predicate does not fit", "each . filter @a +1", "[{\"a\":\"x\"}]", Left "expected a number"),
+    ("fails when the predicate is not boolean", "each . filter @a +1", "[{\"a\":1}]", Left "filter transformation must produce a boolean"),
+    ("skips replayed containers looking for later members", "filter @a == 1 . @zzz", "{\"a\":1,\"big\":[1,2,3]}", Right [])
+  ]
 
-  it "drops values when nothing matches" $ do
-    runQueryTest "each . filter @age == 30" "[{\"age\":20}]" `shouldReturn` Right []
-
-  it "drops values with a missing focus" $ do
-    runQueryTest "filter @age == 30" "{\"b\":1}" `shouldReturn` Right []
-
-  it "filters scalars" $ do
-    runQueryTest "filter id == 1" "1" `shouldReturn` Right [JSONNumber 1]
-    runQueryTest "filter id == 1" "2" `shouldReturn` Right []
-
-  it "composes after a filter" $ do
-    runQueryTest "each . filter @age == 30 . @name" "[{\"age\":30,\"name\":\"a\"},{\"age\":20,\"name\":\"b\"}]"
-    `shouldReturn` Right [JSONString "a"]
-
-  it "keeps nested filtered values" $ do
-    runQueryTest "filter (filter @a == 1) (== {\"a\":1})" "{\"a\":1}"
-    `shouldReturn` Right [JSONBeginObject, JSONObjectKey "a", JSONNumber 1, JSONEndObject]
-
-  it "fails when the predicate does not fit" $ do
-    runQueryTest "each . filter @a +1" "[{\"a\":\"x\"}]" `shouldReturn` Left "expected a number"
-
-  it "fails when the predicate is not boolean" $ do
-    runQueryTest "each . filter @a +1" "[{\"a\":1}]" `shouldReturn` Left "filter transformation must produce a boolean"
-
-  it "previews the first kept value" $ do
-    runQueryPreviewTest "each . filter @age == 30" "[{\"age\":20},{\"age\":30}]"
-    `shouldReturn` Right [JSONBeginObject, JSONObjectKey "age", JSONNumber 30, JSONEndObject]
-
-  it "skips replayed containers looking for later members" $ do
-    runQueryTest "filter @a == 1 . @zzz" "{\"a\":1,\"big\":[1,2,3]}" `shouldReturn` Right []
+filterPreviewCases :: [(String, Text, Text, Either Text [JSONEvent])]
+filterPreviewCases =
+  [ ("previews the first kept value", "each . filter @age == 30", "[{\"age\":20},{\"age\":30}]", Right [JSONBeginObject, JSONObjectKey "age", JSONNumber 30, JSONEndObject])
+  ]
 
 --------------------------------------------------------------------------------
 -- pure vs streaming folds
@@ -377,109 +295,80 @@ differentialDocs =
 --------------------------------------------------------------------------------
 
 fieldSpec :: Spec
-fieldSpec = describe "field" $ do
-  it "extracts a field from an object" $ do
-    runQueryTest "@name" "{\"name\":\"alice\"}"
-    `shouldReturn` Right [JSONString "alice"]
+fieldSpec = describe "field" $ forM_ fieldCases $ \(label, optic, doc, expected) ->
+  it label $ runQueryTest optic doc `shouldReturn` expected
 
-  it "returns empty when field is missing" $ do
-    runQueryTest "@name" "{\"age\":30}" `shouldReturn` Right []
-
-  it "returns empty for non-object input" $ do
-    runQueryTest "@name" "42" `shouldReturn` Right []
+fieldCases :: [(String, Text, Text, Either Text [JSONEvent])]
+fieldCases =
+  [ ("extracts a field from an object", "@name", "{\"name\":\"alice\"}", Right [JSONString "alice"]),
+    ("returns empty when field is missing", "@name", "{\"age\":30}", Right []),
+    ("returns empty for non-object input", "@name", "42", Right [])
+  ]
 
 --------------------------------------------------------------------------------
 -- id
 --------------------------------------------------------------------------------
 
 idSpec :: Spec
-idSpec = describe "id" $ do
-  it "returns the input value unchanged" $ do
-    runQueryTest "id" "42" `shouldReturn` Right [JSONNumber 42]
+idSpec = describe "id" $ forM_ idCases $ \(label, optic, doc, expected) ->
+  it label $ runQueryTest optic doc `shouldReturn` expected
 
-  it "returns a string value unchanged" $ do
-    runQueryTest "id" "\"hello\"" `shouldReturn` Right [JSONString "hello"]
+idCases :: [(String, Text, Text, Either Text [JSONEvent])]
+idCases =
+  [ ("returns the input value unchanged", "id", "42", Right [JSONNumber 42]),
+    ("returns a string value unchanged", "id", "\"hello\"", Right [JSONString "hello"])
+  ]
 
 --------------------------------------------------------------------------------
 -- each on arrays
 --------------------------------------------------------------------------------
 
 eachArraySpec :: Spec
-eachArraySpec = describe "each on arrays" $ do
-  it "yields each element of a numeric array" $ do
-    runQueryTest "each" "[1,2,3]"
-    `shouldReturn` Right [JSONNumber 1, JSONNumber 2, JSONNumber 3]
+eachArraySpec = describe "each on arrays" $ forM_ eachArrayCases $ \(label, optic, doc, expected) ->
+  it label $ runQueryTest optic doc `shouldReturn` expected
 
-  it "yields each element of a string array" $ do
-    runQueryTest "each" "[\"a\",\"b\",\"c\"]"
-    `shouldReturn` Right [JSONString "a", JSONString "b", JSONString "c"]
-
-  it "yields a single-element array" $ do
-    runQueryTest "each" "[42]" `shouldReturn` Right [JSONNumber 42]
-
-  it "yields nothing for an empty array" $ do
-    runQueryTest "each" "[]" `shouldReturn` Right []
-
-  it "yields nothing for non-container input" $ do
-    runQueryTest "each" "42" `shouldReturn` Right []
-
-  it "yields nested array elements" $ do
-    runQueryTest "each" "[[1,2],[3]]"
-    `shouldReturn` Right
-      [ JSONBeginArray,
-        JSONNumber 1,
-        JSONNumber 2,
-        JSONEndArray,
-        JSONBeginArray,
-        JSONNumber 3,
-        JSONEndArray
-      ]
+eachArrayCases :: [(String, Text, Text, Either Text [JSONEvent])]
+eachArrayCases =
+  [ ("yields each element of a numeric array", "each", "[1,2,3]", Right [JSONNumber 1, JSONNumber 2, JSONNumber 3]),
+    ("yields each element of a string array", "each", "[\"a\",\"b\",\"c\"]", Right [JSONString "a", JSONString "b", JSONString "c"]),
+    ("yields a single-element array", "each", "[42]", Right [JSONNumber 42]),
+    ("yields nothing for an empty array", "each", "[]", Right []),
+    ("yields nothing for non-container input", "each", "42", Right []),
+    ("yields nested array elements", "each", "[[1,2],[3]]", Right [JSONBeginArray, JSONNumber 1, JSONNumber 2, JSONEndArray, JSONBeginArray, JSONNumber 3, JSONEndArray])
+  ]
 
 --------------------------------------------------------------------------------
 -- each on objects
 --------------------------------------------------------------------------------
 
 eachObjectSpec :: Spec
-eachObjectSpec = describe "each on objects" $ do
-  it "yields each value of an object" $ do
-    runQueryTest "each" "{\"a\":1,\"b\":2}"
-    `shouldReturn` Right [JSONNumber 1, JSONNumber 2]
+eachObjectSpec = describe "each on objects" $ forM_ eachObjectCases $ \(label, optic, doc, expected) ->
+  it label $ runQueryTest optic doc `shouldReturn` expected
 
-  it "yields nothing for an empty object" $ do
-    runQueryTest "each" "{}" `shouldReturn` Right []
+eachObjectCases :: [(String, Text, Text, Either Text [JSONEvent])]
+eachObjectCases =
+  [ ("yields each value of an object", "each", "{\"a\":1,\"b\":2}", Right [JSONNumber 1, JSONNumber 2]),
+    ("yields nothing for an empty object", "each", "{}", Right [])
+  ]
 
 --------------------------------------------------------------------------------
 -- each composed with field
 --------------------------------------------------------------------------------
 
 eachCompositionSpec :: Spec
-eachCompositionSpec = describe "each . field composition" $ do
-  it "extracts field from each array element" $ do
-    runQueryTest "each . @name" "[{\"name\":\"alice\"},{\"name\":\"bob\"}]"
-    `shouldReturn` Right [JSONString "alice", JSONString "bob"]
+eachCompositionSpec = describe "each . field composition" $ forM_ eachCompositionCases $ \(label, optic, doc, expected) ->
+  it label $ runQueryTest optic doc `shouldReturn` expected
 
-  it "extracts field from each object value" $ do
-    runQueryTest "each . @x" "{\"a\":{\"x\":1},\"b\":{\"x\":2}}"
-    `shouldReturn` Right [JSONNumber 1, JSONNumber 2]
-
-  it "returns empty when field is missing in some elements" $ do
-    runQueryTest "each . @name" "[{\"name\":\"alice\"},{\"age\":30}]"
-    `shouldReturn` Right [JSONString "alice"]
-
-  it "returns empty when field missing in all elements" $ do
-    runQueryTest "each . @name" "[{\"a\":1},{\"b\":2}]" `shouldReturn` Right []
-
-  it "extracts field from each element with multiple fields" $ do
-    runQueryTest "each . @id" "[{\"name\":\"alice\",\"id\":\"1\"},{\"name\":\"bob\",\"id\":\"2\"}]"
-    `shouldReturn` Right [JSONString "1", JSONString "2"]
-
-  it "field . each distributes field then each" $ do
-    runQueryTest "@items . each" "{\"items\":[1,2,3]}"
-    `shouldReturn` Right [JSONNumber 1, JSONNumber 2, JSONNumber 3]
-
-  it "each . each flattens nested arrays" $ do
-    runQueryTest "each . each" "[[1,2],[3,4]]"
-    `shouldReturn` Right [JSONNumber 1, JSONNumber 2, JSONNumber 3, JSONNumber 4]
+eachCompositionCases :: [(String, Text, Text, Either Text [JSONEvent])]
+eachCompositionCases =
+  [ ("extracts field from each array element", "each . @name", "[{\"name\":\"alice\"},{\"name\":\"bob\"}]", Right [JSONString "alice", JSONString "bob"]),
+    ("extracts field from each object value", "each . @x", "{\"a\":{\"x\":1},\"b\":{\"x\":2}}", Right [JSONNumber 1, JSONNumber 2]),
+    ("returns empty when field is missing in some elements", "each . @name", "[{\"name\":\"alice\"},{\"age\":30}]", Right [JSONString "alice"]),
+    ("returns empty when field missing in all elements", "each . @name", "[{\"a\":1},{\"b\":2}]", Right []),
+    ("extracts field from each element with multiple fields", "each . @id", "[{\"name\":\"alice\",\"id\":\"1\"},{\"name\":\"bob\",\"id\":\"2\"}]", Right [JSONString "1", JSONString "2"]),
+    ("field . each distributes field then each", "@items . each", "{\"items\":[1,2,3]}", Right [JSONNumber 1, JSONNumber 2, JSONNumber 3]),
+    ("each . each flattens nested arrays", "each . each", "[[1,2],[3,4]]", Right [JSONNumber 1, JSONNumber 2, JSONNumber 3, JSONNumber 4])
+  ]
 
 chunkedFoldSpec :: Spec
 chunkedFoldSpec = describe "chunked input" $ do
@@ -489,13 +378,13 @@ chunkedFoldSpec = describe "chunked input" $ do
         Left err -> expectationFailure $ "bad optic: " <> show err
         Right optic -> do
           expected <- runFoldTest optic doc
-          forM_ (chunkSplits doc) $ \chunks -> do
+          forM_ (splits doc) $ \chunks -> do
             actual <- runFoldChunks optic chunks
             actual `shouldBe` expected
 
   it "preview never touches invalid tails under any split" $ do
-    forM_ (chunkSplits "[1, 2,,]") $ \chunks -> do
-      actual <- runPreviewChunks' "each" chunks
+    forM_ (splits "[1, 2,,]") $ \chunks -> do
+      actual <- runQueryPreviewChunks "each" chunks
       actual `shouldBe` Right [JSONNumber 1]
 
   it "malformed inputs fail the same chunked as whole" $ do
@@ -504,16 +393,9 @@ chunkedFoldSpec = describe "chunked input" $ do
       case parseOptic opticStr of
         Left err -> expectationFailure $ "bad optic: " <> show err
         Right optic ->
-          forM_ (chunkSplits doc) $ \chunks -> do
+          forM_ (splits doc) $ \chunks -> do
             actual <- runFoldChunks optic chunks
             actual `shouldBe` expected
-
--- | Parse an optic string and preview it against chunked JSON input.
-runPreviewChunks' :: Text -> [Text] -> IO (Either Text [JSONEvent])
-runPreviewChunks' opticStr chunks =
-  case parseOptic opticStr of
-    Left err -> pure (Left (show err))
-    Right optic -> runPreviewChunks optic chunks
 
 foldChunkCases :: [(Text, Text)]
 foldChunkCases =
@@ -554,44 +436,21 @@ malformedChunkCases =
     ("id", "[\"\\uD83D\\uxyz\"]")
   ]
 
--- | Run a fold optic over every top-level document across text chunks.
-runFoldDocumentsTest :: Optic -> [Text] -> IO (Either Text [JSONEvent])
-runFoldDocumentsTest optic chunks = do
-  result <- runEarly (\early -> S.toList_ $ foldDocuments early optic cursor)
-  pure (first renderHQError result)
-  where
-    textStream :: StreamIO Text ()
-    textStream = S.each chunks
-    cursor = Cursor [] initialDecoder textStream
-
--- | Parse an optic string and run it over every top-level document.
-runQueryDocumentsTest :: Text -> [Text] -> IO (Either Text [JSONEvent])
-runQueryDocumentsTest opticStr chunks = case parseOptic opticStr of
-  Left err -> pure (Left (show err))
-  Right optic -> runFoldDocumentsTest optic chunks
-
 multiDocumentSpec :: Spec
 multiDocumentSpec = describe "multiple documents" $ do
-  it "folds the same field across documents" $ do
-    runQueryDocumentsTest "@a" ["{\"a\":1} {\"a\":2}"]
-      `shouldReturn` Right [JSONNumber 1, JSONNumber 2]
-
-  it "skips documents without a match" $ do
-    runQueryDocumentsTest "@a" ["{\"a\":1} {\"b\":2} [3]"]
-      `shouldReturn` Right [JSONNumber 1]
-
-  it "continues across chunk splits at document boundaries" $ do
-    runQueryDocumentsTest "@a" ["{\"a\":1} {\"a", "\":2}"]
-      `shouldReturn` Right [JSONNumber 1, JSONNumber 2]
-
-  it "fails on trailing garbage" $ do
-    runQueryDocumentsTest "@a" ["{\"a\":1} garbage"]
-      `shouldReturn` Left "unexpected character 'g' in JSON input"
-
-  it "yields nothing for empty and whitespace-only input" $ do
-    runQueryDocumentsTest "@a" [] `shouldReturn` Right []
-    runQueryDocumentsTest "@a" ["  \n "] `shouldReturn` Right []
+  forM_ multiDocumentCases $ \(label, optic, chunks, expected) ->
+    it label $ runQueryDocumentsTest optic chunks `shouldReturn` expected
 
   it "previews only the first document" $ do
     runQueryPreviewTest "@a" "{\"a\":1} {\"a\":2}"
       `shouldReturn` Right [JSONNumber 1]
+
+multiDocumentCases :: [(String, Text, [Text], Either Text [JSONEvent])]
+multiDocumentCases =
+  [ ("folds the same field across documents", "@a", ["{\"a\":1} {\"a\":2}"], Right [JSONNumber 1, JSONNumber 2]),
+    ("skips documents without a match", "@a", ["{\"a\":1} {\"b\":2} [3]"], Right [JSONNumber 1]),
+    ("continues across chunk splits at document boundaries", "@a", ["{\"a\":1} {\"a", "\":2}"], Right [JSONNumber 1, JSONNumber 2]),
+    ("fails on trailing garbage", "@a", ["{\"a\":1} garbage"], Left "unexpected character 'g' in JSON input"),
+    ("yields nothing for empty input", "@a", [], Right []),
+    ("yields nothing for whitespace-only input", "@a", ["  \n "], Right [])
+  ]

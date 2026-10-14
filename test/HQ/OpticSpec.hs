@@ -57,42 +57,12 @@ spec = describe "HQ.Optic" $ do
     (Ix 0 == Ix 1) `shouldBe` False
 
   describe "inferOpticType classifications" $ do
-    it "types id as a lens" $ do
-      opticTypeOf Id `shouldBe` OpticLens
-
-    it "types fields and indices as affine" $ do
-      opticTypeOf (Field "a") `shouldBe` OpticAffineTraversal
-      opticTypeOf (Ix 0) `shouldBe` OpticAffineTraversal
-
-    it "types type prisms as prisms" $ do
-      opticTypeOf (Prism PString) `shouldBe` OpticPrism
-      opticTypeOf (Prism PNull) `shouldBe` OpticPrism
-
-    it "types _Just as affine rather than prism" $ do
-      opticTypeOf PrismJust `shouldBe` OpticAffineTraversal
-
-    it "types each/keys/values as traversals" $ do
-      opticTypeOf Each `shouldBe` OpticTraversal
-      opticTypeOf Keys `shouldBe` OpticTraversal
-      opticTypeOf Values `shouldBe` OpticTraversal
-
-    it "types compositions with the lattice" $ do
-      opticTypeOf (Compose (Field "a") Each) `shouldBe` OpticTraversal
-      opticTypeOf (Compose (Field "a") (Ix 0)) `shouldBe` OpticAffineTraversal
-      opticTypeOf (Compose (Prism PString) PrismJust) `shouldBe` OpticAffineTraversal
-
-    it "types filter as affine" $ do
-      opticTypeOf (Filter (Field "a") (Equal (Number 1))) `shouldBe` OpticAffineTraversal
-      opticTypeOf (Compose Each (Filter (Field "a") (Equal (Number 1)))) `shouldBe` OpticTraversal
+    it "classifies optics" $ forM_ opticTypeCases $ \(optic, expected) ->
+      opticTypeOf optic `shouldBe` expected
 
   describe "appendOptic monoid" $ do
-    it "eliminates Id on either side" $ do
-      appendOptic Id (Field "a") `shouldBe` Field "a"
-      appendOptic (Field "a") Id `shouldBe` Field "a"
-      appendOptic Id Id `shouldBe` Id
-
-    it "associates Compose otherwise" $ do
-      appendOptic Each (Field "a") `shouldBe` Compose Each (Field "a")
+    it "combines optics" $ forM_ appendCases $ \(l, r, expected) ->
+      appendOptic l r `shouldBe` expected
 
     it "satisfies the monoid identity laws" $ do
       (mempty :: Optic) `shouldBe` Id
@@ -107,24 +77,51 @@ spec = describe "HQ.Optic" $ do
       opticTypeOf ((l <> c) <> r) `shouldBe` opticTypeOf (l <> (c <> r))
 
   describe "inferFocusType classifications" $ do
-    it "leaves unknown shapes as any" $ do
-      opticFocusOf (Field "a") `shouldBe` ValueAny
-      opticFocusOf Each `shouldBe` ValueAny
-      opticFocusOf Values `shouldBe` ValueAny
-      opticFocusOf Id `shouldBe` ValueAny
-      opticFocusOf (Ix 0) `shouldBe` ValueAny
-      opticFocusOf PrismJust `shouldBe` ValueAny
-      opticFocusOf (Filter (Field "a") (Equal (Number 1))) `shouldBe` ValueAny
+    it "infers focus types" $ forM_ focusCases $ \(optic, expected) ->
+      opticFocusOf optic `shouldBe` expected
 
-    it "pins prisms and keys to exact types" $ do
-      opticFocusOf (Prism PString) `shouldBe` ValueString
-      opticFocusOf (Prism PNumber) `shouldBe` ValueNumber
-      opticFocusOf (Prism PBool) `shouldBe` ValueBool
-      opticFocusOf (Prism PNull) `shouldBe` ValueNull
-      opticFocusOf (Prism PArray) `shouldBe` ValueArray
-      opticFocusOf (Prism PObject) `shouldBe` ValueObject
-      opticFocusOf Keys `shouldBe` ValueString
+opticTypeCases :: [(Optic, OpticType)]
+opticTypeCases =
+  [ (Id, OpticLens),
+    (Field "a", OpticAffineTraversal),
+    (Ix 0, OpticAffineTraversal),
+    (Prism PString, OpticPrism),
+    (Prism PNull, OpticPrism),
+    (PrismJust, OpticAffineTraversal),
+    (Each, OpticTraversal),
+    (Keys, OpticTraversal),
+    (Values, OpticTraversal),
+    (Compose (Field "a") Each, OpticTraversal),
+    (Compose (Field "a") (Ix 0), OpticAffineTraversal),
+    (Compose (Prism PString) PrismJust, OpticAffineTraversal),
+    (Filter (Field "a") (Equal (Number 1)), OpticAffineTraversal),
+    (Compose Each (Filter (Field "a") (Equal (Number 1))), OpticTraversal)
+  ]
 
-    it "takes the rightmost focus through composition" $ do
-      opticFocusOf (Compose Each (Prism PNumber)) `shouldBe` ValueNumber
-      opticFocusOf (Compose (Field "a") (Field "b")) `shouldBe` ValueAny
+appendCases :: [(Optic, Optic, Optic)]
+appendCases =
+  [ (Id, Field "a", Field "a"),
+    (Field "a", Id, Field "a"),
+    (Id, Id, Id),
+    (Each, Field "a", Compose Each (Field "a"))
+  ]
+
+focusCases :: [(Optic, ValueType)]
+focusCases =
+  [ (Field "a", ValueAny),
+    (Each, ValueAny),
+    (Values, ValueAny),
+    (Id, ValueAny),
+    (Ix 0, ValueAny),
+    (PrismJust, ValueAny),
+    (Filter (Field "a") (Equal (Number 1)), ValueAny),
+    (Prism PString, ValueString),
+    (Prism PNumber, ValueNumber),
+    (Prism PBool, ValueBool),
+    (Prism PNull, ValueNull),
+    (Prism PArray, ValueArray),
+    (Prism PObject, ValueObject),
+    (Keys, ValueString),
+    (Compose Each (Prism PNumber), ValueNumber),
+    (Compose (Field "a") (Field "b"), ValueAny)
+  ]

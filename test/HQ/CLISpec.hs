@@ -28,21 +28,8 @@ spec = do
             Failure _ -> Left "parse failure"
             CompletionInvoked _ -> Left "completion invoked"
 
-    it "parses preview with a field optic" $ do
-      optQuery <$> parseCLI ["preview", "@name"]
-      `shouldBe` Right (Preview (Field "name"))
-
-    it "parses preview with each" $ do
-      optQuery <$> parseCLI ["preview", "each"]
-      `shouldBe` Right (Preview Each)
-
-    it "parses preview with a composed optic" $ do
-      optQuery <$> parseCLI ["preview", "@a . @b"]
-      `shouldBe` Right (Preview (Compose (Field "a") (Field "b")))
-
-    it "parses fold" $ do
-      optQuery <$> parseCLI ["fold", "each"]
-      `shouldBe` Right (Fold Each)
+    it "parses queries" $ forM_ queryCases $ \(args, expected) ->
+      optQuery <$> parseCLI args `shouldBe` Right expected
 
     it "combines preview with compact"
       $ case parseCLI ["preview", "@name", "-c"] of
@@ -58,30 +45,6 @@ spec = do
           optQuery opts `shouldBe` Preview (Field "name")
           optRaw opts `shouldBe` Raw
           optJoin opts `shouldBe` Join
-
-    it "parses set with a field optic and value" $ do
-      optQuery <$> parseCLI ["set", "@name", "\"bob\""]
-      `shouldBe` Right (Over (Field "name") (Const (String "bob")))
-
-    it "parses set with each and a number" $ do
-      optQuery <$> parseCLI ["set", "each", "0"]
-      `shouldBe` Right (Over Each (Const (Number 0)))
-
-    it "parses set with a composed optic" $ do
-      optQuery <$> parseCLI ["set", "@users.each.@name", "\"anon\""]
-      `shouldBe` Right
-        ( Over
-            (Compose (Compose (Field "users") Each) (Field "name"))
-            (Const (String "anon"))
-        )
-
-    it "parses delete with a field optic" $ do
-      optQuery <$> parseCLI ["delete", "@name"]
-      `shouldBe` Right (Delete (Field "name"))
-
-    it "parses delete with each" $ do
-      optQuery <$> parseCLI ["delete", "each"]
-      `shouldBe` Right (Delete Each)
 
     it "combines set with compact" $ do
       case parseCLI ["set", "@name", "\"bob\"", "-c"] of
@@ -99,3 +62,20 @@ spec = do
       case result :: Either ExitCode () of
         Left code -> code `shouldNotBe` ExitSuccess
         Right () -> expectationFailure "expected the query to fail on an unopenable file"
+
+queryCases :: [([String], Query)]
+queryCases =
+  [ (["preview", "@name"], Preview (Field "name")),
+    (["preview", "each"], Preview Each),
+    (["preview", "@a . @b"], Preview (Compose (Field "a") (Field "b"))),
+    (["fold", "each"], Fold Each),
+    (["set", "@name", "\"bob\""], Over (Field "name") (Const (String "bob"))),
+    (["set", "each", "0"], Over Each (Const (Number 0))),
+    ( ["set", "@users.each.@name", "\"anon\""],
+      Over
+        (Compose (Compose (Field "users") Each) (Field "name"))
+        (Const (String "anon"))
+    ),
+    (["delete", "@name"], Delete (Field "name")),
+    (["delete", "each"], Delete Each)
+  ]

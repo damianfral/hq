@@ -15,178 +15,11 @@ import Test.Syd
 spec :: Spec
 spec = describe "HQ.Transformation.AST" $ do
   describe "inferTransformationType" $ do
-    it "tags a numeric step as number to number" $ do
-      inferTransformationType (Add 1)
-        `shouldBe` Right (TransformationType ValueNumber ValueNumber)
+    it "tags well-typed transformations" $ forM_ happyCases $ \(t, expected) ->
+      inferTransformationType t `shouldBe` Right expected
 
-    it "tags less-than as number to boolean" $ do
-      inferTransformationType (Lt 1)
-        `shouldBe` Right (TransformationType ValueNumber ValueBool)
-
-    it "tags less-than-or-equal as number to boolean" $ do
-      inferTransformationType (Lte 1)
-        `shouldBe` Right (TransformationType ValueNumber ValueBool)
-
-    it "rejects division by zero" $ do
-      inferTransformationType (Divide 0)
-        `shouldBe` Left (InvalidDivideByZero (Divide 0))
-
-    it "tags a string step as string to string" $ do
-      inferTransformationType (ConcatString " x")
-        `shouldBe` Right (TransformationType ValueString ValueString)
-
-    it "tags stripPrefix as string to string" $ do
-      inferTransformationType (StripPrefix "pre")
-        `shouldBe` Right (TransformationType ValueString ValueString)
-
-    it "tags stripSuffix as string to string" $ do
-      inferTransformationType (StripSuffix "suf")
-        `shouldBe` Right (TransformationType ValueString ValueString)
-
-    it "tags isPrefixOf as string to boolean" $ do
-      inferTransformationType (IsPrefixOf "pre")
-        `shouldBe` Right (TransformationType ValueString ValueBool)
-
-    it "tags isSuffixOf as string to boolean" $ do
-      inferTransformationType (IsSuffixOf "suf")
-        `shouldBe` Right (TransformationType ValueString ValueBool)
-
-    it "tags isInfixOf as string to boolean" $ do
-      inferTransformationType (IsInfixOf "fix")
-        `shouldBe` Right (TransformationType ValueString ValueBool)
-
-    it "tags isEmpty as array to boolean" $ do
-      inferTransformationType IsEmpty
-        `shouldBe` Right (TransformationType ValueArray ValueBool)
-
-    it "tags length as array to number" $ do
-      inferTransformationType ArrayLength
-        `shouldBe` Right (TransformationType ValueArray ValueNumber)
-
-    it "tags reverse as array to array" $ do
-      inferTransformationType ArrayReverse
-        `shouldBe` Right (TransformationType ValueArray ValueArray)
-
-    it "tags unique as array to array" $ do
-      inferTransformationType ArrayUnique
-        `shouldBe` Right (TransformationType ValueArray ValueArray)
-
-    it "tags sort as array to array" $ do
-      inferTransformationType ArraySort
-        `shouldBe` Right (TransformationType ValueArray ValueArray)
-
-    it "tags merge as object to object" $ do
-      inferTransformationType (Merge (KeyMap.fromList [("b", Number 1)]))
-        `shouldBe` Right (TransformationType ValueObject ValueObject)
-
-    it "tags deepMerge as object to object" $ do
-      inferTransformationType (DeepMerge (KeyMap.fromList [("b", Number 1)]))
-        `shouldBe` Right (TransformationType ValueObject ValueObject)
-
-    it "tags a constant as any input to its own type" $ do
-      inferTransformationType (Const (Number 3))
-        `shouldBe` Right (TransformationType ValueAny ValueNumber)
-
-    it "composes a constant before a step" $ do
-      inferTransformationType (Compose (Const (Number 3)) (Add 1))
-        `shouldBe` Right (TransformationType ValueNumber ValueNumber)
-
-    it "composes a step before a constant" $ do
-      inferTransformationType (Compose (Add 1) (Const (Number 3)))
-        `shouldBe` Right (TransformationType ValueAny ValueNumber)
-
-    it "rejects a step before a mismatched constant" $ do
-      let expected =
-            InvalidCompose
-              (Compose (Add 1) (Const (String "x")))
-              ValueString
-              ValueNumber
-      case inferTransformationType (Compose (Add 1) (Const (String "x"))) of
-        Left err -> err `shouldBe` expected
-        Right _ -> expectationFailure "expected an InvalidCompose"
-
-    it "types a composition right to left" $ do
-      inferTransformationType (Compose (Add 1) (Multiply 2))
-        `shouldBe` Right (TransformationType ValueNumber ValueNumber)
-
-    it "composes a boolean check inside a chain" $ do
-      -- 'equal' accepts any input value, so the composition's input is Any.
-      inferTransformationType (Compose Not (Equal (Number 1)))
-        `shouldBe` Right (TransformationType ValueAny ValueBool)
-
-    it "types or as boolean" $ do
-      inferTransformationType (Or (Equal (Number 1)) (Equal (Number 2)))
-        `shouldBe` Right (TransformationType ValueAny ValueBool)
-
-    it "types and as boolean" $ do
-      inferTransformationType (And (Equal (Number 1)) (Equal (Number 1)))
-        `shouldBe` Right (TransformationType ValueAny ValueBool)
-
-    it "types xor as boolean" $ do
-      inferTransformationType (Xor (Equal (Number 1)) (Equal (Number 2)))
-        `shouldBe` Right (TransformationType ValueAny ValueBool)
-
-    it "accepts equal after a step of any type" $ do
-      inferTransformationType (Compose (Equal (Number 1)) Trim)
-        `shouldBe` Right (TransformationType ValueString ValueBool)
-
-    it "rejects or with a non-boolean left branch" $ do
-      let bad = Or (Add 1) (Equal (Number 2))
-      case inferTransformationType bad of
-        Left err -> err `shouldBe` InvalidOr bad ValueNumber
-        Right _ -> expectationFailure "expected an InvalidOr"
-
-    it "rejects or with a non-boolean right branch" $ do
-      let bad = Or (Equal (Number 1)) (Add 2)
-      case inferTransformationType bad of
-        Left err -> err `shouldBe` InvalidOr bad ValueNumber
-        Right _ -> expectationFailure "expected an InvalidOr"
-
-    it "rejects and with a non-boolean left branch" $ do
-      let bad = And (Add 1) (Equal (Number 2))
-      case inferTransformationType bad of
-        Left err -> err `shouldBe` InvalidAnd bad ValueNumber
-        Right _ -> expectationFailure "expected an InvalidAnd"
-
-    it "rejects xor with a non-boolean right branch" $ do
-      let bad = Xor (Equal (Number 1)) (Add 2)
-      case inferTransformationType bad of
-        Left err -> err `shouldBe` InvalidXor bad ValueNumber
-        Right _ -> expectationFailure "expected an InvalidXor"
-
-    it "rejects a composition whose seam does not match" $ do
-      let expected =
-            InvalidCompose
-              (Compose (Add 1) (Equal (Number 3)))
-              ValueBool
-              ValueNumber
-      case inferTransformationType (Compose (Add 1) (Equal (Number 3))) of
-        Left err -> err `shouldBe` expected
-        Right _ -> expectationFailure "expected an InvalidCompose"
-
-    it "rejects a composition of unrelated types" $ do
-      let expected =
-            InvalidCompose
-              (Compose (ConcatString " x") (Add 1))
-              ValueNumber
-              ValueString
-      case inferTransformationType (Compose (ConcatString " x") (Add 1)) of
-        Left err -> err `shouldBe` expected
-        Right _ -> expectationFailure "expected an InvalidCompose"
-
-    it "rejects length before a string step" $ do
-      let expected =
-            InvalidCompose
-              (Compose (StripPrefix "a") ArrayLength)
-              ValueNumber
-              ValueString
-      case inferTransformationType (Compose (StripPrefix "a") ArrayLength) of
-        Left err -> err `shouldBe` expected
-        Right _ -> expectationFailure "expected an InvalidCompose"
-
-    it "accepts a predicate after an array step" $ do
-      inferTransformationType (Compose IsEmpty ArrayReverse)
-        `shouldBe` Right (TransformationType ValueArray ValueBool)
+    it "rejects ill-typed transformations" $ forM_ errorCases $ \(t, expected) ->
+      inferTransformationType t `shouldBe` Left expected
 
     it "reports the failing composition in DSL syntax" $ do
       case inferTransformationType (Compose (Add 1) (Equal (Number 3))) of
@@ -201,3 +34,46 @@ spec = describe "HQ.Transformation.AST" $ do
         `shouldBe` ("== 1 and (== 2 or == 3)" :: String)
       show (Xor (And (Equal (Number 1)) (Equal (Number 2))) (Equal (Number 3)))
         `shouldBe` ("== 1 and == 2 xor == 3" :: String)
+
+happyCases :: [(Transformation, TransformationType)]
+happyCases =
+  [ (Add 1, TransformationType ValueNumber ValueNumber),
+    (Lt 1, TransformationType ValueNumber ValueBool),
+    (Lte 1, TransformationType ValueNumber ValueBool),
+    (ConcatString " x", TransformationType ValueString ValueString),
+    (StripPrefix "pre", TransformationType ValueString ValueString),
+    (StripSuffix "suf", TransformationType ValueString ValueString),
+    (IsPrefixOf "pre", TransformationType ValueString ValueBool),
+    (IsSuffixOf "suf", TransformationType ValueString ValueBool),
+    (IsInfixOf "fix", TransformationType ValueString ValueBool),
+    (IsEmpty, TransformationType ValueArray ValueBool),
+    (ArrayLength, TransformationType ValueArray ValueNumber),
+    (ArrayReverse, TransformationType ValueArray ValueArray),
+    (ArrayUnique, TransformationType ValueArray ValueArray),
+    (ArraySort, TransformationType ValueArray ValueArray),
+    (Merge (KeyMap.fromList [("b", Number 1)]), TransformationType ValueObject ValueObject),
+    (DeepMerge (KeyMap.fromList [("b", Number 1)]), TransformationType ValueObject ValueObject),
+    (Const (Number 3), TransformationType ValueAny ValueNumber),
+    (Compose (Const (Number 3)) (Add 1), TransformationType ValueNumber ValueNumber),
+    (Compose (Add 1) (Const (Number 3)), TransformationType ValueAny ValueNumber),
+    (Compose (Add 1) (Multiply 2), TransformationType ValueNumber ValueNumber),
+    (Compose Not (Equal (Number 1)), TransformationType ValueAny ValueBool),
+    (Or (Equal (Number 1)) (Equal (Number 2)), TransformationType ValueAny ValueBool),
+    (And (Equal (Number 1)) (Equal (Number 1)), TransformationType ValueAny ValueBool),
+    (Xor (Equal (Number 1)) (Equal (Number 2)), TransformationType ValueAny ValueBool),
+    (Compose (Equal (Number 1)) Trim, TransformationType ValueString ValueBool),
+    (Compose IsEmpty ArrayReverse, TransformationType ValueArray ValueBool)
+  ]
+
+errorCases :: [(Transformation, TransformationTypeError)]
+errorCases =
+  [ (Divide 0, InvalidDivideByZero (Divide 0)),
+    (Compose (Add 1) (Const (String "x")), InvalidCompose (Compose (Add 1) (Const (String "x"))) ValueString ValueNumber),
+    (Or (Add 1) (Equal (Number 2)), InvalidOr (Or (Add 1) (Equal (Number 2))) ValueNumber),
+    (Or (Equal (Number 1)) (Add 2), InvalidOr (Or (Equal (Number 1)) (Add 2)) ValueNumber),
+    (And (Add 1) (Equal (Number 2)), InvalidAnd (And (Add 1) (Equal (Number 2))) ValueNumber),
+    (Xor (Equal (Number 1)) (Add 2), InvalidXor (Xor (Equal (Number 1)) (Add 2)) ValueNumber),
+    (Compose (Add 1) (Equal (Number 3)), InvalidCompose (Compose (Add 1) (Equal (Number 3))) ValueBool ValueNumber),
+    (Compose (ConcatString " x") (Add 1), InvalidCompose (Compose (ConcatString " x") (Add 1)) ValueNumber ValueString),
+    (Compose (StripPrefix "a") ArrayLength, InvalidCompose (Compose (StripPrefix "a") ArrayLength) ValueNumber ValueString)
+  ]

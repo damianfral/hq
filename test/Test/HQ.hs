@@ -8,7 +8,6 @@ module Test.HQ
     runStreaming,
     drainCollect,
     splits,
-    chunkSplits,
     validPullCorpus,
     malformedPullCorpus,
     decodeShown,
@@ -71,16 +70,6 @@ decodeShown :: [Text] -> Either Text [JSONEvent]
 decodeShown chunks = case decodeChunks chunks of
   Left err -> Left (renderHQError (HQDecodeError err))
   Right events -> Right events
-
--- | Chunkings: whole input, every two-way split, and one-character
--- chunks for short inputs.
-chunkSplits :: Text -> [[Text]]
-chunkSplits input
-  | T.null input = [[input]]
-  | otherwise =
-      [input]
-        : [[T.take n input, T.drop n input] | n <- [1 .. T.length input - 1]]
-          ++ [[T.singleton c | c <- toString input] | T.length input <= 24]
 
 --------------------------------------------------------------------------------
 -- Shared corpus

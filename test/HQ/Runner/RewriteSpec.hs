@@ -13,6 +13,7 @@ import HQ.JSON.Decoder (StreamIO, initialDecoder)
 import HQ.JSON.Encoder
 import HQ.JSON.Event (JSONEvent (..), eventsToValue)
 import HQ.JSON.Parser (parseValueEvents)
+import HQ.Optic (Optic)
 import HQ.Optic.Parser (parseOptic)
 import HQ.Runner (rewriteDocuments)
 import HQ.Runner.Cursor (Cursor (..))
@@ -22,7 +23,7 @@ import HQ.Transformation
 import Relude hiding (Compose, Const, and, id, length, many, not, or, reverse, some, subtract, toStrict)
 import Streaming (Of (..))
 import Streaming.Prelude qualified as S
-import Test.HQ (chunkSplits)
+import Test.HQ (splits)
 import Test.Syd
 
 spec :: Spec
@@ -86,7 +87,7 @@ compactContainerSpec = describe "compact container capture" $ do
         Left err -> expectationFailure $ "bad optic: " <> show err
         Right optic -> do
           expected <- runRewriteChunks (\early -> runOver early optic transformation testConfig) [doc]
-          forM_ (chunkSplits doc) $ \chunks -> do
+          forM_ (splits doc) $ \chunks -> do
             actual <- runRewriteChunks (\early -> runOver early optic transformation compactTestConfig) chunks
             actual `shouldBe` expected
   it "delete agrees with the event path under every split" $ do
@@ -95,13 +96,13 @@ compactContainerSpec = describe "compact container capture" $ do
         Left err -> expectationFailure $ "bad optic: " <> show err
         Right optic -> do
           expected <- runRewriteChunks (\early -> runDelete early optic testConfig) [doc]
-          forM_ (chunkSplits doc) $ \chunks -> do
+          forM_ (splits doc) $ \chunks -> do
             actual <- runRewriteChunks (\early -> runDelete early optic compactTestConfig) chunks
             actual `shouldBe` expected
   it "fails exactly where the event path fails" $ do
     Right testOptic <- pure (parseOptic "@a")
     forM_ malformedContainerCorpus $ \doc -> do
-      forM_ (chunkSplits doc) $ \chunks -> do
+      forM_ (splits doc) $ \chunks -> do
         pretty <- runRewriteChunks (\early -> runDelete early testOptic testConfig) chunks
         compact <- runRewriteChunks (\early -> runDelete early testOptic compactTestConfig) chunks
         pretty `shouldSatisfy` isLeft
@@ -154,15 +155,21 @@ runRewriteChunks mkRun chunks = do
     textStream = S.each chunks
     cursor = Cursor [] initialDecoder textStream
 
+-- | Parse an optic string and run the continuation, mapping optic
+-- syntax errors like any other failure.
+withOptic :: Text -> (Optic -> IO (Either Text [JSONEvent])) -> IO (Either Text [JSONEvent])
+withOptic opticStr f = case parseOptic opticStr of
+  Left err -> pure (Left (show err))
+  Right optic -> f optic
+
 -- | Parse an optic string and a replacement value, run @set@ against
 -- JSON input, and collect the rewritten document's events.
 --
 -- @set@ is @over@ with a constant transformation, so the harness drives
 -- 'runOver' with 'Const'.
 runSetTest :: Text -> Text -> Text -> IO (Either Text [JSONEvent])
-runSetTest opticStr valueStr jsonInput = case parseOptic opticStr of
-  Left err -> pure (Left (show err))
-  Right optic -> case parseValueEvents valueStr of
+runSetTest opticStr valueStr jsonInput = withOptic opticStr $ \optic ->
+  case parseValueEvents valueStr of
     Left err -> pure (Left err)
     Right events -> case eventsToValue events of
       Left err -> pure (Left (renderHQError (HQRunnerError err)))
@@ -172,555 +179,122 @@ runSetTest opticStr valueStr jsonInput = case parseOptic opticStr of
 -- | Parse an optic string and run @delete@ against JSON input,
 -- collecting the rewritten document's events.
 runDeleteTest :: Text -> Text -> IO (Either Text [JSONEvent])
-runDeleteTest opticStr jsonInput = case parseOptic opticStr of
-  Left err -> pure (Left (show err))
-  Right optic -> runRewriteTest (\early -> runDelete early optic testConfig) jsonInput
+runDeleteTest opticStr jsonInput = withOptic opticStr $ \optic ->
+  runRewriteTest (\early -> runDelete early optic testConfig) jsonInput
 
 -- | Parse an optic string and a transformation, run @over@ against JSON
 -- input, and collect the rewritten document's events.
 runOverTest :: Text -> Transformation -> Text -> IO (Either Text [JSONEvent])
-runOverTest opticStr transformation jsonInput = case parseOptic opticStr of
-  Left err -> pure (Left (show err))
-  Right optic ->
-    runRewriteTest (\early -> runOver early optic transformation testConfig) jsonInput
+runOverTest opticStr transformation jsonInput = withOptic opticStr $ \optic ->
+  runRewriteTest (\early -> runOver early optic transformation testConfig) jsonInput
 
 --------------------------------------------------------------------------------
 -- set
 --------------------------------------------------------------------------------
 
 setSpec :: Spec
-setSpec = describe "set" $ do
-  it "replaces a field value" $ do
-    runSetTest "@name" "\"bob\"" "{\"name\":\"alice\",\"age\":30}"
-    `shouldReturn` Right
-      [ JSONBeginObject,
-        JSONObjectKey "name",
-        JSONString "bob",
-        JSONObjectKey "age",
-        JSONNumber 30,
-        JSONEndObject
-      ]
+setSpec = describe "set" $ forM_ setCases $ \(label, optic, value, doc, expected) ->
+  it label $ runSetTest optic value doc `shouldReturn` expected
 
-  it "leaves the document unchanged when the field is missing" $ do
-    runSetTest "@name" "5" "{\"age\":30}"
-    `shouldReturn` Right
-      [JSONBeginObject, JSONObjectKey "age", JSONNumber 30, JSONEndObject]
-
-  it "leaves non-object input unchanged" $ do
-    runSetTest "@name" "5" "[1,2]"
-    `shouldReturn` Right [JSONBeginArray, JSONNumber 1, JSONNumber 2, JSONEndArray]
-
-  it "replaces every array element" $ do
-    runSetTest "each" "0" "[1,2,3]"
-    `shouldReturn` Right
-      [JSONBeginArray, JSONNumber 0, JSONNumber 0, JSONNumber 0, JSONEndArray]
-
-  it "replaces every object value" $ do
-    runSetTest "each" "true" "{\"a\":1,\"b\":2}"
-    `shouldReturn` Right
-      [ JSONBeginObject,
-        JSONObjectKey "a",
-        JSONBool True,
-        JSONObjectKey "b",
-        JSONBool True,
-        JSONEndObject
-      ]
-
-  it "leaves an empty array unchanged" $ do
-    runSetTest "each" "0" "[]"
-    `shouldReturn` Right [JSONBeginArray, JSONEndArray]
-
-  it "leaves an empty object unchanged" $ do
-    runSetTest "each" "0" "{}"
-    `shouldReturn` Right [JSONBeginObject, JSONEndObject]
-
-  it "replaces only strings with a prism" $ do
-    runSetTest "each . _String" "\"x\"" "[1,\"a\",true]"
-    `shouldReturn` Right
-      [ JSONBeginArray,
-        JSONNumber 1,
-        JSONString "x",
-        JSONBool True,
-        JSONEndArray
-      ]
-
-  it "passes non-matching values through unchanged" $ do
-    runSetTest "_String" "\"x\"" "5" `shouldReturn` Right [JSONNumber 5]
-
-  it "replaces fields in a composed traversal" $ do
-    runSetTest "@users.each.@name" "\"anon\"" "{\"users\":[{\"name\":\"a\",\"age\":1},{\"name\":\"b\"}]}"
-    `shouldReturn` Right
-      [ JSONBeginObject,
-        JSONObjectKey "users",
-        JSONBeginArray,
-        JSONBeginObject,
-        JSONObjectKey "name",
-        JSONString "anon",
-        JSONObjectKey "age",
-        JSONNumber 1,
-        JSONEndObject,
-        JSONBeginObject,
-        JSONObjectKey "name",
-        JSONString "anon",
-        JSONEndObject,
-        JSONEndArray,
-        JSONEndObject
-      ]
-
-  it "keeps members unchanged when the composed target is missing" $ do
-    runSetTest "@users.each.@name" "\"anon\"" "{\"users\":[{\"age\":1}]}"
-    `shouldReturn` Right
-      [ JSONBeginObject,
-        JSONObjectKey "users",
-        JSONBeginArray,
-        JSONBeginObject,
-        JSONObjectKey "age",
-        JSONNumber 1,
-        JSONEndObject,
-        JSONEndArray,
-        JSONEndObject
-      ]
-
-  it "replaces the first array element" $ do
-    runSetTest "ix 0" "9" "[[1,2],[3]]"
-    `shouldReturn` Right
-      [ JSONBeginArray,
-        JSONNumber 9,
-        JSONBeginArray,
-        JSONNumber 3,
-        JSONEndArray,
-        JSONEndArray
-      ]
-
-  it "replaces the second array element" $ do
-    runSetTest "ix 1" "9" "[1,[2,3]]"
-    `shouldReturn` Right
-      [JSONBeginArray, JSONNumber 1, JSONNumber 9, JSONEndArray]
-
-  it "replaces the whole document with id" $ do
-    runSetTest "id" "5" "[1,2]" `shouldReturn` Right [JSONNumber 5]
-
-  it "replaces the whole document with a compound value" $ do
-    runSetTest "id" "{\"x\":1}" "5"
-    `shouldReturn` Right
-      [JSONBeginObject, JSONObjectKey "x", JSONNumber 1, JSONEndObject]
-
-  it "replaces a nested container value wholesale"
-    $ runSetTest "@a" "5" "{\"a\":{\"b\":[1,2]},\"c\":3}"
-    `shouldReturn` Right
-      [ JSONBeginObject,
-        JSONObjectKey "a",
-        JSONNumber 5,
-        JSONObjectKey "c",
-        JSONNumber 3,
-        JSONEndObject
-      ]
-
-  it "replaces an array with an array prism" $ do
-    runSetTest "_Array" "[9]" "[1,2]"
-    `shouldReturn` Right [JSONBeginArray, JSONNumber 9, JSONEndArray]
+setCases :: [(String, Text, Text, Text, Either Text [JSONEvent])]
+setCases =
+  [ ("replaces a field value", "@name", "\"bob\"", "{\"name\":\"alice\",\"age\":30}", Right [JSONBeginObject, JSONObjectKey "name", JSONString "bob", JSONObjectKey "age", JSONNumber 30, JSONEndObject]),
+    ("leaves the document unchanged when the field is missing", "@name", "5", "{\"age\":30}", Right [JSONBeginObject, JSONObjectKey "age", JSONNumber 30, JSONEndObject]),
+    ("leaves non-object input unchanged", "@name", "5", "[1,2]", Right [JSONBeginArray, JSONNumber 1, JSONNumber 2, JSONEndArray]),
+    ("replaces every array element", "each", "0", "[1,2,3]", Right [JSONBeginArray, JSONNumber 0, JSONNumber 0, JSONNumber 0, JSONEndArray]),
+    ("replaces every object value", "each", "true", "{\"a\":1,\"b\":2}", Right [JSONBeginObject, JSONObjectKey "a", JSONBool True, JSONObjectKey "b", JSONBool True, JSONEndObject]),
+    ("leaves an empty array unchanged", "each", "0", "[]", Right [JSONBeginArray, JSONEndArray]),
+    ("leaves an empty object unchanged", "each", "0", "{}", Right [JSONBeginObject, JSONEndObject]),
+    ("replaces only strings with a prism", "each . _String", "\"x\"", "[1,\"a\",true]", Right [JSONBeginArray, JSONNumber 1, JSONString "x", JSONBool True, JSONEndArray]),
+    ("passes non-matching values through unchanged", "_String", "\"x\"", "5", Right [JSONNumber 5]),
+    ("replaces fields in a composed traversal", "@users.each.@name", "\"anon\"", "{\"users\":[{\"name\":\"a\",\"age\":1},{\"name\":\"b\"}]}", Right [JSONBeginObject, JSONObjectKey "users", JSONBeginArray, JSONBeginObject, JSONObjectKey "name", JSONString "anon", JSONObjectKey "age", JSONNumber 1, JSONEndObject, JSONBeginObject, JSONObjectKey "name", JSONString "anon", JSONEndObject, JSONEndArray, JSONEndObject]),
+    ("keeps members unchanged when the composed target is missing", "@users.each.@name", "\"anon\"", "{\"users\":[{\"age\":1}]}", Right [JSONBeginObject, JSONObjectKey "users", JSONBeginArray, JSONBeginObject, JSONObjectKey "age", JSONNumber 1, JSONEndObject, JSONEndArray, JSONEndObject]),
+    ("replaces the first array element", "ix 0", "9", "[[1,2],[3]]", Right [JSONBeginArray, JSONNumber 9, JSONBeginArray, JSONNumber 3, JSONEndArray, JSONEndArray]),
+    ("replaces the second array element", "ix 1", "9", "[1,[2,3]]", Right [JSONBeginArray, JSONNumber 1, JSONNumber 9, JSONEndArray]),
+    ("replaces the whole document with id", "id", "5", "[1,2]", Right [JSONNumber 5]),
+    ("replaces the whole document with a compound value", "id", "{\"x\":1}", "5", Right [JSONBeginObject, JSONObjectKey "x", JSONNumber 1, JSONEndObject]),
+    ("replaces a nested container value wholesale", "@a", "5", "{\"a\":{\"b\":[1,2]},\"c\":3}", Right [JSONBeginObject, JSONObjectKey "a", JSONNumber 5, JSONObjectKey "c", JSONNumber 3, JSONEndObject]),
+    ("replaces an array with an array prism", "_Array", "[9]", "[1,2]", Right [JSONBeginArray, JSONNumber 9, JSONEndArray])
+  ]
 
 --------------------------------------------------------------------------------
 -- delete
 --------------------------------------------------------------------------------
 
 deleteSpec :: Spec
-deleteSpec = describe "delete" $ do
-  it "removes a field" $ do
-    runDeleteTest "@name" "{\"name\":\"alice\",\"age\":30}"
-    `shouldReturn` Right
-      [JSONBeginObject, JSONObjectKey "age", JSONNumber 30, JSONEndObject]
+deleteSpec = describe "delete" $ forM_ deleteCases $ \(label, optic, doc, expected) ->
+  it label $ runDeleteTest optic doc `shouldReturn` expected
 
-  it "leaves the document unchanged when the field is missing" $ do
-    runDeleteTest "@name" "{\"age\":30}"
-    `shouldReturn` Right
-      [JSONBeginObject, JSONObjectKey "age", JSONNumber 30, JSONEndObject]
-
-  it "leaves non-object input unchanged" $ do
-    runDeleteTest "@name" "[1,2]"
-    `shouldReturn` Right [JSONBeginArray, JSONNumber 1, JSONNumber 2, JSONEndArray]
-
-  it "removes every array element" $ do
-    runDeleteTest "each" "[1,2,3]"
-    `shouldReturn` Right [JSONBeginArray, JSONEndArray]
-
-  it "removes every object member" $ do
-    runDeleteTest "each" "{\"a\":1,\"b\":2}"
-    `shouldReturn` Right [JSONBeginObject, JSONEndObject]
-
-  it "leaves an empty array unchanged" $ do
-    runDeleteTest "each" "[]" `shouldReturn` Right [JSONBeginArray, JSONEndArray]
-
-  it "leaves an empty object unchanged" $ do
-    runDeleteTest "each" "{}"
-    `shouldReturn` Right [JSONBeginObject, JSONEndObject]
-
-  it "removes only strings with a prism" $ do
-    runDeleteTest "each . _String" "[1,\"a\",2]"
-    `shouldReturn` Right
-      [JSONBeginArray, JSONNumber 1, JSONNumber 2, JSONEndArray]
-
-  it "removes object members whose whole value matches a prism" $ do
-    runDeleteTest "each . _Number" "{\"a\":1,\"b\":\"x\"}"
-    `shouldReturn` Right
-      [JSONBeginObject, JSONObjectKey "b", JSONString "x", JSONEndObject]
-
-  it "removes the first array element" $ do
-    runDeleteTest "ix 0" "[10,20]"
-    `shouldReturn` Right [JSONBeginArray, JSONNumber 20, JSONEndArray]
-
-  it "removes a member whose value is targeted by a composed optic" $ do
-    runDeleteTest "@a._String" "{\"a\":\"x\",\"b\":\"y\"}"
-    `shouldReturn` Right
-      [JSONBeginObject, JSONObjectKey "b", JSONString "y", JSONEndObject]
-
-  it "keeps a member whose value does not match the composed prism" $ do
-    runDeleteTest "@a._String" "{\"a\":5,\"b\":\"y\"}"
-    `shouldReturn` Right
-      [ JSONBeginObject,
-        JSONObjectKey "a",
-        JSONNumber 5,
-        JSONObjectKey "b",
-        JSONString "y",
-        JSONEndObject
-      ]
-
-  it "removes composed fields but keeps the container" $ do
-    runDeleteTest "@users.each.@name" "{\"users\":[{\"name\":\"a\",\"age\":1},{\"age\":2}]}"
-    `shouldReturn` Right
-      [ JSONBeginObject,
-        JSONObjectKey "users",
-        JSONBeginArray,
-        JSONBeginObject,
-        JSONObjectKey "age",
-        JSONNumber 1,
-        JSONEndObject,
-        JSONBeginObject,
-        JSONObjectKey "age",
-        JSONNumber 2,
-        JSONEndObject,
-        JSONEndArray,
-        JSONEndObject
-      ]
-
-  it "removes the whole document with id" $ do
-    runDeleteTest "id" "[1,2]" `shouldReturn` Right []
-
-  it "leaves a value alone when the composed optic does not reach it" $ do
-    runDeleteTest "@a.@b" "{\"a\":{\"c\":1},\"b\":2}"
-    `shouldReturn` Right
-      [ JSONBeginObject,
-        JSONObjectKey "a",
-        JSONBeginObject,
-        JSONObjectKey "c",
-        JSONNumber 1,
-        JSONEndObject,
-        JSONObjectKey "b",
-        JSONNumber 2,
-        JSONEndObject
-      ]
+deleteCases :: [(String, Text, Text, Either Text [JSONEvent])]
+deleteCases =
+  [ ("removes a field", "@name", "{\"name\":\"alice\",\"age\":30}", Right [JSONBeginObject, JSONObjectKey "age", JSONNumber 30, JSONEndObject]),
+    ("leaves the document unchanged when the field is missing", "@name", "{\"age\":30}", Right [JSONBeginObject, JSONObjectKey "age", JSONNumber 30, JSONEndObject]),
+    ("leaves non-object input unchanged", "@name", "[1,2]", Right [JSONBeginArray, JSONNumber 1, JSONNumber 2, JSONEndArray]),
+    ("removes every array element", "each", "[1,2,3]", Right [JSONBeginArray, JSONEndArray]),
+    ("removes every object member", "each", "{\"a\":1,\"b\":2}", Right [JSONBeginObject, JSONEndObject]),
+    ("leaves an empty array unchanged", "each", "[]", Right [JSONBeginArray, JSONEndArray]),
+    ("leaves an empty object unchanged", "each", "{}", Right [JSONBeginObject, JSONEndObject]),
+    ("removes only strings with a prism", "each . _String", "[1,\"a\",2]", Right [JSONBeginArray, JSONNumber 1, JSONNumber 2, JSONEndArray]),
+    ("removes object members whose whole value matches a prism", "each . _Number", "{\"a\":1,\"b\":\"x\"}", Right [JSONBeginObject, JSONObjectKey "b", JSONString "x", JSONEndObject]),
+    ("removes the first array element", "ix 0", "[10,20]", Right [JSONBeginArray, JSONNumber 20, JSONEndArray]),
+    ("removes a member whose value is targeted by a composed optic", "@a._String", "{\"a\":\"x\",\"b\":\"y\"}", Right [JSONBeginObject, JSONObjectKey "b", JSONString "y", JSONEndObject]),
+    ("keeps a member whose value does not match the composed prism", "@a._String", "{\"a\":5,\"b\":\"y\"}", Right [JSONBeginObject, JSONObjectKey "a", JSONNumber 5, JSONObjectKey "b", JSONString "y", JSONEndObject]),
+    ("removes composed fields but keeps the container", "@users.each.@name", "{\"users\":[{\"name\":\"a\",\"age\":1},{\"age\":2}]}", Right [JSONBeginObject, JSONObjectKey "users", JSONBeginArray, JSONBeginObject, JSONObjectKey "age", JSONNumber 1, JSONEndObject, JSONBeginObject, JSONObjectKey "age", JSONNumber 2, JSONEndObject, JSONEndArray, JSONEndObject]),
+    ("removes the whole document with id", "id", "[1,2]", Right []),
+    ("leaves a value alone when the composed optic does not reach it", "@a.@b", "{\"a\":{\"c\":1},\"b\":2}", Right [JSONBeginObject, JSONObjectKey "a", JSONBeginObject, JSONObjectKey "c", JSONNumber 1, JSONEndObject, JSONObjectKey "b", JSONNumber 2, JSONEndObject])
+  ]
 
 -------------------------------------------------------------------------------
 -- over
 -------------------------------------------------------------------------------
 
 overSpec :: Spec
-overSpec = describe "over" $ do
-  it "adds to every array element" $ do
-    runOverTest "each" (Add 1) "[1,2,3]"
-    `shouldReturn` Right
-      [JSONBeginArray, JSONNumber 2, JSONNumber 3, JSONNumber 4, JSONEndArray]
+overSpec = describe "over" $ forM_ overCases $ \(label, optic, t, doc, expected) ->
+  it label $ runOverTest optic t doc `shouldReturn` expected
 
-  it "adds to a field value" $ do
-    runOverTest "@age" (Add 1) "{\"name\":\"alice\",\"age\":30}"
-    `shouldReturn` Right
-      [ JSONBeginObject,
-        JSONObjectKey "name",
-        JSONString "alice",
-        JSONObjectKey "age",
-        JSONNumber 31,
-        JSONEndObject
-      ]
-
-  it "appends to string values" $ do
-    runOverTest "each . _String" (ConcatString "!") "[1,\"a\",\"b\"]"
-    `shouldReturn` Right
-      [ JSONBeginArray,
-        JSONNumber 1,
-        JSONString "a!",
-        JSONString "b!",
-        JSONEndArray
-      ]
-
-  it "trims string values" $ do
-    runOverTest "each . _String" Trim "[\"  hi  \",5]"
-    `shouldReturn` Right
-      [JSONBeginArray, JSONString "hi", JSONNumber 5, JSONEndArray]
-
-  it "replaces substrings in string values" $ do
-    runOverTest "@name" (Replace "a" "e") "{\"name\":\"alice\"}"
-    `shouldReturn` Right
-      [JSONBeginObject, JSONObjectKey "name", JSONString "elice", JSONEndObject]
-
-  it "maps values to booleans" $ do
-    runOverTest "each" (Equal (Number 1)) "[1,2,1]"
-    `shouldReturn` Right
-      [ JSONBeginArray,
-        JSONBool True,
-        JSONBool False,
-        JSONBool True,
-        JSONEndArray
-      ]
-
-  it "negates boolean values" $ do
-    runOverTest "each . _Bool" Not "[true,false]"
-    `shouldReturn` Right
-      [JSONBeginArray, JSONBool False, JSONBool True, JSONEndArray]
-
-  it "disjoins two transformations with or" $ do
-    runOverTest "each" (Or (Equal (Number 1)) (Equal (Number 3))) "[1,2,3]"
-    `shouldReturn` Right
-      [ JSONBeginArray,
-        JSONBool True,
-        JSONBool False,
-        JSONBool True,
-        JSONEndArray
-      ]
-
-  it "conjoins two transformations with and" $ do
-    runOverTest "each" (And (Equal (Number 1)) (Equal (Number 1))) "[1,2]"
-    `shouldReturn` Right [JSONBeginArray, JSONBool True, JSONBool False, JSONEndArray]
-
-  it "conjoins to true when both branches hold" $ do
-    runOverTest "each" (And (IsPrefixOf "a") (IsSuffixOf "c")) "[\"abc\",\"ab\"]"
-    `shouldReturn` Right [JSONBeginArray, JSONBool True, JSONBool False, JSONEndArray]
-
-  it "short-circuits and on false" $ do
+overCases :: [(String, Text, Transformation, Text, Either Text [JSONEvent])]
+overCases =
+  [ ("adds to every array element", "each", Add 1, "[1,2,3]", Right [JSONBeginArray, JSONNumber 2, JSONNumber 3, JSONNumber 4, JSONEndArray]),
+    ("adds to a field value", "@age", Add 1, "{\"name\":\"alice\",\"age\":30}", Right [JSONBeginObject, JSONObjectKey "name", JSONString "alice", JSONObjectKey "age", JSONNumber 31, JSONEndObject]),
+    ("appends to string values", "each . _String", ConcatString "!", "[1,\"a\",\"b\"]", Right [JSONBeginArray, JSONNumber 1, JSONString "a!", JSONString "b!", JSONEndArray]),
+    ("trims string values", "each . _String", Trim, "[\"  hi  \",5]", Right [JSONBeginArray, JSONString "hi", JSONNumber 5, JSONEndArray]),
+    ("replaces substrings in string values", "@name", Replace "a" "e", "{\"name\":\"alice\"}", Right [JSONBeginObject, JSONObjectKey "name", JSONString "elice", JSONEndObject]),
+    ("maps values to booleans", "each", Equal (Number 1), "[1,2,1]", Right [JSONBeginArray, JSONBool True, JSONBool False, JSONBool True, JSONEndArray]),
+    ("negates boolean values", "each . _Bool", Not, "[true,false]", Right [JSONBeginArray, JSONBool False, JSONBool True, JSONEndArray]),
+    ("disjoins two transformations with or", "each", Or (Equal (Number 1)) (Equal (Number 3)), "[1,2,3]", Right [JSONBeginArray, JSONBool True, JSONBool False, JSONBool True, JSONEndArray]),
+    ("conjoins two transformations with and", "each", And (Equal (Number 1)) (Equal (Number 1)), "[1,2]", Right [JSONBeginArray, JSONBool True, JSONBool False, JSONEndArray]),
+    ("conjoins to true when both branches hold", "each", And (IsPrefixOf "a") (IsSuffixOf "c"), "[\"abc\",\"ab\"]", Right [JSONBeginArray, JSONBool True, JSONBool False, JSONEndArray]),
     -- The right branch would fail on a number; a false left branch
     -- must return False without running it.
-    runOverTest "each" (And (Equal (Number 2)) Not) "[1]"
-    `shouldReturn` Right [JSONBeginArray, JSONBool False, JSONEndArray]
-
-  it "exclusive-disjoins two transformations with Xor" $ do
-    runOverTest "each" (Xor (IsPrefixOf "a") (IsSuffixOf "a")) "[\"a\",\"ab\",\"ba\",\"b\"]"
-    `shouldReturn` Right
-      [ JSONBeginArray,
-        JSONBool False,
-        JSONBool True,
-        JSONBool True,
-        JSONBool False,
-        JSONEndArray
-      ]
-
-  it "fails and with a non-boolean left branch" $ do
-    runOverTest "each" (And (Add 1) (Equal (Number 1))) "[0]"
-    `shouldReturn` Left "expected a boolean result from the left side of and"
-
-  it "fails Xor with a non-boolean branch" $ do
-    runOverTest "each" (Xor (Equal (Number 1)) (Add 1)) "[1]"
-    `shouldReturn` Left "expected a boolean result from each side of xor"
-
-  it "composes transformations right-to-left" $ do
-    runOverTest "each" (Compose (Equal (Number 3)) (Add 1)) "[1,2,3]"
-    `shouldReturn` Right
-      [ JSONBeginArray,
-        JSONBool False,
-        JSONBool True,
-        JSONBool False,
-        JSONEndArray
-      ]
-
-  it "rewrites values focused by a composed optic" $ do
-    runOverTest "@users.each.@age" (Add 1) "{\"users\":[{\"age\":1},{\"age\":2}]}"
-    `shouldReturn` Right
-      [ JSONBeginObject,
-        JSONObjectKey "users",
-        JSONBeginArray,
-        JSONBeginObject,
-        JSONObjectKey "age",
-        JSONNumber 2,
-        JSONEndObject,
-        JSONBeginObject,
-        JSONObjectKey "age",
-        JSONNumber 3,
-        JSONEndObject,
-        JSONEndArray,
-        JSONEndObject
-      ]
-
-  it "replaces the whole document with id" $ do
-    runOverTest "id" (Equal (Number 1)) "[1,2]"
-    `shouldReturn` Right [JSONBool False]
-
-  it "fails when the transformation does not fit the value" $ do
-    runOverTest "each" (Add 1) "[\"a\",1]"
-    `shouldReturn` Left "expected a number"
-
-  it "strips a matching prefix" $ do
-    runOverTest "each" (StripPrefix "pre") "[\"prefix\",\"pre\",\"other\"]"
-    `shouldReturn` Right
-      [ JSONBeginArray,
-        JSONString "fix",
-        JSONString "",
-        JSONString "other",
-        JSONEndArray
-      ]
-
-  it "strips a matching suffix" $ do
-    runOverTest "each" (StripSuffix ".json") "[\"a.json\",\"json\"]"
-    `shouldReturn` Right
-      [JSONBeginArray, JSONString "a", JSONString "json", JSONEndArray]
-
-  it "tests prefix membership" $ do
-    runOverTest "each" (IsPrefixOf "pre") "[\"prefix\",\"other\"]"
-    `shouldReturn` Right
-      [JSONBeginArray, JSONBool True, JSONBool False, JSONEndArray]
-
-  it "tests suffix membership" $ do
-    runOverTest "each" (IsSuffixOf ".json") "[\"a.json\",\"other\"]"
-    `shouldReturn` Right
-      [JSONBeginArray, JSONBool True, JSONBool False, JSONEndArray]
-
-  it "tests infix membership" $ do
-    runOverTest "each" (IsInfixOf "fix") "[\"prefix\",\"other\"]"
-    `shouldReturn` Right
-      [JSONBeginArray, JSONBool True, JSONBool False, JSONEndArray]
-
-  it "tests array emptiness" $ do
-    runOverTest "each" IsEmpty "[[],[1]]"
-    `shouldReturn` Right
-      [JSONBeginArray, JSONBool True, JSONBool False, JSONEndArray]
-
-  it "computes array lengths" $ do
-    runOverTest "each" ArrayLength "[[1,2],[]]"
-    `shouldReturn` Right
-      [JSONBeginArray, JSONNumber 2, JSONNumber 0, JSONEndArray]
-
-  it "reverses arrays" $ do
-    runOverTest "each" ArrayReverse "[[1,2,3]]"
-    `shouldReturn` Right
-      [ JSONBeginArray,
-        JSONBeginArray,
-        JSONNumber 3,
-        JSONNumber 2,
-        JSONNumber 1,
-        JSONEndArray,
-        JSONEndArray
-      ]
-
-  it "drops duplicate array elements" $ do
-    runOverTest "each" ArrayUnique "[[1,1,2,1]]"
-    `shouldReturn` Right
-      [ JSONBeginArray,
-        JSONBeginArray,
-        JSONNumber 1,
-        JSONNumber 2,
-        JSONEndArray,
-        JSONEndArray
-      ]
-
-  it "sorts array elements" $ do
-    runOverTest "each" ArraySort "[[3,1,2]]"
-    `shouldReturn` Right
-      [ JSONBeginArray,
-        JSONBeginArray,
-        JSONNumber 1,
-        JSONNumber 2,
-        JSONNumber 3,
-        JSONEndArray,
-        JSONEndArray
-      ]
-
-  it "fails sort on scalar elements" $ do
-    runOverTest "each" ArraySort "[\"b\",1,true,null]"
-    `shouldReturn` Left "expected an array"
-
-  it "sorts mixed values by type rank" $ do
-    runOverTest "each" ArraySort "[[\"b\",1,true,null]]"
-    `shouldReturn` Right
-      [ JSONBeginArray,
-        JSONBeginArray,
-        JSONNull,
-        JSONBool True,
-        JSONNumber 1,
-        JSONString "b",
-        JSONEndArray,
-        JSONEndArray
-      ]
-
-  it "sorts nested arrays lexicographically" $ do
-    runOverTest "each" ArraySort "[[[2],[1],[1,2]]]"
-    `shouldReturn` Right
-      [ JSONBeginArray,
-        JSONBeginArray,
-        JSONBeginArray,
-        JSONNumber 1,
-        JSONEndArray,
-        JSONBeginArray,
-        JSONNumber 1,
-        JSONNumber 2,
-        JSONEndArray,
-        JSONBeginArray,
-        JSONNumber 2,
-        JSONEndArray,
-        JSONEndArray,
-        JSONEndArray
-      ]
-
-  it "fails sort on non-arrays" $ do
-    runOverTest "each" ArraySort "[1]"
-    `shouldReturn` Left "expected an array"
-
-  it "shallow-merges objects with right-wins conflicts" $ do
-    runOverTest "id" (Merge (KeyMap.fromList [("a", Object (KeyMap.fromList [("y", Number 2)])), ("b", Number 5)])) "{\"a\":{\"x\":1},\"b\":1}"
-    `shouldReturn` Right
-      [ JSONBeginObject,
-        JSONObjectKey "a",
-        JSONBeginObject,
-        JSONObjectKey "y",
-        JSONNumber 2,
-        JSONEndObject,
-        JSONObjectKey "b",
-        JSONNumber 5,
-        JSONEndObject
-      ]
-
-  it "deep-merges nested objects recursively" $ do
-    runOverTest "id" (DeepMerge (KeyMap.fromList [("a", Object (KeyMap.fromList [("y", Number 2)])), ("b", Number 5)])) "{\"a\":{\"x\":1},\"b\":1}"
-    `shouldReturn` Right
-      [ JSONBeginObject,
-        JSONObjectKey "a",
-        JSONBeginObject,
-        JSONObjectKey "x",
-        JSONNumber 1,
-        JSONObjectKey "y",
-        JSONNumber 2,
-        JSONEndObject,
-        JSONObjectKey "b",
-        JSONNumber 5,
-        JSONEndObject
-      ]
-
-  it "replaces conflicting scalars on deepMerge" $ do
-    runOverTest "id" (DeepMerge (KeyMap.fromList [("a", Number 5)])) "{\"a\":{\"x\":1}}"
-    `shouldReturn` Right
-      [ JSONBeginObject,
-        JSONObjectKey "a",
-        JSONNumber 5,
-        JSONEndObject
-      ]
-
-  it "fails merge on non-objects" $ do
-    runOverTest "id" (Merge (KeyMap.fromList [("b", Number 1)])) "[1]"
-    `shouldReturn` Left "expected an object"
-
-  it "fails stripPrefix on numbers" $ do
-    runOverTest "each" (StripPrefix "a") "[1]"
-    `shouldReturn` Left "expected a string"
-
-  it "fails length on strings" $ do
-    runOverTest "each" ArrayLength "[\"a\"]"
-    `shouldReturn` Left "expected an array"
+    ("short-circuits and on false", "each", And (Equal (Number 2)) Not, "[1]", Right [JSONBeginArray, JSONBool False, JSONEndArray]),
+    ("exclusive-disjoins two transformations with Xor", "each", Xor (IsPrefixOf "a") (IsSuffixOf "a"), "[\"a\",\"ab\",\"ba\",\"b\"]", Right [JSONBeginArray, JSONBool False, JSONBool True, JSONBool True, JSONBool False, JSONEndArray]),
+    ("fails and with a non-boolean left branch", "each", And (Add 1) (Equal (Number 1)), "[0]", Left "expected a boolean result from the left side of and"),
+    ("fails Xor with a non-boolean branch", "each", Xor (Equal (Number 1)) (Add 1), "[1]", Left "expected a boolean result from each side of xor"),
+    ("composes transformations right-to-left", "each", Compose (Equal (Number 3)) (Add 1), "[1,2,3]", Right [JSONBeginArray, JSONBool False, JSONBool True, JSONBool False, JSONEndArray]),
+    ("rewrites values focused by a composed optic", "@users.each.@age", Add 1, "{\"users\":[{\"age\":1},{\"age\":2}]}", Right [JSONBeginObject, JSONObjectKey "users", JSONBeginArray, JSONBeginObject, JSONObjectKey "age", JSONNumber 2, JSONEndObject, JSONBeginObject, JSONObjectKey "age", JSONNumber 3, JSONEndObject, JSONEndArray, JSONEndObject]),
+    ("replaces the whole document with id", "id", Equal (Number 1), "[1,2]", Right [JSONBool False]),
+    ("fails when the transformation does not fit the value", "each", Add 1, "[\"a\",1]", Left "expected a number"),
+    ("strips a matching prefix", "each", StripPrefix "pre", "[\"prefix\",\"pre\",\"other\"]", Right [JSONBeginArray, JSONString "fix", JSONString "", JSONString "other", JSONEndArray]),
+    ("strips a matching suffix", "each", StripSuffix ".json", "[\"a.json\",\"json\"]", Right [JSONBeginArray, JSONString "a", JSONString "json", JSONEndArray]),
+    ("tests prefix membership", "each", IsPrefixOf "pre", "[\"prefix\",\"other\"]", Right [JSONBeginArray, JSONBool True, JSONBool False, JSONEndArray]),
+    ("tests suffix membership", "each", IsSuffixOf ".json", "[\"a.json\",\"other\"]", Right [JSONBeginArray, JSONBool True, JSONBool False, JSONEndArray]),
+    ("tests infix membership", "each", IsInfixOf "fix", "[\"prefix\",\"other\"]", Right [JSONBeginArray, JSONBool True, JSONBool False, JSONEndArray]),
+    ("tests array emptiness", "each", IsEmpty, "[[],[1]]", Right [JSONBeginArray, JSONBool True, JSONBool False, JSONEndArray]),
+    ("computes array lengths", "each", ArrayLength, "[[1,2],[]]", Right [JSONBeginArray, JSONNumber 2, JSONNumber 0, JSONEndArray]),
+    ("reverses arrays", "each", ArrayReverse, "[[1,2,3]]", Right [JSONBeginArray, JSONBeginArray, JSONNumber 3, JSONNumber 2, JSONNumber 1, JSONEndArray, JSONEndArray]),
+    ("drops duplicate array elements", "each", ArrayUnique, "[[1,1,2,1]]", Right [JSONBeginArray, JSONBeginArray, JSONNumber 1, JSONNumber 2, JSONEndArray, JSONEndArray]),
+    ("sorts array elements", "each", ArraySort, "[[3,1,2]]", Right [JSONBeginArray, JSONBeginArray, JSONNumber 1, JSONNumber 2, JSONNumber 3, JSONEndArray, JSONEndArray]),
+    ("fails sort on scalar elements", "each", ArraySort, "[\"b\",1,true,null]", Left "expected an array"),
+    ("sorts mixed values by type rank", "each", ArraySort, "[[\"b\",1,true,null]]", Right [JSONBeginArray, JSONBeginArray, JSONNull, JSONBool True, JSONNumber 1, JSONString "b", JSONEndArray, JSONEndArray]),
+    ("sorts nested arrays lexicographically", "each", ArraySort, "[[[2],[1],[1,2]]]", Right [JSONBeginArray, JSONBeginArray, JSONBeginArray, JSONNumber 1, JSONEndArray, JSONBeginArray, JSONNumber 1, JSONNumber 2, JSONEndArray, JSONBeginArray, JSONNumber 2, JSONEndArray, JSONEndArray, JSONEndArray]),
+    ("fails sort on non-arrays", "each", ArraySort, "[1]", Left "expected an array"),
+    ("shallow-merges objects with right-wins conflicts", "id", Merge (KeyMap.fromList [("a", Object (KeyMap.fromList [("y", Number 2)])), ("b", Number 5)]), "{\"a\":{\"x\":1},\"b\":1}", Right [JSONBeginObject, JSONObjectKey "a", JSONBeginObject, JSONObjectKey "y", JSONNumber 2, JSONEndObject, JSONObjectKey "b", JSONNumber 5, JSONEndObject]),
+    ("deep-merges nested objects recursively", "id", DeepMerge (KeyMap.fromList [("a", Object (KeyMap.fromList [("y", Number 2)])), ("b", Number 5)]), "{\"a\":{\"x\":1},\"b\":1}", Right [JSONBeginObject, JSONObjectKey "a", JSONBeginObject, JSONObjectKey "x", JSONNumber 1, JSONObjectKey "y", JSONNumber 2, JSONEndObject, JSONObjectKey "b", JSONNumber 5, JSONEndObject]),
+    ("replaces conflicting scalars on deepMerge", "id", DeepMerge (KeyMap.fromList [("a", Number 5)]), "{\"a\":{\"x\":1}}", Right [JSONBeginObject, JSONObjectKey "a", JSONNumber 5, JSONEndObject]),
+    ("fails merge on non-objects", "id", Merge (KeyMap.fromList [("b", Number 1)]), "[1]", Left "expected an object"),
+    ("fails stripPrefix on numbers", "each", StripPrefix "a", "[1]", Left "expected a string"),
+    ("fails length on strings", "each", ArrayLength, "[\"a\"]", Left "expected an array")
+  ]
 
 -------------------------------------------------------------------------------
 -- keys rewrite (object key renaming; array indices are read-only)
@@ -728,71 +302,36 @@ overSpec = describe "over" $ do
 
 keysRewriteSpec :: Spec
 keysRewriteSpec = describe "keys rewrite" $ do
-  it "renames every key" $ do
-    runOverTest "keys" (ConcatString "!") "{\"a\":1,\"b\":2}"
-    `shouldReturn` Right
-      [ JSONBeginObject,
-        JSONObjectKey "a!",
-        JSONNumber 1,
-        JSONObjectKey "b!",
-        JSONNumber 2,
-        JSONEndObject
-      ]
+  forM_ keysOverCases $ \(label, optic, t, doc, expected) ->
+    it label $ runOverTest optic t doc `shouldReturn` expected
+  forM_ keysSetCases $ \(label, optic, value, doc, expected) ->
+    it label $ runSetTest optic value doc `shouldReturn` expected
+  forM_ keysDeleteCases $ \(label, optic, doc, expected) ->
+    it label $ runDeleteTest optic doc `shouldReturn` expected
 
-  it "trims keys" $ do
-    runOverTest "keys" Trim "{\" a \":1}"
-    `shouldReturn` Right
-      [JSONBeginObject, JSONObjectKey "a", JSONNumber 1, JSONEndObject]
+keysOverCases :: [(String, Text, Transformation, Text, Either Text [JSONEvent])]
+keysOverCases =
+  [ ("renames every key", "keys", ConcatString "!", "{\"a\":1,\"b\":2}", Right [JSONBeginObject, JSONObjectKey "a!", JSONNumber 1, JSONObjectKey "b!", JSONNumber 2, JSONEndObject]),
+    ("trims keys", "keys", Trim, "{\" a \":1}", Right [JSONBeginObject, JSONObjectKey "a", JSONNumber 1, JSONEndObject]),
+    ("renames through a composed string prism", "keys . _String", ConcatString "!", "{\"a\":1}", Right [JSONBeginObject, JSONObjectKey "a!", JSONNumber 1, JSONEndObject]),
+    ("leaves keys alone when the prism does not match", "keys . _Number", Add 1, "{\"a\":1}", Right [JSONBeginObject, JSONObjectKey "a", JSONNumber 1, JSONEndObject]),
+    ("leaves arrays unchanged", "keys", ConcatString "!", "[1,2]", Right [JSONBeginArray, JSONNumber 1, JSONNumber 2, JSONEndArray]),
+    ("fails when the transformation does not fit keys", "keys", Add 1, "{\"a\":1}", Left "expected a number")
+  ]
 
-  it "renames through a composed string prism" $ do
-    runOverTest "keys . _String" (ConcatString "!") "{\"a\":1}"
-    `shouldReturn` Right
-      [JSONBeginObject, JSONObjectKey "a!", JSONNumber 1, JSONEndObject]
+keysSetCases :: [(String, Text, Text, Text, Either Text [JSONEvent])]
+keysSetCases =
+  [ ("sets every key to a constant", "keys", "\"k\"", "{\"a\":1,\"b\":2}", Right [JSONBeginObject, JSONObjectKey "k", JSONNumber 1, JSONObjectKey "k", JSONNumber 2, JSONEndObject]),
+    ("fails when the replacement is not a string", "keys", "5", "{\"a\":1}", Left "key transformation must yield a string")
+  ]
 
-  it "leaves keys alone when the prism does not match" $ do
-    runOverTest "keys . _Number" (Add 1) "{\"a\":1}"
-    `shouldReturn` Right
-      [JSONBeginObject, JSONObjectKey "a", JSONNumber 1, JSONEndObject]
-
-  it "leaves arrays unchanged" $ do
-    runOverTest "keys" (ConcatString "!") "[1,2]"
-    `shouldReturn` Right [JSONBeginArray, JSONNumber 1, JSONNumber 2, JSONEndArray]
-
-  it "sets every key to a constant" $ do
-    runSetTest "keys" "\"k\"" "{\"a\":1,\"b\":2}"
-    `shouldReturn` Right
-      [ JSONBeginObject,
-        JSONObjectKey "k",
-        JSONNumber 1,
-        JSONObjectKey "k",
-        JSONNumber 2,
-        JSONEndObject
-      ]
-
-  it "fails when the replacement is not a string" $ do
-    runSetTest "keys" "5" "{\"a\":1}"
-    `shouldReturn` Left "key transformation must yield a string"
-
-  it "fails when the transformation does not fit keys" $ do
-    runOverTest "keys" (Add 1) "{\"a\":1}"
-    `shouldReturn` Left "expected a number"
-
-  it "removes every member" $ do
-    runDeleteTest "keys" "{\"a\":1,\"b\":2}"
-    `shouldReturn` Right [JSONBeginObject, JSONEndObject]
-
-  it "removes every member through a matching prism" $ do
-    runDeleteTest "keys . _String" "{\"a\":1}"
-    `shouldReturn` Right [JSONBeginObject, JSONEndObject]
-
-  it "keeps members when the prism does not match" $ do
-    runDeleteTest "keys . _Number" "{\"a\":1}"
-    `shouldReturn` Right
-      [JSONBeginObject, JSONObjectKey "a", JSONNumber 1, JSONEndObject]
-
-  it "leaves arrays unchanged on delete" $ do
-    runDeleteTest "keys" "[1,2]"
-    `shouldReturn` Right [JSONBeginArray, JSONNumber 1, JSONNumber 2, JSONEndArray]
+keysDeleteCases :: [(String, Text, Text, Either Text [JSONEvent])]
+keysDeleteCases =
+  [ ("removes every member", "keys", "{\"a\":1,\"b\":2}", Right [JSONBeginObject, JSONEndObject]),
+    ("removes every member through a matching prism", "keys . _String", "{\"a\":1}", Right [JSONBeginObject, JSONEndObject]),
+    ("keeps members when the prism does not match", "keys . _Number", "{\"a\":1}", Right [JSONBeginObject, JSONObjectKey "a", JSONNumber 1, JSONEndObject]),
+    ("leaves arrays unchanged on delete", "keys", "[1,2]", Right [JSONBeginArray, JSONNumber 1, JSONNumber 2, JSONEndArray])
+  ]
 
 -------------------------------------------------------------------------------
 -- values rewrite (objects only)
@@ -800,51 +339,30 @@ keysRewriteSpec = describe "keys rewrite" $ do
 
 valuesRewriteSpec :: Spec
 valuesRewriteSpec = describe "values rewrite" $ do
-  it "adds to every object value" $ do
-    runOverTest "values" (Add 1) "{\"a\":1,\"b\":2}"
-    `shouldReturn` Right
-      [ JSONBeginObject,
-        JSONObjectKey "a",
-        JSONNumber 2,
-        JSONObjectKey "b",
-        JSONNumber 3,
-        JSONEndObject
-      ]
+  forM_ valuesOverCases $ \(label, optic, t, doc, expected) ->
+    it label $ runOverTest optic t doc `shouldReturn` expected
+  forM_ valuesSetCases $ \(label, optic, value, doc, expected) ->
+    it label $ runSetTest optic value doc `shouldReturn` expected
+  forM_ valuesDeleteCases $ \(label, optic, doc, expected) ->
+    it label $ runDeleteTest optic doc `shouldReturn` expected
 
-  it "leaves arrays unchanged" $ do
-    runOverTest "values" (Add 1) "[1,2,3]"
-    `shouldReturn` Right
-      [JSONBeginArray, JSONNumber 1, JSONNumber 2, JSONNumber 3, JSONEndArray]
+valuesOverCases :: [(String, Text, Transformation, Text, Either Text [JSONEvent])]
+valuesOverCases =
+  [ ("adds to every object value", "values", Add 1, "{\"a\":1,\"b\":2}", Right [JSONBeginObject, JSONObjectKey "a", JSONNumber 2, JSONObjectKey "b", JSONNumber 3, JSONEndObject]),
+    ("leaves arrays unchanged", "values", Add 1, "[1,2,3]", Right [JSONBeginArray, JSONNumber 1, JSONNumber 2, JSONNumber 3, JSONEndArray]),
+    ("rewrites values focused by a composed prism", "values . _Number", Add 1, "{\"a\":1,\"b\":\"x\"}", Right [JSONBeginObject, JSONObjectKey "a", JSONNumber 2, JSONObjectKey "b", JSONString "x", JSONEndObject])
+  ]
 
-  it "rewrites values focused by a composed prism" $ do
-    runOverTest "values . _Number" (Add 1) "{\"a\":1,\"b\":\"x\"}"
-    `shouldReturn` Right
-      [ JSONBeginObject,
-        JSONObjectKey "a",
-        JSONNumber 2,
-        JSONObjectKey "b",
-        JSONString "x",
-        JSONEndObject
-      ]
+valuesSetCases :: [(String, Text, Text, Text, Either Text [JSONEvent])]
+valuesSetCases =
+  [ ("sets every object value", "values", "0", "{\"a\":1,\"b\":2}", Right [JSONBeginObject, JSONObjectKey "a", JSONNumber 0, JSONObjectKey "b", JSONNumber 0, JSONEndObject])
+  ]
 
-  it "sets every object value" $ do
-    runSetTest "values" "0" "{\"a\":1,\"b\":2}"
-    `shouldReturn` Right
-      [ JSONBeginObject,
-        JSONObjectKey "a",
-        JSONNumber 0,
-        JSONObjectKey "b",
-        JSONNumber 0,
-        JSONEndObject
-      ]
-
-  it "removes every member" $ do
-    runDeleteTest "values" "{\"a\":1,\"b\":2}"
-    `shouldReturn` Right [JSONBeginObject, JSONEndObject]
-
-  it "leaves arrays unchanged on delete" $ do
-    runDeleteTest "values" "[1,2]"
-    `shouldReturn` Right [JSONBeginArray, JSONNumber 1, JSONNumber 2, JSONEndArray]
+valuesDeleteCases :: [(String, Text, Text, Either Text [JSONEvent])]
+valuesDeleteCases =
+  [ ("removes every member", "values", "{\"a\":1,\"b\":2}", Right [JSONBeginObject, JSONEndObject]),
+    ("leaves arrays unchanged on delete", "values", "[1,2]", Right [JSONBeginArray, JSONNumber 1, JSONNumber 2, JSONEndArray])
+  ]
 
 -------------------------------------------------------------------------------
 -- ix rewrite (arrays only)
@@ -852,20 +370,21 @@ valuesRewriteSpec = describe "values rewrite" $ do
 
 ixRewriteSpec :: Spec
 ixRewriteSpec = describe "ix rewrite" $ do
-  it "adds to the indexed element" $ do
-    runOverTest "ix 1" (Add 10) "[1,2,3]"
-    `shouldReturn` Right
-      [JSONBeginArray, JSONNumber 1, JSONNumber 12, JSONNumber 3, JSONEndArray]
+  forM_ ixOverCases $ \(label, optic, t, doc, expected) ->
+    it label $ runOverTest optic t doc `shouldReturn` expected
+  forM_ ixDeleteCases $ \(label, optic, doc, expected) ->
+    it label $ runDeleteTest optic doc `shouldReturn` expected
 
-  it "leaves objects unchanged" $ do
-    runOverTest "ix 0" (Add 1) "{\"a\":1}"
-    `shouldReturn` Right
-      [JSONBeginObject, JSONObjectKey "a", JSONNumber 1, JSONEndObject]
+ixOverCases :: [(String, Text, Transformation, Text, Either Text [JSONEvent])]
+ixOverCases =
+  [ ("adds to the indexed element", "ix 1", Add 10, "[1,2,3]", Right [JSONBeginArray, JSONNumber 1, JSONNumber 12, JSONNumber 3, JSONEndArray]),
+    ("leaves objects unchanged", "ix 0", Add 1, "{\"a\":1}", Right [JSONBeginObject, JSONObjectKey "a", JSONNumber 1, JSONEndObject])
+  ]
 
-  it "leaves objects unchanged on delete" $ do
-    runDeleteTest "ix 0" "{\"a\":1}"
-    `shouldReturn` Right
-      [JSONBeginObject, JSONObjectKey "a", JSONNumber 1, JSONEndObject]
+ixDeleteCases :: [(String, Text, Text, Either Text [JSONEvent])]
+ixDeleteCases =
+  [ ("leaves objects unchanged on delete", "ix 0", "{\"a\":1}", Right [JSONBeginObject, JSONObjectKey "a", JSONNumber 1, JSONEndObject])
+  ]
 
 -------------------------------------------------------------------------------
 -- filter rewrite
@@ -873,76 +392,34 @@ ixRewriteSpec = describe "ix rewrite" $ do
 
 filterRewriteSpec :: Spec
 filterRewriteSpec = describe "filter rewrite" $ do
-  it "replaces kept values" $ do
-    runOverTest "each . filter @age == 30" (Const (Number 0)) "[{\"age\":30},{\"age\":20}]"
-    `shouldReturn` Right
-      [JSONBeginArray, JSONNumber 0, JSONBeginObject, JSONObjectKey "age", JSONNumber 20, JSONEndObject, JSONEndArray]
+  forM_ filterOverCases $ \(label, optic, t, doc, expected) ->
+    it label $ runOverTest optic t doc `shouldReturn` expected
+  forM_ filterSetCases $ \(label, optic, value, doc, expected) ->
+    it label $ runSetTest optic value doc `shouldReturn` expected
+  forM_ filterDeleteCases $ \(label, optic, doc, expected) ->
+    it label $ runDeleteTest optic doc `shouldReturn` expected
 
-  it "rewrites through a filter into kept values" $ do
-    runOverTest "each . filter @age == 30 . @score" (Add 100) "[{\"age\":30,\"score\":1},{\"age\":20,\"score\":2}]"
-    `shouldReturn` Right
-      [ JSONBeginArray,
-        JSONBeginObject,
-        JSONObjectKey "age",
-        JSONNumber 30,
-        JSONObjectKey "score",
-        JSONNumber 101,
-        JSONEndObject,
-        JSONBeginObject,
-        JSONObjectKey "age",
-        JSONNumber 20,
-        JSONObjectKey "score",
-        JSONNumber 2,
-        JSONEndObject,
-        JSONEndArray
-      ]
+filterOverCases :: [(String, Text, Transformation, Text, Either Text [JSONEvent])]
+filterOverCases =
+  [ ("replaces kept values", "each . filter @age == 30", Const (Number 0), "[{\"age\":30},{\"age\":20}]", Right [JSONBeginArray, JSONNumber 0, JSONBeginObject, JSONObjectKey "age", JSONNumber 20, JSONEndObject, JSONEndArray]),
+    ("rewrites through a filter into kept values", "each . filter @age == 30 . @score", Add 100, "[{\"age\":30,\"score\":1},{\"age\":20,\"score\":2}]", Right [JSONBeginArray, JSONBeginObject, JSONObjectKey "age", JSONNumber 30, JSONObjectKey "score", JSONNumber 101, JSONEndObject, JSONBeginObject, JSONObjectKey "age", JSONNumber 20, JSONObjectKey "score", JSONNumber 2, JSONEndObject, JSONEndArray]),
+    ("fails when the predicate does not fit", "each . filter @a +1", Const (Number 0), "[{\"a\":\"x\"}]", Left "expected a number"),
+    ("fails when the predicate is not boolean", "each . filter @a +1", Const (Number 0), "[{\"a\":1}]", Left "filter transformation must produce a boolean")
+  ]
 
-  it "sets kept values" $ do
-    runSetTest "each . filter @age == 30" "0" "[{\"age\":30},{\"age\":20}]"
-    `shouldReturn` Right
-      [JSONBeginArray, JSONNumber 0, JSONBeginObject, JSONObjectKey "age", JSONNumber 20, JSONEndObject, JSONEndArray]
+filterSetCases :: [(String, Text, Text, Text, Either Text [JSONEvent])]
+filterSetCases =
+  [ ("sets kept values", "each . filter @age == 30", "0", "[{\"age\":30},{\"age\":20}]", Right [JSONBeginArray, JSONNumber 0, JSONBeginObject, JSONObjectKey "age", JSONNumber 20, JSONEndObject, JSONEndArray])
+  ]
 
-  it "removes kept elements" $ do
-    runDeleteTest "each . filter @age == 30" "[{\"age\":30},{\"age\":20}]"
-    `shouldReturn` Right
-      [JSONBeginArray, JSONBeginObject, JSONObjectKey "age", JSONNumber 20, JSONEndObject, JSONEndArray]
-
-  it "removes kept members but keeps the container" $ do
-    runDeleteTest "@users . each . filter @age == 30" "{\"users\":[{\"age\":30},{\"age\":20}],\"b\":2}"
-    `shouldReturn` Right
-      [ JSONBeginObject,
-        JSONObjectKey "users",
-        JSONBeginArray,
-        JSONBeginObject,
-        JSONObjectKey "age",
-        JSONNumber 20,
-        JSONEndObject,
-        JSONEndArray,
-        JSONObjectKey "b",
-        JSONNumber 2,
-        JSONEndObject
-      ]
-
-  it "removes the whole member when the gate keeps it" $ do
-    runDeleteTest "@users . filter (each) (== 1)" "{\"users\":[1],\"b\":2}"
-    `shouldReturn` Right
-      [JSONBeginObject, JSONObjectKey "b", JSONNumber 2, JSONEndObject]
-
-  it "removes the whole document when the gate keeps it" $ do
-    runDeleteTest "filter @age == 30" "{\"age\":30}" `shouldReturn` Right []
-
-  it "leaves the document unchanged when the gate drops it" $ do
-    runDeleteTest "filter @age == 30" "{\"age\":20}"
-    `shouldReturn` Right
-      [JSONBeginObject, JSONObjectKey "age", JSONNumber 20, JSONEndObject]
-
-  it "fails when the predicate does not fit" $ do
-    runOverTest "each . filter @a +1" (Const (Number 0)) "[{\"a\":\"x\"}]"
-    `shouldReturn` Left "expected a number"
-
-  it "fails when the predicate is not boolean" $ do
-    runOverTest "each . filter @a +1" (Const (Number 0)) "[{\"a\":1}]"
-    `shouldReturn` Left "filter transformation must produce a boolean"
+filterDeleteCases :: [(String, Text, Text, Either Text [JSONEvent])]
+filterDeleteCases =
+  [ ("removes kept elements", "each . filter @age == 30", "[{\"age\":30},{\"age\":20}]", Right [JSONBeginArray, JSONBeginObject, JSONObjectKey "age", JSONNumber 20, JSONEndObject, JSONEndArray]),
+    ("removes kept members but keeps the container", "@users . each . filter @age == 30", "{\"users\":[{\"age\":30},{\"age\":20}],\"b\":2}", Right [JSONBeginObject, JSONObjectKey "users", JSONBeginArray, JSONBeginObject, JSONObjectKey "age", JSONNumber 20, JSONEndObject, JSONEndArray, JSONObjectKey "b", JSONNumber 2, JSONEndObject]),
+    ("removes the whole member when the gate keeps it", "@users . filter (each) (== 1)", "{\"users\":[1],\"b\":2}", Right [JSONBeginObject, JSONObjectKey "b", JSONNumber 2, JSONEndObject]),
+    ("removes the whole document when the gate keeps it", "filter @age == 30", "{\"age\":30}", Right []),
+    ("leaves the document unchanged when the gate drops it", "filter @age == 30", "{\"age\":20}", Right [JSONBeginObject, JSONObjectKey "age", JSONNumber 20, JSONEndObject])
+  ]
 
 chunkedRewriteSpec :: Spec
 chunkedRewriteSpec = describe "chunked input" $ do
@@ -952,7 +429,7 @@ chunkedRewriteSpec = describe "chunked input" $ do
       case parseOptic opticStr of
         Left err -> expectationFailure $ "bad optic: " <> show err
         Right optic ->
-          forM_ (chunkSplits doc) $ \chunks -> do
+          forM_ (splits doc) $ \chunks -> do
             actual <- runRewriteChunks (\early -> runOver early optic transformation testConfig) chunks
             actual `shouldBe` expected
 
@@ -962,7 +439,7 @@ chunkedRewriteSpec = describe "chunked input" $ do
         Left err -> expectationFailure $ "bad optic: " <> show err
         Right optic -> do
           expected <- runDeleteTest opticStr doc
-          forM_ (chunkSplits doc) $ \chunks -> do
+          forM_ (splits doc) $ \chunks -> do
             actual <- runRewriteChunks (\early -> runDelete early optic testConfig) chunks
             actual `shouldBe` expected
 
