@@ -31,8 +31,10 @@ runStreaming chunks = case decodeChunks chunks of
   Right events -> events
 
 -- | Drain events from a decoder result by repeatedly calling step,
--- then finalize with finish.  Tries finish first to avoid infinite
--- loops when step returns NeedInput on an empty-input decoder.
+-- then finalize with finish. Steps while input remains, and only calls
+-- finish on a drained decoder: finish discards decoderInput, and
+-- stepping an empty-input decoder that returns NeedInput would loop
+-- forever.
 drainCollect :: DecoderResult -> Either DecodeError [JSONEvent]
 drainCollect (Emit event next) = case step next of
   Left err -> Left err

@@ -35,7 +35,6 @@ data CLIOptions = CLIOptions
     optCompact :: Enc.EncodeStyle,
     optJoin :: Join
   }
-  deriving (Show, Eq)
 
 opticReader :: ReadM Optic
 opticReader = eitherReader $ first errorBundlePretty . parseOptic . toText
@@ -63,9 +62,9 @@ queryParser =
 optParser :: Parser CLIOptions
 optParser = do
   file <- optional $ strOption fileMod
-  raw <- fromBool NoRaw Raw <$> switch rawMod
-  compact <- fromBool (Enc.Pretty 2) Enc.Compact <$> switch compactMod
-  join' <- fromBool NoJoin Join <$> switch joinMod
+  raw <- bool NoRaw Raw <$> switch rawMod
+  compact <- bool (Enc.Pretty 2) Enc.Compact <$> switch compactMod
+  join' <- bool NoJoin Join <$> switch joinMod
   query <- queryParser
   pure $ CLIOptions query file raw compact join'
   where
@@ -74,7 +73,6 @@ optParser = do
     rawMod = long "raw" <> short 'r' <> help "Print strings without JSON quotes"
     compactMod = long "compact" <> short 'c' <> help "Print compact JSON"
     joinMod = long "join" <> short 'j' <> help "Print without separators"
-    fromBool falseV trueV b = if b then trueV else falseV
 
 langHelp :: String
 langHelp = $(embedStringFile =<< makeRelativeToProject "./docs/LANG.md")
@@ -94,7 +92,7 @@ optParserInfo = info (optParser <**> helper) infoMod
 
 -- | Open the input and run the query over it: stdin for 'Nothing' and
 -- @-@, a file otherwise. An unopenable file is a CLI-level failure,
--- reported on stderr,.
+-- reported on stderr.
 withInput :: Maybe FilePath -> (Handle -> IO a) -> IO a
 withInput Nothing useHandle = useHandle stdin
 withInput (Just "-") useHandle = useHandle stdin

@@ -13,7 +13,7 @@ import Relude hiding (Compose, id, many, some, state)
 import Streaming (Of, Stream)
 
 -- | Buffered string fragments (reversed for O(1) prepend).
-newtype StringBuffer = StringBuffer [Text] deriving (Eq, Show)
+newtype StringBuffer = StringBuffer [Text] deriving (Eq)
 
 emptyStringBuffer :: StringBuffer
 emptyStringBuffer = StringBuffer []
@@ -30,7 +30,7 @@ finishStringBuffer :: StringBuffer -> Text
 finishStringBuffer (StringBuffer ts) = T.concat (reverse ts)
 
 -- | Nesting depth: the number of enclosing containers.
-newtype NestDepth = NestDepth Int deriving (Eq, Ord, Show)
+newtype NestDepth = NestDepth Int deriving (Eq, Ord)
 
 initialDepth :: NestDepth
 initialDepth = NestDepth 0
@@ -47,7 +47,6 @@ data DecoderState = DecoderState
     decoderNestDepth :: NestDepth,
     decoderPhase :: DecoderPhase
   }
-  deriving (Show, Eq)
 
 data DecoderPhase
   = DecoderPhaseValue
@@ -59,10 +58,9 @@ data DecoderPhase
   | DecoderPhaseNumber NumberState
   | DecoderPhaseKeyword KeywordState
   | DecoderPhaseFinished
-  deriving (Eq, Show)
+  deriving (Eq)
 
 data DecodeContext = DecodeArray | DecodeObject
-  deriving (Eq, Show)
 
 data NumberState = NumberState
   { numberNegative :: Bool,
@@ -77,7 +75,7 @@ data NumberState = NumberState
     -- Error payloads only: retained, never decoded, on the success path.
     numberFrags :: [Text]
   }
-  deriving (Eq, Show)
+  deriving (Eq)
 
 -- | Tracks how much of a JSON number has been consumed.
 data NumberPhase
@@ -97,7 +95,7 @@ data NumberPhase
     NumberExpAfterSign
   | -- | Saw exponent digits
     NumberExpDigit
-  deriving (Eq, Show)
+  deriving (Eq)
 
 data NumberStep
   = NumberStep NumberPhase
@@ -105,13 +103,13 @@ data NumberStep
   | NumberError
 
 data StringTarget = StringKey | StringValue
-  deriving (Eq, Show)
+  deriving (Eq)
 
 data BufferedStringTarget = BufferedStringTarget StringTarget StringBuffer
-  deriving (Eq, Show)
+  deriving (Eq)
 
 data Unicode = Unicode {unicodeValue :: Int, unicodeDigits :: Int}
-  deriving (Eq, Show)
+  deriving (Eq)
 
 data StringState
   = InString BufferedStringTarget
@@ -122,19 +120,18 @@ data StringState
     InLowSurrogateEscape BufferedStringTarget Int Unicode
   | -- Low escape's backslash at a chunk end; next chunk must start with @u@.
     AfterLowBackslash BufferedStringTarget Int
-  deriving (Eq, Show)
+  deriving (Eq)
 
 data KeywordState
   = KeywordNull Int
   | KeywordTrue Int
   | KeywordFalse Int
-  deriving (Eq, Show)
+  deriving (Eq)
 
 data DecoderResult
   = Emit JSONEvent DecoderState
   | NeedInput DecoderState
   | Done DecoderState
-  deriving (Eq, Show)
 
 -- | Emit one event, continuing after the value (container ends pop
 -- and mark the parent via 'finishValue'). Single policy for scalars

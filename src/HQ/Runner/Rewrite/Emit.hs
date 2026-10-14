@@ -3,9 +3,7 @@
 {-# LANGUAGE NoImplicitPrelude #-}
 
 -- | Byte-stream take for the rewrite side: traversal that transcribes
--- values straight to output bytes. Builds on the read side
--- ('HQ.Runner.Take', 'HQ.Runner.Fold'); the read side never imports
--- back. That one-way rule is what keeps read and rewrite apart.
+-- values straight to output bytes.
 module HQ.Runner.Rewrite.Emit where
 
 import Control.Exception (try)
@@ -22,8 +20,7 @@ import HQ.Runner.Error (RunnerError (..))
 import HQ.Runner.Take (pullOne, takeContainerGeneric)
 import Relude hiding (Compose, id, many, some, state)
 
--- | Rewrite output: byte stream returning advanced emit state
--- and cursor.
+-- | Rewrite output: byte stream returning advanced emit state and cursor.
 type RewriteContinuation = Cursor -> EmitState -> BSStream IO RewriteResult
 
 -- | The rewrite pipeline's accumulator: emit state threaded through
@@ -296,7 +293,7 @@ takeRawContainerChunks early config closing open dec txt st = case closing of
           collectLoop st' exp1 base1 dep1 stk1 inp1 stream1
 
 -- | Take a container body, fusing decode and format per event with no
--- intermediate event stream. Specialization of 'takeContainerGeneric'
+-- intermediate event stream. Thin wrapper over 'takeContainerGeneric'
 -- with 'emitChunk' as the output action.
 takeContainerChunks ::
   Early HQError ->

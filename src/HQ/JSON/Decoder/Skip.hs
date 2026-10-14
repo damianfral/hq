@@ -69,7 +69,6 @@ rawChar c = RawBody [T.singleton c] 1
 -- allocation) while both modes share one scanner. See SPECIALIZE pragmas
 -- below.
 class RawSink s where
-  sinkEmpty :: s
   sinkChar :: Char -> s -> s
   sinkText :: Text -> s -> s
   sinkAppend :: s -> s -> s
@@ -88,7 +87,6 @@ class RawSink s where
     IO ()
 
 instance RawSink () where
-  sinkEmpty = ()
   sinkChar _ _ = ()
   sinkText _ _ = ()
   sinkAppend _ _ = ()
@@ -96,7 +94,6 @@ instance RawSink () where
   sinkCheck _ _ _ _ _ _ _ = pure ()
 
 instance RawSink RawBody where
-  sinkEmpty = mempty
   sinkChar c body = rawChar c <> body
   sinkText t body
     | T.null t = body
@@ -114,7 +111,6 @@ data SkipExpect
   | ExpectColon
   | ExpectObjComma
   | ExpectArrComma
-  deriving (Eq, Show)
 
 -- | Bodies collected past this size pause for emission: fragment
 -- transients scale ~150x the body (measured), so collection proceeds
@@ -330,8 +326,6 @@ collectExpect early body base depth stack expect input text = do
   pure (Collected rest body')
 {-# INLINE collectExpect #-}
 
--- | A value just completed: return at entry depth, else expect the
--- enclosing separator. Specialization of 'generalAfterValue'.
 -- | Structural skip loop; ends when the depth pops back to its entry level.
 -- Specialization of 'generalExpect'.
 skipExpect ::

@@ -1,4 +1,3 @@
-{-# LANGUAGE ImportQualifiedPost #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE NoImplicitPrelude #-}
 
@@ -6,7 +5,6 @@ module HQ.CLISpec (spec) where
 
 import Control.Exception (try)
 import Data.Aeson (Value (..))
-import Data.Text qualified as T
 import HQ.CLI
 import HQ.JSON.Encoder (EncodeStyle (..), Join (..), Raw (..))
 import HQ.Optic (Optic (..))
@@ -15,7 +13,6 @@ import HQ.Transformation hiding (Compose)
 import Options.Applicative (ParserResult (..), defaultPrefs, execParserPure)
 import Relude hiding (Compose, Const, id)
 import System.Exit (ExitCode (..))
-import System.IO.Error (doesNotExistErrorType, mkIOError)
 import Test.Syd
 
 spec :: Spec

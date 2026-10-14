@@ -48,7 +48,6 @@ newtype RunnerF a = Runner (ReaderT RunnerEnv IO a)
     ( Functor,
       Applicative,
       Monad,
-      MonadIO,
       MonadReader RunnerEnv
     )
 
@@ -150,8 +149,9 @@ rewriteDocuments early action cur st =
   where
     go cur' (RewriteResult st' _) = action cur' st'
 
--- | Decode a lazy ByteString stream to Text, handling UTF-8 errors.
--- Returns an empty stream on success, or aborts with a runner error on invalid UTF-8.
+-- | Decode a stream of strict 'ByteString' chunks to 'Text',
+-- handling UTF-8 errors. Invalid or truncated input aborts with a
+-- runner error ('InvalidUtf8').
 decodeUtf8Stream :: Early HQError -> StreamIO ByteString () -> StreamIO Text ()
 decodeUtf8Stream early stream = case streamDecodeUtf8 mempty of
   Some _ _ cont -> go mempty cont stream

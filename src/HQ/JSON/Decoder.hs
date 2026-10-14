@@ -180,14 +180,12 @@ data Terminal
   = TerminalEnd
   | TerminalError DecodeError
   | TerminalEmit TerminalEmitted
-  deriving (Eq, Show)
 
 -- | Payload of a 'TerminalEmit': one trailing event with the decoder after it.
 data TerminalEmitted = TerminalEmitted
   { terminalEvent :: JSONEvent,
     terminalDecoder :: DecoderState
   }
-  deriving (Eq, Show)
 
 classifyTerminal :: DecoderState -> Terminal
 classifyTerminal dec = case finish dec of

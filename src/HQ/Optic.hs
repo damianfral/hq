@@ -21,7 +21,7 @@ data PrismKind
   | PNull
   | PArray
   | PObject
-  deriving stock (Eq, Show)
+  deriving stock (Eq)
 
 -- | Optic paths over JSON values. 'Field', 'Ix' and
 -- '_Just' are affine; 'Id' is a lens; 'Each', 'Keys', 'Values' are

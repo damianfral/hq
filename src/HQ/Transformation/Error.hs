@@ -24,7 +24,6 @@ data TransformationError
     KeyNotString
   | -- | A @filter@ predicate yielding a non-boolean.
     FilterNotBoolean
-  deriving (Eq, Show)
 
 renderTransformationError :: TransformationError -> Text
 renderTransformationError err = case err of

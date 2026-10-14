@@ -48,7 +48,6 @@ data EncoderConfig = EncoderConfig
   { outputStyle :: EncodeStyle,
     outputValueOptions :: ValueOptions
   }
-  deriving (Show, Eq)
 
 -- | Output formatting style.
 data EncodeStyle
@@ -70,7 +69,7 @@ data Join = NoJoin | Join deriving (Show, Eq)
 
 -- | How back-to-back top-level values are rendered: newlines like
 -- @jq@, and bare strings like @jq -r@.
-data ValueOptions = ValueOptions Raw Join deriving (Eq, Show)
+data ValueOptions = ValueOptions Raw Join
 
 -- | Container stack, head innermost. The 'Bool' marks a container that
 -- already emitted a value; 'EncodeObjectAfterKey' awaits a key's value.
@@ -81,14 +80,12 @@ data EncodeContext
     EncodeObject !Bool
   | -- | A key was just emitted; the next event is its value.
     EncodeObjectAfterKey
-  deriving (Eq, Show)
 
 -- | Encoder state threaded through transcription: container contexts
 -- plus their depth, kept in sync by construction (only 'formatEvent'
 -- and 'closeContainer' reshape it). Output buffering lives in
 -- 'EmitState', not here, so formatting stays pure.
 data EncoderState = EncoderState ![EncodeContext] !NestDepth
-  deriving (Eq, Show)
 
 initialEncoderState :: EncoderState
 initialEncoderState = EncoderState [] initialDepth
@@ -100,7 +97,6 @@ outputBatchSize = 65536
 -- | Rewrite output accumulator: pending builder bytes plus the encoder
 -- context. Events buffer here and flush as 'LByteString' once full.
 data EmitState = EmitState !Builder !Int !EncoderState
-  deriving (Show)
 
 initialEmitState :: EmitState
 initialEmitState = EmitState mempty 0 initialEncoderState
@@ -179,8 +175,7 @@ flushEmit es@(EmitState pend pendSize st)
 -- 'Text'/'String' conversions and without @10 ^ expo@ bignum
 -- multiplications: non-negative exponents append @expo@ ASCII zeros,
 -- negative exponents splice the decimal point into the coefficient
--- digits. Output text is identical to the previous 'show'-based
--- implementation; only allocation is reduced.
+-- digits.
 encodeNumber :: Scientific -> Chunk
 encodeNumber n
   | c == 0 = Chunk (char7 '0') 1

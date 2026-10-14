@@ -253,7 +253,7 @@ runTransformation step value = case step of
     asString (String s) = Just s
     asString _ = Nothing
 
-    -- \| Strip an affix when present, leaving the value unchanged otherwise.
+    -- Strip an affix when present, leaving the value unchanged otherwise.
     stripAffix :: (Text -> Text -> Maybe Text) -> Text -> Text -> Text
     stripAffix stripF affix s = fromMaybe s (stripF affix s)
 

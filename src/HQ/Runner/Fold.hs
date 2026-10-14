@@ -27,8 +27,6 @@ import Streaming.Prelude qualified as S
 -- returning the value, its events and the cursor after it.
 -- Shared by folding and rewriting so @filter@ gates and @over@
 -- replacements agree on error mapping.
---
--- A strict record (same layout as the tuple it replaces).
 data Materialized = Materialized
   { materializedValue :: Value,
     materializedEvents :: NonEmpty JSONEvent,
@@ -52,8 +50,6 @@ gateValue o t v = first HQTransformationError $ evalFilterGate o t v
 -- | Test a @filter@ gate on a streamed value, returning whether it is
 -- kept plus replay/after cursors. Shared by 'runFold' and 'runRewrite'
 -- so both agree on gating and cursor rebuild.
---
--- A strict record (same layout as the tuple it replaces).
 data GateResult = GateResult
   { gateKeep :: Bool,
     gateFirstEvent :: JSONEvent,

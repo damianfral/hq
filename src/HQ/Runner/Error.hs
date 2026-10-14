@@ -24,7 +24,6 @@ data RunnerError
     TrailingEventsAfterValue
   | ExpectedJSONValue
   | ExpectedObjectKeyEvent
-  deriving (Eq, Show)
 
 renderRunnerError :: RunnerError -> Text
 renderRunnerError err = case err of

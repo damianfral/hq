@@ -88,11 +88,11 @@ takeContainerFrom early closing cursor = do
 
 -- | Single event-by-event container loop shared by the read side
 -- ('takeContainerFrom', output = 'S.yield') and the rewrite side
--- ('takeContainerChunks', output = 'emitChunk'): same decoder driving,
--- same errors, same termination; only the per-event output action and
--- the threaded state differ. The two wrappers above/below specialize
--- it, so both call sites keep their old performance: 'INLINE' dissolves
--- the loop into each caller, exposing the concrete output action.
+-- ('takeContainerChunks' in "HQ.Runner.Rewrite.Emit", output =
+-- 'emitChunk'): same decoder driving, same errors, same termination;
+-- only the per-event output action and the threaded state differ. Both
+-- callers inline it, exposing the concrete output action (verified by
+-- benchmark; no 'SPECIALIZE' pragma, which is illegal here).
 {-# INLINE takeContainerGeneric #-}
 takeContainerGeneric ::
   forall e s.

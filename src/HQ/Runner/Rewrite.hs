@@ -80,7 +80,7 @@ rewriteNavigate early rewriter config step suffix input st = case step of
   Ix i -> rewriteIndex early rewriter config i suffix input st
   Filter o t -> rewriteFilter early rewriter config o t suffix input st
 
--- \| Split a member-value suffix with a leading @filter@ step into
+-- | Split a member-value suffix with a leading @filter@ step into
 -- its gate and remainder, so a kept value deleted as a whole drops
 -- its key too.
 stripFilterGate :: Optic -> Maybe (Optic, Transformation, Optic)
@@ -101,7 +101,7 @@ rewriteValue early rewriter config input st = case rewriter of
     value <- lift (orLeave early (applyTransformation t v))
     emitValueChunks config value st rest
 
--- \| Emit a transformed value's events as chunks.
+-- | Emit a transformed value's events as chunks.
 emitValueChunks ::
   EncoderConfig -> Value -> EmitState -> Cursor -> BSStream IO RewriteResult
 emitValueChunks config value st cursor = go st (valueToEvents value)
@@ -111,7 +111,7 @@ emitValueChunks config value st cursor = go st (valueToEvents value)
       s' <- emitChunk config event s
       go s' events
 
--- \| Prism: value whose first event satisfies the predicate goes
+-- | Prism: value whose first event satisfies the predicate goes
 -- through the suffix; everything else passes through unchanged.
 rewritePrism ::
   Early HQError ->
@@ -126,7 +126,7 @@ rewritePrism early rewriter config predicate suffix input st =
       then rewriteRun early rewriter config suffix (pushCursor event rest) st
       else takeValueChunks early config (pushCursor event rest) st
 
--- \| Prism on non-null: null passes through, anything else goes
+-- | Prism on non-null: null passes through, anything else goes
 -- through the suffix.
 rewriteJust ::
   Early HQError -> Rewriter -> EncoderConfig -> Optic -> RewriteContinuation
@@ -138,7 +138,7 @@ rewriteJust early rewriter config suffix input st =
     (Step event rest) ->
       rewriteRun early rewriter config suffix (pushCursor event rest) st
 
--- \| Array index: rewrite the element at @index@, pass through the
+-- | Array index: rewrite the element at @index@, pass through the
 -- rest of the array. Non-arrays pass through unchanged.
 rewriteIndex ::
   Early HQError ->
@@ -171,7 +171,7 @@ rewriteIndex early rewriter config index suffix input st =
                 takeValueChunks early config (pushCursor event rest) s
               go (n - 1) after s'
 
--- \| Object field: rewrite the member named @name@ (dropping the key
+-- | Object field: rewrite the member named @name@ (dropping the key
 -- too under @delete@ when the suffix lands on the value), pass
 -- every other member through unchanged.
 rewriteField ::
@@ -196,7 +196,7 @@ rewriteField early rewriter config name suffix input st =
         )
       ]
 
--- \| The @each@ traversal: rewrite every array element, or every
+-- | The @each@ traversal: rewrite every array element, or every
 -- object member value. Non-containers pass through.
 rewriteEach ::
   Early HQError -> Rewriter -> EncoderConfig -> Optic -> RewriteContinuation
@@ -218,7 +218,7 @@ rewriteEach early rewriter config suffix input st =
         )
       ]
 
--- \| The @values@ traversal: rewrite every object member value.
+-- | The @values@ traversal: rewrite every object member value.
 -- Arrays and scalars pass through unchanged (unlike 'rewriteEach').
 rewriteValues ::
   Early HQError -> Rewriter -> EncoderConfig -> Optic -> RewriteContinuation
@@ -235,7 +235,7 @@ rewriteValues early rewriter config suffix input st =
         )
       ]
 
--- \| The @filter@ optic: gate the focused value as a whole, running
+-- | The @filter@ optic: gate the focused value as a whole, running
 -- the suffix on kept values and passing dropped values through
 -- unchanged.
 rewriteFilter ::
@@ -254,7 +254,7 @@ rewriteFilter early rewriter config o t suffix input st =
       then rewriteRun early rewriter config suffix valCursor st
       else takeValueChunks early config valCursor st
 
--- \| The @keys@ traversal: rewrite object keys, leaving values alone.
+-- | The @keys@ traversal: rewrite object keys, leaving values alone.
 -- Arrays and scalars pass through unchanged (@keys@ is objects-only).
 rewriteKeys ::
   Early HQError -> Rewriter -> EncoderConfig -> Optic -> RewriteContinuation
@@ -285,7 +285,7 @@ applyKeyAction early config action key rest s = case action of
   KeepKey -> emitKeyAndTake early config key rest s
   RenameKey newKey -> emitKeyAndTake early config newKey rest s
 
--- \| Apply the remainder of a @keys@ optic plus the enclosing
+-- | Apply the remainder of a @keys@ optic plus the enclosing
 -- 'Rewriter' to one object key. Keys are scalar strings, so the
 -- suffix either focuses the key as a whole (checked with
 -- 'focusesWhole', e.g. @Id@ or @_String@) or it matches nothing and
@@ -304,7 +304,7 @@ rewriteKeyText early suffix rw key = case rw of
           Right _ -> leave early $ HQTransformationError KeyNotString
     | otherwise -> pure KeepKey
 
--- \| Rewrite one object member, returning the cursor after it.
+-- | Rewrite one object member, returning the cursor after it.
 -- The key survives unless a @delete@ lands on the member value as
 -- a whole. A leading @filter@ step gates the value first: dropped
 -- members pass through, and kept members deleted as a whole lose

@@ -13,7 +13,6 @@ data HQError
   = HQDecodeError DecodeError
   | HQTransformationError TransformationError
   | HQRunnerError RunnerError
-  deriving (Eq, Show)
 
 -- | Render an error for the CLI boundary; nothing else renders errors.
 renderHQError :: HQError -> Text
