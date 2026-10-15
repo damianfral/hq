@@ -1,6 +1,6 @@
 ---
 name: hq
-version: 0.1.0
+version: 0.1.1
 synopsis: A streaming JSON processor inspired by jq, with a lens-based query language.
 description: |
   hq is a JSON processor inspired by jq. It queries JSON with optics

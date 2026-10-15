@@ -159,7 +159,7 @@
         packages.hq-bench-profile = pkgs.stdenv.mkDerivation {
           name = "hq-bench-profile";
           pname = "hq-bench-profile";
-          version = "0.1.0";
+          version = "0.1.1";
           dontUnpack = true;
           buildInputs = [packages.hq-bench pkgs.hq-prof];
           # Run the hq benchmark commands (same list as hq-bench-data
@@ -183,7 +183,7 @@
         packages.hq-bench = pkgs.stdenv.mkDerivation {
           name = "hq-bench";
           pname = "hq-bench";
-          version = "0.1.0";
+          version = "0.1.1";
           src = ./bench/bench.sh;
           dontUnpack = true;
           nativeBuildInputs = [pkgs.makeWrapper];
@@ -201,7 +201,7 @@
           name = "hq-bench-data";
           pname = "hq-bench-data";
           src = json-data;
-          version = "0.1.0";
+          version = "0.1.1";
           dontUnpack = true;
           buildInputs = [packages.hq-bench];
           buildPhase = ''
@@ -213,7 +213,7 @@
         packages.hq-bench-charts = pkgs.stdenv.mkDerivation {
           name = "hq-bench-charts";
           pname = "hq-bench-charts";
-          version = "0.1.0";
+          version = "0.1.1";
           dontUnpack = true;
           nativeBuildInputs = [pkgs.vega-lite pkgs.svgo pkgs.hq];
           buildPhase = ''
