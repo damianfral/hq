@@ -65,7 +65,7 @@
               hq =
                 pself.generateOptparseApplicativeCompletions
                 ["hq"]
-                (pself.callCabal2nix "hq" filteredSrc {});
+                (pself.callCabal2nix "hq-json" filteredSrc {});
             });
         });
       in {
@@ -86,7 +86,7 @@
               hq =
                 self.generateOptparseApplicativeCompletions
                 ["hq"]
-                (self.callCabal2nix "hq" filteredSrc {});
+                (self.callCabal2nix "hq-json" filteredSrc {});
             });
         });
         # Profiling build of hq: dependencies come with profiling
@@ -95,7 +95,8 @@
         # (-rtsopts -threaded already come from package.yaml.)
         hq-prof = final.haskell.lib.justStaticExecutables (
           profHaskellPackages.hq.overrideAttrs (oldAttrs: {
-            configureFlags = oldAttrs.configureFlags ++ ["--ghc-options=-fprof-auto"];
+            configureFlags =
+              oldAttrs.configureFlags ++ ["--ghc-options=-fprof-auto"];
           })
         );
       };
@@ -240,7 +241,12 @@
           installPhase = "mkdir $out && cp -t $out bench_runtime.svg bench_memory.svg";
         };
 
-        apps.hq = flake-utils.lib.mkApp {drv = pkgs.hq;};
+        # program is set explicitly: the derivation's pname is "hq-json"
+        # (the cabal package name) while the executable is "hq".
+        apps.hq = flake-utils.lib.mkApp {
+          drv = packages.hq;
+          exePath = "/bin/hq";
+        };
         apps.hq-bench = flake-utils.lib.mkApp {drv = packages.hq-bench;};
         apps.default = apps.hq;
 

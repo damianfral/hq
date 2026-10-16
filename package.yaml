@@ -1,5 +1,5 @@
 ---
-name: hq
+name: hq-json
 version: 0.1.1
 synopsis: A streaming JSON processor inspired by jq, with a lens-based query language.
 description: |
@@ -99,7 +99,7 @@ executables:
       - -with-rtsopts=-qg
     dependencies:
       - base >= 4.20.2 && < 4.21
-      - hq
+      - hq-json
       - relude >= 1.2.2 && < 1.3
 
 tests:
@@ -113,7 +113,7 @@ tests:
     dependencies:
       - aeson >= 2.2.4 && < 2.3
       - base >= 4.20.2 && < 4.21
-      - hq
+      - hq-json
       - optparse-applicative >= 0.18.1 && < 0.19
       - relude >= 1.2.2 && < 1.3
       - scientific >= 0.3.8 && < 0.4
