@@ -61,16 +61,22 @@ produce a boolean.
 
 Single atoms stay bare:
 
-    filter @age == 30
+```hq
+filter @age == 30
+```
 
 Anything longer takes its own paren group per side:
 
-    filter (each . @age) (== 30)
+```hq
+filter (each . @age) (== 30)
+```
 
 A `.` after a bare optic starts an outer composition, so a dotted optic
 inside `filter` needs its sides parenthesized:
 
-    each . filter (@tags . each) (== "x")
+```hq
+each . filter (@tags . each) (== "x")
+```
 
 Examples:
 
@@ -101,10 +107,6 @@ Operators bind tightest at the atoms, then `.`, then `and`/`&&`, then
 | `* N` | Multiply by `N`. Example: `* 2`. |
 | `- N` | Subtract `N`. Example: `- 1`. |
 
-**Note:** an argument starting with `-` looks like a CLI flag, so
-separate it with `--`: `over '@a' -- '- 1'`.
-| `/ N` | Divide by `N`. Example: `/ 2`. |
-
 ### Comparisons (input is a number, output is a boolean)
 
 | Transformation | Meaning |
@@ -113,10 +115,6 @@ separate it with `--`: `over '@a' -- '- 1'`.
 | `<= N` | Test whether the value is at most `N`. Example: `<= 30`. |
 | `> N` | Test whether the value is greater than `N`. Sugar for `not . <= N`. |
 | `>= N` | Test whether the value is at least `N`. Sugar for `not . < N`. |
-
-Comparisons shine in `filter`: `each.filter @age >= 30` keeps every
-element whose age is at least 30. Applying one to a non-number fails
-the query with `expected a number`, like the arithmetic above.
 
 ### Strings (input is a string)
 
@@ -174,11 +172,15 @@ with `const`.
 
 For example:
 
-    hq over '@users . each . @age' '+ 1'
+```sh
+hq over '@users . each . @age' '+ 1'
+```
 
 increments every user's age, and
 
-    hq over '@users . each . @name' 'stripPrefix "dr. "'
+```sh
+hq over '@users . each . @name' 'stripPrefix "dr. "'
+```
 
 strips the prefix from every user's name when present.
 
@@ -199,40 +201,42 @@ rejected up front instead of failing mid-stream:
 
 ## Examples
 
-    echo '{"name":"ada","score":96}' | hq fold '@name'
-    # "ada"
+```sh
+echo '{"name":"ada","score":96}' | hq fold '@name'
+# "ada"
 
-    echo '{"name":"ada"}' | hq fold '@name' -r
-    # ada (raw: strings print without quotes)
+echo '{"name":"ada"}' | hq fold '@name' -r
+# ada (raw: strings print without quotes)
 
-    echo '{"a":[1,2,3]}' | hq fold '@a . each'
-    # 1, 2, 3 (one per line)
+echo '{"a":[1,2,3]}' | hq fold '@a . each'
+# 1, 2, 3 (one per line)
 
-    echo '[{"a":90},{"a":96}]' | hq fold 'each . filter (@a) (== 90)' -c
-    # [{"a":90}]
+echo '[{"a":90},{"a":96}]' | hq fold 'each . filter (@a) (== 90)' -c
+# [{"a":90}]
 
-    echo '{"a":1}' | hq over '@a' '+ 1' -c
-    # {"a":2}
+echo '{"a":1}' | hq over '@a' '+ 1' -c
+# {"a":2}
 
-    echo '{"a":1,"b":2}' | hq set '@b' '3' -c
-    # {"a":1,"b":3}
+echo '{"a":1,"b":2}' | hq set '@b' '3' -c
+# {"a":1,"b":3}
 
-    echo '{"a":1,"b":2}' | hq delete '@b' -c
-    # {"a":1}
+echo '{"a":1,"b":2}' | hq delete '@b' -c
+# {"a":1}
 
-    # nix
-    nix build . --json \
-      | hq -r fold 'each . @outputs . values' \
-      | cachix push opensource
+# nix
+nix build . --json \
+  | hq -r fold 'each . @outputs . values' \
+  | cachix push my-cachix-cache
 
-    # Kubernetes
-    kubectl get pods -o json \
-      | hq -r fold '@items . each . @metadata . @name'
+# Kubernetes
+kubectl get pods -o json \
+  | hq -r fold '@items . each . @metadata . @name'
 
-    # ffmpeg
-    ffprobe -v quiet -print_format json -show_streams video.mp4 \
-      | hq -r fold 'each . @codec_name'
+# ffmpeg
+ffprobe -v quiet -print_format json -show_streams video.mp4 \
+  | hq -r fold 'each . @codec_name'
 
-    # Github
-    curl -s https://api.github.com/repos/damianfral/hq \
-      | hq -r fold '@topics.each'
+# Github
+curl -s https://api.github.com/repos/damianfral/hq \
+  | hq -r fold '@topics.each'
+```

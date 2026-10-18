@@ -44,12 +44,17 @@ Optics are used with different queries:
 | `over OPTIC TRANSFORMATION` | Rewrite each focused value in place. |
 | `delete OPTIC` | Remove each focused value. |
 
-`preview` accepts any optic and prints at most the first value it
-focuses, so a traversal optic like `each` prints just its first focus.
-`set` takes a JSON literal and is `over` with a constant
-transformation. `over` fails the whole query when a focused value
-rejects the transformation (adding to a string, for example). Deleting
-a missing field, or an empty focus, leaves the input unchanged.
+`preview` accepts any optic and prints its first focus in document
+order, stopping input there; it is `fold` capped at one value.
+`set` takes a JSON literal and
+is `over` with a constant transformation. `over` fails the whole query
+when a focused value rejects the transformation (adding to a string,
+for example). Deleting a missing field, or an empty focus, leaves the
+input unchanged.
+
+Input may hold any number of whitespace-separated JSON values
+(JSON-lines style); every command except `preview` processes each
+top-level value in turn.
 
 ## Optic language
 
@@ -87,16 +92,22 @@ produce a boolean.
 
 Single atoms stay bare:
 
-  filter @age == 30
+```sh
+filter @age == 30
+```
 
 Anything longer takes its own paren group per side:
 
-  filter (each . @age) (== 30)
+```sh
+filter (each . @age) (== 30)
+```
 
 A `.` after a bare optic starts an outer composition, so a dotted optic
 inside `filter` needs its sides parenthesized:
 
-  each . filter (@tags . each) (== "x")
+```sh
+each . filter (@tags . each) (== "x")
+```
 
 Examples:
 
@@ -127,9 +138,14 @@ Operators bind tightest at the atoms, then `.`, then `and`/`&&`, then
 | `* N` | Multiply by `N`. Example: `* 2`. |
 | `- N` | Subtract `N`. Example: `- 1`. |
 
-**Note:** an argument starting with `-` looks like a CLI flag, so
-separate it with `--`: `over '@a' -- '- 1'`.
-| `/ N` | Divide by `N`. Example: `/ 2`. |
+### Comparisons (input is a number, output is a boolean)
+
+| Transformation | Meaning |
+| --- | --- |
+| `< N` | Test whether the value is less than `N`. Example: `< 30`. |
+| `<= N` | Test whether the value is at most `N`. Example: `<= 30`. |
+| `> N` | Test whether the value is greater than `N`. Sugar for `not . <= N`. |
+| `>= N` | Test whether the value is at least `N`. Sugar for `not . < N`. |
 
 ### Strings (input is a string)
 
@@ -154,8 +170,16 @@ affix is absent. The `is*` tests yield a boolean.
 | `concat [...]` | Append the given elements. Example: `concat [3, 4]`. |
 | `reverse` | Reverse the elements. |
 | `unique` | Drop duplicates, keeping first occurrences. |
+| `sort` | Sort (canonical order): null, bools, nums, strings, arrays, objs. |
 | `length` | Element count, as a number. |
 | `isEmpty` | Test whether the array is empty, yielding a boolean. |
+
+### Objects (input is an object)
+
+| Transformation | Meaning |
+| --- | --- |
+| `merge {...}` | Shallow-merge the operand into the value (operand has pref). |
+| `deepMerge {...}` | Recursively merge the operand into the value. |
 
 ### Any value
 
@@ -179,18 +203,37 @@ with `const`.
 
 For example:
 
-  hq over '@users . each . @age' '+ 1'
+```sh
+hq over '@users . each . @age' '+ 1'
+```
 
 increments every user's age, and
 
-  hq over '@users . each . @name' 'stripPrefix "dr. "'
+```sh
+hq over '@users . each . @name' 'stripPrefix "dr. "'
+```
 
 strips the prefix from every user's name when present.
 
+### Static checks
+
+Queries are checked before running. Steps that cannot work are
+rejected up front instead of failing mid-stream:
+
+- `/ 0` is rejected: division by zero.
+- A transformation applied where it cannot fit is rejected:
+  `over 'each._Number' '++ "x"'` fails because the optic focuses
+  numbers and the transformation needs a string. Optics without a
+  pinned shape (`@field`, `each`, `ix`) focus values of unknown
+  type and accept anything; only prisms (and `keys`) narrow the
+  focus, so only provable mismatches are reported.
+- `filter` predicates must produce booleans, and accept their
+  sub-optic's focus type.
+
 ## Examples
 
-```bash
-echo '{"name":"ada","age":36}' | hq fold '@name'
+```sh
+echo '{"name":"ada","score":96}' | hq fold '@name'
 # "ada"
 
 echo '{"name":"ada"}' | hq fold '@name' -r
@@ -199,8 +242,8 @@ echo '{"name":"ada"}' | hq fold '@name' -r
 echo '{"a":[1,2,3]}' | hq fold '@a . each'
 # 1, 2, 3 (one per line)
 
-echo '[{"age":30},{"age":36}]' | hq fold 'each . filter (@age) (== 30)' -c
-# [{"age":30}]
+echo '[{"a":90},{"a":96}]' | hq fold 'each . filter (@a) (== 90)' -c
+# [{"a":90}]
 
 echo '{"a":1}' | hq over '@a' '+ 1' -c
 # {"a":2}
@@ -211,9 +254,22 @@ echo '{"a":1,"b":2}' | hq set '@b' '3' -c
 echo '{"a":1,"b":2}' | hq delete '@b' -c
 # {"a":1}
 
-nix build .#devShells.x86_64-linux.default --json -j1 \
+# nix
+nix build . --json \
   | hq -r fold 'each . @outputs . values' \
-  | cachix push opensource
+  | cachix push my-cachix-cache
+
+# Kubernetes
+kubectl get pods -o json \
+  | hq -r fold '@items . each . @metadata . @name'
+
+# ffmpeg
+ffprobe -v quiet -print_format json -show_streams video.mp4 \
+  | hq -r fold 'each . @codec_name'
+
+# Github
+curl -s https://api.github.com/repos/damianfral/hq \
+  | hq -r fold '@topics.each'
 ```
 
 ## Performance
