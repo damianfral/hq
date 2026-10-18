@@ -224,6 +224,6 @@ On the 100 MB hq-bench-data benchmark (bench/bench.sh), fold runs about
 hq streams the input without materializing the document, keeping peak
 RSS at \~14MB versus \~600 MB for jq.
 
-![runtime](bench/bench_runtime.svg)
+![runtime](https://raw.githubusercontent.com/damianfral/hq/refs/heads/master/bench/v0.1.1/bench_runtime.svg)
 
-![memory](bench/bench_memory.svg)
+![memory](https://raw.githubusercontent.com/damianfral/hq/refs/heads/master/bench/v0.1.1/bench_memory.svg)

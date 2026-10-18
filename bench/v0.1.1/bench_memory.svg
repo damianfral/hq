@@ -1,0 +1,188 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1192" height="1163" class="marks" viewBox="0 0 1192 1163">
+  <path fill="#fff" d="M0 0h1192v1163H0z"/>
+  <g fill="none" stroke-miterlimit="10" aria-roledescription="group mark container" class="mark-group role-frame root">
+    <path stroke="#ddd" d="M708.5 22.5h400v1104h-400Z" aria-hidden="true" class="background"/>
+    <g aria-hidden="true" class="mark-group role-axis">
+      <path stroke="#ddd" d="M708.5 1126.5V22.5m31 1104V22.5m31 1104V22.5m30 1104V22.5m31 1104V22.5m31 1104V22.5m31 1104V22.5m30 1104V22.5m31 1104V22.5m31 1104V22.5m31 1104V22.5m30 1104V22.5m31 1104V22.5m31 1104V22.5" class="mark-rule role-axis-grid" pointer-events="none"/>
+    </g>
+    <g aria-label="X-axis titled 'Peak RSS (MB)' for a linear scale with values from 0 to 650" aria-roledescription="axis" class="mark-group role-axis" pointer-events="none">
+      <path stroke="#888" d="M708.5 1126.5v5m31-5v5m31-5v5m30-5v5m31-5v5m31-5v5m31-5v5m30-5v5m31-5v5m31-5v5m31-5v5m30-5v5m31-5v5m31-5v5" class="mark-rule role-axis-tick"/>
+      <g fill="#000" class="mark-text role-axis-label" font-family="monospace" font-size="10">
+        <text transform="translate(708.5 1141.5)">0</text>
+        <text text-anchor="middle" transform="translate(770.038 1141.5)">100</text>
+        <text text-anchor="middle" transform="translate(831.577 1141.5)">200</text>
+        <text text-anchor="middle" transform="translate(893.115 1141.5)">300</text>
+        <text text-anchor="middle" transform="translate(954.654 1141.5)">400</text>
+        <text text-anchor="middle" transform="translate(1016.192 1141.5)">500</text>
+        <text text-anchor="middle" transform="translate(1077.73 1141.5)">600</text>
+      </g>
+      <path stroke="#888" d="M708.5 1126.5h400" class="mark-rule role-axis-domain"/>
+      <text fill="#000" class="mark-text role-axis-title" font-family="monospace" font-size="11" font-weight="bold" text-anchor="middle" transform="translate(908.5 1156.5)">Peak RSS (MB)</text>
+    </g>
+    <g aria-label="Y-axis for a discrete scale with 46 values: hq preview '@users.ix 0.@email', jq '.users[0].email', hq preview '@users.each.filter @age &gt;= 21 . @email', jq 'first(.users[] | select(.age &gt;= 21) | .email)', hq fold '@users.each.@email', ending with jq '.users |= map(select(.age &gt;= 21))'" aria-roledescription="axis" class="mark-group role-axis" pointer-events="none">
+      <path stroke="#888" d="M708.5 34.5h-5m5 24h-5m5 24h-5m5 24h-5m5 24h-5m5 24h-5m5 24h-5m5 24h-5m5 24h-5m5 24h-5m5 24h-5m5 24h-5m5 24h-5m5 24h-5m5 24h-5m5 24h-5m5 24h-5m5 24h-5m5 24h-5m5 24h-5m5 24h-5m5 24h-5m5 24h-5m5 24h-5m5 24h-5m5 24h-5m5 24h-5m5 24h-5m5 24h-5m5 24h-5m5 24h-5m5 24h-5m5 24h-5m5 24h-5m5 24h-5m5 24h-5m5 24h-5m5 24h-5m5 24h-5m5 24h-5m5 24h-5m5 24h-5m5 24h-5m5 24h-5m5 24h-5m5 24h-5" class="mark-rule role-axis-tick"/>
+      <g fill="#000" class="mark-text role-axis-label" font-family="monospace" font-size="10" text-anchor="end">
+        <text transform="translate(701.5 37)">hq preview &apos;@users.ix 0.@email&apos;</text>
+        <text transform="translate(701.5 61)">jq &apos;.users[0].email&apos;</text>
+        <text transform="translate(701.5 85)">hq preview &apos;@users.each.filter @age &gt;= 21 . @email&apos;</text>
+        <text transform="translate(701.5 109)">jq &apos;first(.users[] | select(.age &gt;= 21) | .email)&apos;</text>
+        <text transform="translate(701.5 133)">hq fold &apos;@users.each.@email&apos;</text>
+        <text transform="translate(701.5 157)">jq &apos;[.users[].email]&apos;</text>
+        <text transform="translate(701.5 181)">hq fold &apos;@users.each.filter @age &gt;= 21 . @email&apos;</text>
+        <text transform="translate(701.5 205)">jq &apos;[.users[] | select(.age &gt;= 21) | .email]&apos;</text>
+        <text transform="translate(701.5 229)">hq fold &apos;@users.each.filter @email (isSuffixOf &quot;.es&quot; or isSuffixOf &quot;.com&quot;) . @username&apos;</text>
+        <text transform="translate(701.5 253)">jq &apos;[.users[] | select(.email | (endswith(&quot;.es&quot;) or endswith(&quot;.com&quot;))) | .username]&apos;</text>
+        <text transform="translate(701.5 277)">hq fold &apos;@users.each.@tags.each&apos;</text>
+        <text transform="translate(701.5 301)">jq &apos;[.users[].tags[]]&apos;</text>
+        <text transform="translate(701.5 325)">hq fold &apos;@users.each.@address.values&apos;</text>
+        <text transform="translate(701.5 349)">jq &apos;[.users[].address[]]&apos;</text>
+        <text transform="translate(701.5 373)">hq over &apos;@users.each.filter @premium == true . @age&apos; &apos;+1&apos;</text>
+        <text transform="translate(701.5 397)">jq &apos;.users |= map(if .premium == true then .age += 1 else . end)&apos;</text>
+        <text transform="translate(701.5 421)">hq over &apos;@users.each.@email&apos; &apos;stripSuffix &quot;.com&quot;&apos;</text>
+        <text transform="translate(701.5 445)">jq &apos;.users |= map(.email |= rtrimstr(&quot;.com&quot;))&apos;</text>
+        <text transform="translate(701.5 469)">hq over &apos;@users.each.@username&apos; &apos;++ &quot;_x&quot;&apos;</text>
+        <text transform="translate(701.5 493)">jq &apos;.users |= map(.username += &quot;_x&quot;)&apos;</text>
+        <text transform="translate(701.5 517)">hq over &apos;@users.each.@first_name&apos; &apos;stripPrefix &quot;A&quot; . trim&apos;</text>
+        <text transform="translate(701.5 541)">jq &apos;.users |= map(.first_name |= (gsub(&quot;^\\s+|\\s+$&quot;; &quot;&quot;) | ltrimstr(&quot;A&quot;)))&apos;</text>
+        <text transform="translate(701.5 565)">hq over &apos;@users.each.@tags&apos; &apos;concat [&quot;new-tag&quot;]&apos;</text>
+        <text transform="translate(701.5 589)">jq &apos;.users |= map(.tags += [&quot;new-tag&quot;])&apos;</text>
+        <text transform="translate(701.5 613)">hq over &apos;@users.each.@tags&apos; &apos;unique&apos;</text>
+        <text transform="translate(701.5 637)">jq &apos;.users |= map(.tags |= unique)&apos;</text>
+        <text transform="translate(701.5 661)">hq over &apos;@users.each.@tags&apos; &apos;sort&apos;</text>
+        <text transform="translate(701.5 685)">jq &apos;.users |= map(.tags |= sort)&apos;</text>
+        <text transform="translate(701.5 709)">hq over &apos;@users.each.@premium&apos; &apos;not&apos;</text>
+        <text transform="translate(701.5 733)">jq &apos;.users |= map(.premium |= not)&apos;</text>
+        <text transform="translate(701.5 757)">hq over &apos;@users.each.@age&apos; &apos;* 2 . + 1&apos;</text>
+        <text transform="translate(701.5 781)">jq &apos;.users |= map(.age = ((.age + 1) * 2))&apos;</text>
+        <text transform="translate(701.5 805)">hq over &apos;@users.each.@tags&apos; &apos;length&apos;</text>
+        <text transform="translate(701.5 829)">jq &apos;.users |= map(.tags |= length)&apos;</text>
+        <text transform="translate(701.5 853)">hq over &apos;@users.each.@address.keys&apos; &apos;++ &quot;_x&quot;&apos;</text>
+        <text transform="translate(701.5 877)">jq &apos;.users |= map(.address |= with_entries(.key += &quot;_x&quot;))&apos;</text>
+        <text transform="translate(701.5 901)">hq over &apos;@users.each.@address&apos; &apos;merge {&quot;city&quot;: &quot;X&quot;, &quot;extra&quot;: 1}&apos;</text>
+        <text transform="translate(701.5 925)">jq &apos;.users |= map(.address += {&quot;city&quot;: &quot;X&quot;, &quot;extra&quot;: 1})&apos;</text>
+        <text transform="translate(701.5 949)">hq over &apos;@users.each.@address&apos; &apos;deepMerge {&quot;coordinates&quot;: {&quot;zip&quot;: &quot;00000&quot;}}&apos;</text>
+        <text transform="translate(701.5 973)">jq &apos;.users |= map(.address = (.address * {&quot;coordinates&quot;: {&quot;zip&quot;: &quot;00000&quot;}}))&apos;</text>
+        <text transform="translate(701.5 997)">hq set &apos;@users.each.@age&apos; &apos;0&apos;</text>
+        <text transform="translate(701.5 1021)">jq &apos;.users |= map(.age = 0)&apos;</text>
+        <text transform="translate(701.5 1045)">hq delete &apos;@users.each.@age&apos;</text>
+        <text transform="translate(701.5 1069)">jq &apos;.users |= map(del(.age))&apos;</text>
+        <text transform="translate(701.5 1093)">hq delete &apos;@users.each.filter @age &lt; 21&apos;</text>
+        <text transform="translate(701.5 1117)">jq &apos;.users |= map(select(.age &gt;= 21))&apos;</text>
+      </g>
+      <path stroke="#888" d="M708.5 22.5v1104" class="mark-rule role-axis-domain"/>
+    </g>
+    <g aria-roledescription="rect mark container" class="mark-rect role-mark layer_0_marks">
+      <path fill="#d23" d="M708 23.2h4.123v21.6H708Z" aria-label="Peak RSS (MB): 6.7; command: hq preview '@users.ix 0.@email'; backend: hq" aria-roledescription="bar"/>
+      <path fill="#333" d="M708 47.2h359.938v21.6H708Z" aria-label="Peak RSS (MB): 584.9; command: jq '.users[0].email'; backend: jq" aria-roledescription="bar"/>
+      <path fill="#d23" d="M708 71.2h4.246v21.6H708Z" aria-label="Peak RSS (MB): 6.9; command: hq preview '@users.each.filter @age &gt;= 21 . @email'; backend: hq" aria-roledescription="bar"/>
+      <path fill="#333" d="M708 95.2h359.938v21.6H708Z" aria-label="Peak RSS (MB): 584.9; command: jq 'first(.users[] | select(.age &gt;= 21) | .email)'; backend: jq" aria-roledescription="bar"/>
+      <path fill="#d23" d="M708 119.2h8.923v21.6H708Z" aria-label="Peak RSS (MB): 14.5; command: hq fold '@users.each.@email'; backend: hq" aria-roledescription="bar"/>
+      <path fill="#333" d="M708 143.2h359.938v21.6H708Z" aria-label="Peak RSS (MB): 584.9; command: jq '[.users[].email]'; backend: jq" aria-roledescription="bar"/>
+      <path fill="#d23" d="M708 167.2h9.23v21.6H708Z" aria-label="Peak RSS (MB): 15; command: hq fold '@users.each.filter @age &gt;= 21 . @email'; backend: hq" aria-roledescription="bar"/>
+      <path fill="#333" d="M708 191.2h360.062v21.6H708Z" aria-label="Peak RSS (MB): 585.1; command: jq '[.users[] | select(.age &gt;= 21) | .email]'; backend: jq" aria-roledescription="bar"/>
+      <path fill="#d23" d="M708 215.2h7.508v21.6H708Z" aria-label="Peak RSS (MB): 12.2; command: hq fold '@users.each.filter @email (isSuffixOf &quot;.es&quot; or isSuffixOf &quot;.com&quot;) . @username'; backend: hq" aria-roledescription="bar"/>
+      <path fill="#333" d="M708 239.2h360v21.6H708Z" aria-label="Peak RSS (MB): 585; command: jq '[.users[] | select(.email | (endswith(&quot;.es&quot;) or endswith(&quot;.com&quot;))) | .username]'; backend: jq" aria-roledescription="bar"/>
+      <path fill="#d23" d="M708 263.2h8.37v21.6H708Z" aria-label="Peak RSS (MB): 13.6; command: hq fold '@users.each.@tags.each'; backend: hq" aria-roledescription="bar"/>
+      <path fill="#333" d="M708 287.2h360.185v21.6H708Z" aria-label="Peak RSS (MB): 585.3; command: jq '[.users[].tags[]]'; backend: jq" aria-roledescription="bar"/>
+      <path fill="#d23" d="M708 311.2h8.923v21.6H708Z" aria-label="Peak RSS (MB): 14.5; command: hq fold '@users.each.@address.values'; backend: hq" aria-roledescription="bar"/>
+      <path fill="#333" d="M708 335.2h360.308v21.6H708Z" aria-label="Peak RSS (MB): 585.5; command: jq '[.users[].address[]]'; backend: jq" aria-roledescription="bar"/>
+      <path fill="#d23" d="M708 359.2h8.123v21.6H708Z" aria-label="Peak RSS (MB): 13.2; command: hq over '@users.each.filter @premium == true . @age' '+1'; backend: hq" aria-roledescription="bar"/>
+      <path fill="#333" d="M708 383.2h380.37v21.6H708Z" aria-label="Peak RSS (MB): 618.1; command: jq '.users |= map(if .premium == true then .age += 1 else . end)'; backend: jq" aria-roledescription="bar"/>
+      <path fill="#d23" d="M708 407.2h8.062v21.6H708Z" aria-label="Peak RSS (MB): 13.1; command: hq over '@users.each.@email' 'stripSuffix &quot;.com&quot;'; backend: hq" aria-roledescription="bar"/>
+      <path fill="#333" d="M708 431.2h380.492v21.6H708Z" aria-label="Peak RSS (MB): 618.3; command: jq '.users |= map(.email |= rtrimstr(&quot;.com&quot;))'; backend: jq" aria-roledescription="bar"/>
+      <path fill="#d23" d="M708 455.2h8.062v21.6H708Z" aria-label="Peak RSS (MB): 13.1; command: hq over '@users.each.@username' '++ &quot;_x&quot;'; backend: hq" aria-roledescription="bar"/>
+      <path fill="#333" d="M708 479.2h380.43v21.6H708Z" aria-label="Peak RSS (MB): 618.2; command: jq '.users |= map(.username += &quot;_x&quot;)'; backend: jq" aria-roledescription="bar"/>
+      <path fill="#d23" d="M708 503.2h8.123v21.6H708Z" aria-label="Peak RSS (MB): 13.2; command: hq over '@users.each.@first_name' 'stripPrefix &quot;A&quot; . trim'; backend: hq" aria-roledescription="bar"/>
+      <path fill="#333" d="M708 527.2h380.492v21.6H708Z" aria-label="Peak RSS (MB): 618.3; command: jq '.users |= map(.first_name |= (gsub(&quot;^\\s+|\\s+$&quot;; &quot;&quot;) | ltrimstr(&quot;A&quot;)))'; backend: jq" aria-roledescription="bar"/>
+      <path fill="#d23" d="M708 551.2h8.123v21.6H708Z" aria-label="Peak RSS (MB): 13.2; command: hq over '@users.each.@tags' 'concat [&quot;new-tag&quot;]'; backend: hq" aria-roledescription="bar"/>
+      <path fill="#333" d="M708 575.2h380.185v21.6H708Z" aria-label="Peak RSS (MB): 617.8; command: jq '.users |= map(.tags += [&quot;new-tag&quot;])'; backend: jq" aria-roledescription="bar"/>
+      <path fill="#d23" d="M708 599.2h8.062v21.6H708Z" aria-label="Peak RSS (MB): 13.1; command: hq over '@users.each.@tags' 'unique'; backend: hq" aria-roledescription="bar"/>
+      <path fill="#333" d="M708 623.2h380.554v21.6H708Z" aria-label="Peak RSS (MB): 618.4; command: jq '.users |= map(.tags |= unique)'; backend: jq" aria-roledescription="bar"/>
+      <path fill="#d23" d="M708 647.2h8.615v21.6H708Z" aria-label="Peak RSS (MB): 14; command: hq over '@users.each.@tags' 'sort'; backend: hq" aria-roledescription="bar"/>
+      <path fill="#333" d="M708 671.2h380.492v21.6H708Z" aria-label="Peak RSS (MB): 618.3; command: jq '.users |= map(.tags |= sort)'; backend: jq" aria-roledescription="bar"/>
+      <path fill="#d23" d="M708 695.2h8.123v21.6H708Z" aria-label="Peak RSS (MB): 13.2; command: hq over '@users.each.@premium' 'not'; backend: hq" aria-roledescription="bar"/>
+      <path fill="#333" d="M708 719.2h380.554v21.6H708Z" aria-label="Peak RSS (MB): 618.4; command: jq '.users |= map(.premium |= not)'; backend: jq" aria-roledescription="bar"/>
+      <path fill="#d23" d="M708 743.2h8.738v21.6H708Z" aria-label="Peak RSS (MB): 14.2; command: hq over '@users.each.@age' '* 2 . + 1'; backend: hq" aria-roledescription="bar"/>
+      <path fill="#333" d="M708 767.2h380.43v21.6H708Z" aria-label="Peak RSS (MB): 618.2; command: jq '.users |= map(.age = ((.age + 1) * 2))'; backend: jq" aria-roledescription="bar"/>
+      <path fill="#d23" d="M708 791.2h8.123v21.6H708Z" aria-label="Peak RSS (MB): 13.2; command: hq over '@users.each.@tags' 'length'; backend: hq" aria-roledescription="bar"/>
+      <path fill="#333" d="M708 815.2h380v21.6H708Z" aria-label="Peak RSS (MB): 617.5; command: jq '.users |= map(.tags |= length)'; backend: jq" aria-roledescription="bar"/>
+      <path fill="#d23" d="M708 839.2h8.615v21.6H708Z" aria-label="Peak RSS (MB): 14; command: hq over '@users.each.@address.keys' '++ &quot;_x&quot;'; backend: hq" aria-roledescription="bar"/>
+      <path fill="#333" d="M708 863.2h380.8v21.6H708Z" aria-label="Peak RSS (MB): 618.8; command: jq '.users |= map(.address |= with_entries(.key += &quot;_x&quot;))'; backend: jq" aria-roledescription="bar"/>
+      <path fill="#d23" d="M708 887.2h8.308v21.6H708Z" aria-label="Peak RSS (MB): 13.5; command: hq over '@users.each.@address' 'merge {&quot;city&quot;: &quot;X&quot;, &quot;extra&quot;: 1}'; backend: hq" aria-roledescription="bar"/>
+      <path fill="#333" d="M708 911.2h380.43v21.6H708Z" aria-label="Peak RSS (MB): 618.2; command: jq '.users |= map(.address += {&quot;city&quot;: &quot;X&quot;, &quot;extra&quot;: 1})'; backend: jq" aria-roledescription="bar"/>
+      <path fill="#d23" d="M708 935.2h8.677v21.6H708Z" aria-label="Peak RSS (MB): 14.1; command: hq over '@users.each.@address' 'deepMerge {&quot;coordinates&quot;: {&quot;zip&quot;: &quot;00000&quot;}}'; backend: hq" aria-roledescription="bar"/>
+      <path fill="#333" d="M708 959.2h380.677v21.6H708Z" aria-label="Peak RSS (MB): 618.6; command: jq '.users |= map(.address = (.address * {&quot;coordinates&quot;: {&quot;zip&quot;: &quot;00000&quot;}}))'; backend: jq" aria-roledescription="bar"/>
+      <path fill="#d23" d="M708 983.2h8.123v21.6H708Z" aria-label="Peak RSS (MB): 13.2; command: hq set '@users.each.@age' '0'; backend: hq" aria-roledescription="bar"/>
+      <path fill="#333" d="M708 1007.2h380.37v21.6H708Z" aria-label="Peak RSS (MB): 618.1; command: jq '.users |= map(.age = 0)'; backend: jq" aria-roledescription="bar"/>
+      <path fill="#d23" d="M708 1031.2h8.615v21.6H708Z" aria-label="Peak RSS (MB): 14; command: hq delete '@users.each.@age'; backend: hq" aria-roledescription="bar"/>
+      <path fill="#333" d="M708 1055.2h380.43v21.6H708Z" aria-label="Peak RSS (MB): 618.2; command: jq '.users |= map(del(.age))'; backend: jq" aria-roledescription="bar"/>
+      <path fill="#d23" d="M708 1079.2h8.123v21.6H708Z" aria-label="Peak RSS (MB): 13.2; command: hq delete '@users.each.filter @age &lt; 21'; backend: hq" aria-roledescription="bar"/>
+      <path fill="#333" d="M708 1103.2h380.554v21.6H708Z" aria-label="Peak RSS (MB): 618.4; command: jq '.users |= map(select(.age &gt;= 21))'; backend: jq" aria-roledescription="bar"/>
+    </g>
+    <g fill="#000" aria-roledescription="text mark container" class="mark-text role-mark layer_1_marks" font-family="sans-serif" font-size="11">
+      <text aria-label="peak_rss_mb_median: 6.7; command: hq preview '@users.ix 0.@email'" aria-roledescription="text mark" transform="translate(717.123 37)">6.7</text>
+      <text aria-label="peak_rss_mb_median: 584.9; command: jq '.users[0].email'" aria-roledescription="text mark" transform="translate(1072.938 61)">584.9</text>
+      <text aria-label="peak_rss_mb_median: 6.9; command: hq preview '@users.each.filter @age &gt;= 21 . @email'" aria-roledescription="text mark" transform="translate(717.246 85)">6.9</text>
+      <text aria-label="peak_rss_mb_median: 584.9; command: jq 'first(.users[] | select(.age &gt;= 21) | .email)'" aria-roledescription="text mark" transform="translate(1072.938 109)">584.9</text>
+      <text aria-label="peak_rss_mb_median: 14.5; command: hq fold '@users.each.@email'" aria-roledescription="text mark" transform="translate(721.923 133)">14.5</text>
+      <text aria-label="peak_rss_mb_median: 584.9; command: jq '[.users[].email]'" aria-roledescription="text mark" transform="translate(1072.938 157)">584.9</text>
+      <text aria-label="peak_rss_mb_median: 15; command: hq fold '@users.each.filter @age &gt;= 21 . @email'" aria-roledescription="text mark" transform="translate(722.23 181)">15.0</text>
+      <text aria-label="peak_rss_mb_median: 585.1; command: jq '[.users[] | select(.age &gt;= 21) | .email]'" aria-roledescription="text mark" transform="translate(1073.062 205)">585.1</text>
+      <text aria-label="peak_rss_mb_median: 12.2; command: hq fold '@users.each.filter @email (isSuffixOf &quot;.es&quot; or isSuffixOf &quot;.com&quot;) . @username'" aria-roledescription="text mark" transform="translate(720.508 229)">12.2</text>
+      <text aria-label="peak_rss_mb_median: 585; command: jq '[.users[] | select(.email | (endswith(&quot;.es&quot;) or endswith(&quot;.com&quot;))) | .username]'" aria-roledescription="text mark" transform="translate(1073 253)">585.0</text>
+      <text aria-label="peak_rss_mb_median: 13.6; command: hq fold '@users.each.@tags.each'" aria-roledescription="text mark" transform="translate(721.37 277)">13.6</text>
+      <text aria-label="peak_rss_mb_median: 585.3; command: jq '[.users[].tags[]]'" aria-roledescription="text mark" transform="translate(1073.185 301)">585.3</text>
+      <text aria-label="peak_rss_mb_median: 14.5; command: hq fold '@users.each.@address.values'" aria-roledescription="text mark" transform="translate(721.923 325)">14.5</text>
+      <text aria-label="peak_rss_mb_median: 585.5; command: jq '[.users[].address[]]'" aria-roledescription="text mark" transform="translate(1073.308 349)">585.5</text>
+      <text aria-label="peak_rss_mb_median: 13.2; command: hq over '@users.each.filter @premium == true . @age' '+1'" aria-roledescription="text mark" transform="translate(721.123 373)">13.2</text>
+      <text aria-label="peak_rss_mb_median: 618.1; command: jq '.users |= map(if .premium == true then .age += 1 else . end)'" aria-roledescription="text mark" transform="translate(1093.37 397)">618.1</text>
+      <text aria-label="peak_rss_mb_median: 13.1; command: hq over '@users.each.@email' 'stripSuffix &quot;.com&quot;'" aria-roledescription="text mark" transform="translate(721.062 421)">13.1</text>
+      <text aria-label="peak_rss_mb_median: 618.3; command: jq '.users |= map(.email |= rtrimstr(&quot;.com&quot;))'" aria-roledescription="text mark" transform="translate(1093.492 445)">618.3</text>
+      <text aria-label="peak_rss_mb_median: 13.1; command: hq over '@users.each.@username' '++ &quot;_x&quot;'" aria-roledescription="text mark" transform="translate(721.062 469)">13.1</text>
+      <text aria-label="peak_rss_mb_median: 618.2; command: jq '.users |= map(.username += &quot;_x&quot;)'" aria-roledescription="text mark" transform="translate(1093.43 493)">618.2</text>
+      <text aria-label="peak_rss_mb_median: 13.2; command: hq over '@users.each.@first_name' 'stripPrefix &quot;A&quot; . trim'" aria-roledescription="text mark" transform="translate(721.123 517)">13.2</text>
+      <text aria-label="peak_rss_mb_median: 618.3; command: jq '.users |= map(.first_name |= (gsub(&quot;^\\s+|\\s+$&quot;; &quot;&quot;) | ltrimstr(&quot;A&quot;)))'" aria-roledescription="text mark" transform="translate(1093.492 541)">618.3</text>
+      <text aria-label="peak_rss_mb_median: 13.2; command: hq over '@users.each.@tags' 'concat [&quot;new-tag&quot;]'" aria-roledescription="text mark" transform="translate(721.123 565)">13.2</text>
+      <text aria-label="peak_rss_mb_median: 617.8; command: jq '.users |= map(.tags += [&quot;new-tag&quot;])'" aria-roledescription="text mark" transform="translate(1093.185 589)">617.8</text>
+      <text aria-label="peak_rss_mb_median: 13.1; command: hq over '@users.each.@tags' 'unique'" aria-roledescription="text mark" transform="translate(721.062 613)">13.1</text>
+      <text aria-label="peak_rss_mb_median: 618.4; command: jq '.users |= map(.tags |= unique)'" aria-roledescription="text mark" transform="translate(1093.554 637)">618.4</text>
+      <text aria-label="peak_rss_mb_median: 14; command: hq over '@users.each.@tags' 'sort'" aria-roledescription="text mark" transform="translate(721.615 661)">14.0</text>
+      <text aria-label="peak_rss_mb_median: 618.3; command: jq '.users |= map(.tags |= sort)'" aria-roledescription="text mark" transform="translate(1093.492 685)">618.3</text>
+      <text aria-label="peak_rss_mb_median: 13.2; command: hq over '@users.each.@premium' 'not'" aria-roledescription="text mark" transform="translate(721.123 709)">13.2</text>
+      <text aria-label="peak_rss_mb_median: 618.4; command: jq '.users |= map(.premium |= not)'" aria-roledescription="text mark" transform="translate(1093.554 733)">618.4</text>
+      <text aria-label="peak_rss_mb_median: 14.2; command: hq over '@users.each.@age' '* 2 . + 1'" aria-roledescription="text mark" transform="translate(721.738 757)">14.2</text>
+      <text aria-label="peak_rss_mb_median: 618.2; command: jq '.users |= map(.age = ((.age + 1) * 2))'" aria-roledescription="text mark" transform="translate(1093.43 781)">618.2</text>
+      <text aria-label="peak_rss_mb_median: 13.2; command: hq over '@users.each.@tags' 'length'" aria-roledescription="text mark" transform="translate(721.123 805)">13.2</text>
+      <text aria-label="peak_rss_mb_median: 617.5; command: jq '.users |= map(.tags |= length)'" aria-roledescription="text mark" transform="translate(1093 829)">617.5</text>
+      <text aria-label="peak_rss_mb_median: 14; command: hq over '@users.each.@address.keys' '++ &quot;_x&quot;'" aria-roledescription="text mark" transform="translate(721.615 853)">14.0</text>
+      <text aria-label="peak_rss_mb_median: 618.8; command: jq '.users |= map(.address |= with_entries(.key += &quot;_x&quot;))'" aria-roledescription="text mark" transform="translate(1093.8 877)">618.8</text>
+      <text aria-label="peak_rss_mb_median: 13.5; command: hq over '@users.each.@address' 'merge {&quot;city&quot;: &quot;X&quot;, &quot;extra&quot;: 1}'" aria-roledescription="text mark" transform="translate(721.308 901)">13.5</text>
+      <text aria-label="peak_rss_mb_median: 618.2; command: jq '.users |= map(.address += {&quot;city&quot;: &quot;X&quot;, &quot;extra&quot;: 1})'" aria-roledescription="text mark" transform="translate(1093.43 925)">618.2</text>
+      <text aria-label="peak_rss_mb_median: 14.1; command: hq over '@users.each.@address' 'deepMerge {&quot;coordinates&quot;: {&quot;zip&quot;: &quot;00000&quot;}}'" aria-roledescription="text mark" transform="translate(721.677 949)">14.1</text>
+      <text aria-label="peak_rss_mb_median: 618.6; command: jq '.users |= map(.address = (.address * {&quot;coordinates&quot;: {&quot;zip&quot;: &quot;00000&quot;}}))'" aria-roledescription="text mark" transform="translate(1093.677 973)">618.6</text>
+      <text aria-label="peak_rss_mb_median: 13.2; command: hq set '@users.each.@age' '0'" aria-roledescription="text mark" transform="translate(721.123 997)">13.2</text>
+      <text aria-label="peak_rss_mb_median: 618.1; command: jq '.users |= map(.age = 0)'" aria-roledescription="text mark" transform="translate(1093.37 1021)">618.1</text>
+      <text aria-label="peak_rss_mb_median: 14; command: hq delete '@users.each.@age'" aria-roledescription="text mark" transform="translate(721.615 1045)">14.0</text>
+      <text aria-label="peak_rss_mb_median: 618.2; command: jq '.users |= map(del(.age))'" aria-roledescription="text mark" transform="translate(1093.43 1069)">618.2</text>
+      <text aria-label="peak_rss_mb_median: 13.2; command: hq delete '@users.each.filter @age &lt; 21'" aria-roledescription="text mark" transform="translate(721.123 1093)">13.2</text>
+      <text aria-label="peak_rss_mb_median: 618.4; command: jq '.users |= map(select(.age &gt;= 21))'" aria-roledescription="text mark" transform="translate(1093.554 1117)">618.4</text>
+    </g>
+    <g aria-label="Symbol legend titled 'backend' for fill color with 2 values: hq, jq" aria-roledescription="legend" class="mark-group role-legend">
+      <path d="M1126 22h61v40h-61Z" aria-hidden="true" class="background" pointer-events="none"/>
+      <g class="mark-group role-legend-entry">
+        <g aria-roledescription="group mark container" class="mark-group role-scope" pointer-events="none">
+          <path d="M1126 38h32v11h-32Z" aria-hidden="true" class="background"/>
+          <path fill="#d23" d="M1127 39h10v10h-10Z" class="mark-symbol role-legend-symbol"/>
+          <text fill="#000" class="mark-text role-legend-label" font-family="monospace" font-size="10" transform="translate(1142 47)">hq</text>
+          <path d="M1126 51h32v11h-32Z" aria-hidden="true" class="background"/>
+          <path fill="#333" d="M1127 52h10v10h-10Z" class="mark-symbol role-legend-symbol"/>
+          <text fill="#000" class="mark-text role-legend-label" font-family="monospace" font-size="10" transform="translate(1142 60)">jq</text>
+        </g>
+      </g>
+      <text fill="#000" class="mark-text role-legend-title" font-family="monospace" font-size="11" font-weight="bold" pointer-events="none" transform="translate(1126 31)">backend</text>
+    </g>
+    <g class="mark-group role-title">
+      <text fill="#000" aria-label="Title text 'Peak RSS (100 MB input)'" aria-roledescription="title" class="mark-text role-title-text" font-family="monospace" font-size="13" font-weight="bold" pointer-events="none" text-anchor="middle" transform="translate(908 15)">Peak RSS (100 MB input)</text>
+    </g>
+  </g>
+</svg>
